@@ -40,7 +40,7 @@ export default function Login({ onLogin }) {
           
           {/* Logo Area */}
           <div style={{ display: 'flex', alignItems: 'center', gap: 10, marginBottom: 50 }}>
-            <img src={logoImage} alt="GeoStride" style={{ width: 60, height: 60, boxShadow: '0 4px 20px rgba(255,255,255,0.3)' }} />
+            <img src={logoImage} alt="GeoStride" style={{ width: 180, height: 'auto' }} />
           </div>
 
           {/* Headline */}
@@ -97,7 +97,7 @@ export default function Login({ onLogin }) {
                   required
                   value={email}
                   onChange={e => setEmail(e.target.value)}
-                  placeholder="admin@subai.com"
+                  placeholder="admin@geostride.com"
                   style={{ width: '100%', padding: '12px 12px 12px 38px', borderRadius: 8, border: '1px solid #E2E8F0', fontSize: 13, outline: 'none', transition: 'border 0.2s', color: '#0F172A' }}
                   onFocus={(e) => e.target.style.borderColor = '#3B82F6'}
                   onBlur={(e) => e.target.style.borderColor = '#E2E8F0'}
@@ -182,4 +182,3 @@ export default function Login({ onLogin }) {
     </div>
   );
 }
-
