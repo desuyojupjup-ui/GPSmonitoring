@@ -1081,3 +1081,30 @@ body.dark-mode .main-content {
   .workforce-header { flex-direction: column; align-items: flex-start; }
   .workforce-header-right { width: 100%; }
 }
+/* Workforce Row - Side by side layout */
+.workforce-row {
+  display: grid;
+  grid-template-columns: 1fr 300px;
+  gap: 16px;
+  margin-bottom: 24px;
+}
+@media (max-width: 1024px) {
+  .workforce-row {
+    grid-template-columns: 1fr;
+  }
+}
+.feed-section-side {
+  background: white;
+  border-radius: 14px;
+  border: 1px solid #F0F2F5;
+  padding: 20px;
+  box-shadow: 0 1px 4px rgba(0,0,0,0.06);
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+}
+.feed-view-all {
+  width: 100%;
+  justify-content: center;
+  margin-top: auto;
+}

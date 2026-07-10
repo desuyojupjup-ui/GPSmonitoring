@@ -131,14 +131,11 @@ export default function Dashboard() {
   const offlineCount = employees.filter(e => !e.status || e.status === 'Offline').length;
   const inTransitCount = employees.filter(e => e.status === 'In Transit').length;
   const completedAssignments = assignments.filter(a => a.status === 'Completed').length;
-  const geofenceViolations = 2;
-  const aiRecommendations = 3;
 
   const kpis = [
     { label: 'Total Employees', value: totalEmp, delta: '+2', trend: 'up', icon: Users, color: '#6366f1', pct: 87 },
     { label: 'On Duty', value: onDutyCount, delta: '+1', trend: 'up', icon: CheckCircle, color: '#10b981', pct: 31 },
     { label: 'On Site', value: onSiteCount, delta: '0', trend: 'flat', icon: MapPin, color: '#f59e0b', pct: 31 },
-    { label: 'Avg Time On Site', value: '6h 42m', delta: '+18m', trend: 'up', icon: Clock, color: '#3b82f6', pct: 65 },
     { label: 'Completed', value: completedAssignments, delta: '+1', trend: 'up', icon: ClipboardCheck, color: '#06b6d4', pct: 20 },
     { label: 'Offline', value: offlineCount, delta: '-1', trend: 'down', icon: WifiOff, color: '#f43f5e', pct: 15 },
   ];
@@ -176,103 +173,106 @@ export default function Dashboard() {
         {kpis.map((k, i) => <ModernKpiCard key={i} {...k} />)}
       </div>
 
-      {/* Premium Workforce Monitoring Section */}
-      <div className="workforce-section">
-        <div className="workforce-header">
-          <div className="workforce-header-left">
-            <h2 className="workforce-title">Live Workforce Monitoring</h2>
-            <p className="workforce-subtitle">Real-time employee location and operational insights.</p>
+      {/* Premium Workforce Monitoring + Live Activity Feed (side by side) */}
+      <div className="workforce-row">
+        {/* Left: Live Workforce Monitoring */}
+        <div className="workforce-section">
+          <div className="workforce-header">
+            <div className="workforce-header-left">
+              <h2 className="workforce-title">Live Workforce Monitoring</h2>
+              <p className="workforce-subtitle">Real-time employee location and operational insights.</p>
+            </div>
+            <div className="workforce-header-right">
+              <button className="wf-btn wf-btn-ghost" onClick={() => setFullscreen(!fullscreen)}>
+                <Maximize2 size={14} />
+                <span>Fullscreen</span>
+              </button>
+              <button className="wf-btn wf-btn-ghost">
+                <RefreshCw size={14} />
+                <span>Refresh</span>
+              </button>
+              <button className="wf-btn wf-btn-primary">
+                <Eye size={14} />
+                <span>View All Employees</span>
+              </button>
+            </div>
           </div>
-          <div className="workforce-header-right">
-            <button className="wf-btn wf-btn-ghost" onClick={() => setFullscreen(!fullscreen)}>
-              <Maximize2 size={14} />
-              <span>Fullscreen</span>
-            </button>
-            <button className="wf-btn wf-btn-ghost">
-              <RefreshCw size={14} />
-              <span>Refresh</span>
-            </button>
-            <button className="wf-btn wf-btn-primary">
-              <Eye size={14} />
-              <span>View All Employees</span>
-            </button>
+
+          <div className="workforce-layout">
+            {/* Map (70%) */}
+            <div className="workforce-map-wrapper">
+              <MapTracking employees={employees} sites={sites} locations={locations} onFullscreen={() => setFullscreen(!fullscreen)} />
+            </div>
+
+            {/* Workforce Insights Panel (30%) */}
+            <div className="workforce-insights">
+              <div className="insights-header">
+                <h3 className="insights-title">Workforce Insights</h3>
+                <span className="insights-live">
+                  <span className="live-dot" />
+                  Live
+                </span>
+              </div>
+              <div className="insights-list">
+                <WorkforceInsightCard
+                  icon={UserCheck}
+                  label="Active Employees"
+                  value="24 Employees"
+                  subtitle="Currently working"
+                  color="#10B981"
+                />
+                <WorkforceInsightCard
+                  icon={Clock}
+                  label="Average Time On Site"
+                  value="6h 42m"
+                  subtitle="Average duration today"
+                  color="#3B82F6"
+                />
+                <WorkforceInsightCard
+                  icon={Truck}
+                  label="Employees In Transit"
+                  value="5 Employees"
+                  subtitle="Travelling to assigned sites"
+                  color="#F59E0B"
+                />
+                <WorkforceInsightCard
+                  icon={Shield}
+                  label="Geofence Violations"
+                  value="2 Alerts"
+                  subtitle="Outside assigned work area"
+                  color="#EF4444"
+                  badge="View"
+                  onClick={() => {}}
+                />
+                <WorkforceInsightCard
+                  icon={Bot}
+                  label="AI Workforce Insights"
+                  value="3 Recommendations"
+                  subtitle="Generated by AI Assistant"
+                  color="#8B5CF6"
+                  badge="View"
+                  onClick={() => {}}
+                />
+              </div>
+            </div>
           </div>
         </div>
 
-        <div className="workforce-layout">
-          {/* Map (70%) */}
-          <div className="workforce-map-wrapper">
-            <MapTracking employees={employees} sites={sites} locations={locations} onFullscreen={() => setFullscreen(!fullscreen)} />
-          </div>
-
-          {/* Workforce Insights Panel (30%) */}
-          <div className="workforce-insights">
-            <div className="insights-header">
-              <h3 className="insights-title">Workforce Insights</h3>
-              <span className="insights-live">
-                <span className="live-dot" />
-                Live
-              </span>
-            </div>
-            <div className="insights-list">
-              <WorkforceInsightCard
-                icon={UserCheck}
-                label="Active Employees"
-                value="24 Employees"
-                subtitle="Currently working"
-                color="#10B981"
-              />
-              <WorkforceInsightCard
-                icon={Clock}
-                label="Average Time On Site"
-                value="6h 42m"
-                subtitle="Average duration today"
-                color="#3B82F6"
-              />
-              <WorkforceInsightCard
-                icon={Truck}
-                label="Employees In Transit"
-                value="5 Employees"
-                subtitle="Travelling to assigned sites"
-                color="#F59E0B"
-              />
-              <WorkforceInsightCard
-                icon={Shield}
-                label="Geofence Violations"
-                value="2 Alerts"
-                subtitle="Outside assigned work area"
-                color="#EF4444"
-                badge="View"
-                onClick={() => {}}
-              />
-              <WorkforceInsightCard
-                icon={Bot}
-                label="AI Workforce Insights"
-                value="3 Recommendations"
-                subtitle="Generated by AI Assistant"
-                color="#8B5CF6"
-                badge="View"
-                onClick={() => {}}
-              />
-            </div>
-          </div>
-        </div>
-
-        {/* Live Activity Feed */}
-        <div className="feed-section">
+        {/* Right: Live Activity Feed */}
+        <div className="feed-section-side">
           <div className="feed-header">
             <div className="feed-header-left">
               <Activity size={16} color="#64748B" />
               <h3 className="feed-title">Live Activity Feed</h3>
             </div>
-            <button className="wf-btn wf-btn-ghost">
-              <span>View All</span>
-              <ArrowRight size={14} />
-            </button>
           </div>
           <div className="feed-list">
             {feedItems.map((item, i) => <ActivityFeedItem key={i} {...item} />)}
           </div>
+          <button className="wf-btn wf-btn-ghost feed-view-all">
+            <span>View All</span>
+            <ArrowRight size={14} />
+          </button>
         </div>
       </div>
 
