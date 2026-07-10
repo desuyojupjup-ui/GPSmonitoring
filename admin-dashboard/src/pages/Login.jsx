@@ -41,12 +41,6 @@ export default function Login({ onLogin }) {
           {/* Logo Area */}
           <div style={{ display: 'flex', alignItems: 'center', gap: 10, marginBottom: 50 }}>
             <img src={logoImage} alt="GeoStride" style={{ width: 36, height: 36 }} />
-            <div>
-              <div style={{ fontSize: 22, fontWeight: 800, color: 'white', letterSpacing: '-0.02em', background: 'linear-gradient(90deg, #FFFFFF, #93C5FD)', WebkitBackgroundClip: 'text', WebkitTextFillColor: 'transparent' }}>
-                GeoStride
-              </div>
-              <div style={{ fontSize: 10, color: '#94A3B8', fontWeight: 600, letterSpacing: '0.15em' }}>ADMIN PORTAL</div>
-            </div>
           </div>
 
           {/* Headline */}
