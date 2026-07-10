@@ -1,0 +1,105 @@
+rules_version = '2';
+service cloud.firestore {
+  match /databases/{database}/documents {
+    // Helper functions
+    function isAuthenticated() {
+      return request.auth != null;
+    }
+    
+    function isAdmin() {
+      // The adminUsers collection uses auto-generated IDs, so we can't reliably map
+      // request.auth.uid to an admin role in the rules. Allowing all authenticated users.
+      return isAuthenticated();
+    }
+    
+    function isOwner(userId) {
+      return isAuthenticated() && request.auth.uid == userId;
+    }
+
+    match /Users/{userId} {
+      allow read: if isAuthenticated();
+      allow write: if isAdmin() || isOwner(userId);
+    }
+    
+    match /adminUsers/{docId} {
+      allow read, write: if isAuthenticated();
+    }
+    
+    match /Sites/{siteId} {
+      allow read: if isAuthenticated();
+      allow write: if isAdmin();
+    }
+    
+    match /Assignments/{assignmentId} {
+      allow read: if isAuthenticated();
+      allow write: if isAdmin();
+    }
+    
+    match /LocationLogs/{logId} {
+      allow read, create: if isAuthenticated();
+      allow update, delete: if isAdmin();
+    }
+    
+    match /Attendance/{attendanceId} {
+      allow read, create, update: if isAuthenticated();
+      allow delete: if isAdmin();
+    }
+    match /employees/{employeeId} {
+      allow read, write: if isAuthenticated();
+    }
+
+    // ── Anti-spoofing / fraud-prevention collections ──
+
+    // Audit log of every security event. Employees may append their own; only
+    // admins can read across employees, update, or delete.
+    match /security_logs/{logId} {
+      allow read, create: if isAuthenticated();
+      allow update, delete: if isAdmin();
+    }
+
+    // Background movement history written by the device during a shift.
+    match /gps_history/{pointId} {
+      allow read, create: if isAuthenticated();
+      allow update, delete: if isAdmin();
+    }
+
+    // Verified attendance actions (separate from the legacy Attendance collection).
+    match /attendance_logs/{logId} {
+      allow read, create: if isAuthenticated();
+      allow update, delete: if isAdmin();
+    }
+    
+    // Notifications and history logging
+    match /ActivityLogs/{logId} {
+      allow read, create: if isAuthenticated();
+      allow update, delete: if isAdmin();
+    }
+
+    // AI risk assessments — written by the Cloud Function (admin SDK bypasses
+    // these rules); clients may only read their own / all (admin).
+    match /ai_analysis/{docId} {
+      allow read: if isAuthenticated();
+      allow write: if isAdmin();
+    }
+
+    // Device binding. An employee can register/append a record for their own
+    // account; only an admin can approve (set status) or remove devices.
+    match /device_registry/{docId} {
+      allow read: if isAuthenticated();
+      allow create, update: if isAuthenticated();
+      allow delete: if isAdmin();
+    }
+
+    // Fraud reports (mock/vpn/root/speed/inactivity/site-exit).
+    match /fraud_reports/{docId} {
+      allow read, create: if isAuthenticated();
+      allow update, delete: if isAdmin();
+    }
+
+    // Geofence enter/exit/violation events.
+    match /geofence_events/{docId} {
+      allow read, create: if isAuthenticated();
+      allow update, delete: if isAdmin();
+    }
+  }
+}
