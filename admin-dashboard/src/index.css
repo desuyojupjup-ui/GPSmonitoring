@@ -183,6 +183,7 @@ body.dark-mode .main-content {
 
 .nav-item.active svg {
   opacity: 1;
+  color: #FFFFFF;
 }
 
 .sidebar-footer {

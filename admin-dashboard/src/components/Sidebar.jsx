@@ -25,12 +25,8 @@ export default function Sidebar() {
   return (
     <aside className="sidebar">
       {/* Logo */}
-      <div className="sidebar-logo">
+      <div className="sidebar-logo" style={{ justifyContent: 'center' }}>
         <img src={logoImage} alt="TrackForce Logo" style={{ width: 45, height: 45, objectFit: 'contain' }} />
-        <div>
-          <div className="logo-name">GeoStride</div>
-          <div className="logo-sub">Workforce Monitoring</div>
-        </div>
       </div>
 
       {/* Nav */}
