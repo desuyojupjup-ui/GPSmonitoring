@@ -40,7 +40,7 @@ export default function Login({ onLogin }) {
           
           {/* Logo Area */}
           <div style={{ display: 'flex', alignItems: 'center', gap: 10, marginBottom: 50 }}>
-            <img src={logoImage} alt="GeoStride" style={{ width: 60, height: 60 }} />
+            <img src={logoImage} alt="GeoStride" style={{ width: 60, height: 60, boxShadow: '0 4px 20px rgba(255,255,255,0.3)' }} />
           </div>
 
           {/* Headline */}
@@ -182,3 +182,4 @@ export default function Login({ onLogin }) {
     </div>
   );
 }
+
