@@ -108,11 +108,11 @@ body.dark-mode .main-content {
 .sidebar-logo {
   display: flex;
   align-items: center;
-  gap: 10px;
-  padding: 20px;
+  justify-content: center;
+  padding: 10px 20px;
   border-bottom: 1px solid #E5E7EB;
   margin-bottom: 10px;
-  min-height: 73px;
+  min-height: 60px;
 }
 
 .logo-icon-box {
