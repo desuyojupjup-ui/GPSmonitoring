@@ -40,7 +40,7 @@ export default function Login({ onLogin }) {
           
           {/* Logo Area */}
           <div style={{ display: 'flex', alignItems: 'center', gap: 10, marginBottom: 50 }}>
-            <img src={logoImage} alt="GeoStride" style={{ width: 36, height: 36 }} />
+            <img src={logoImage} alt="GeoStride" style={{ width: 100, height: 100 }} />
           </div>
 
           {/* Headline */}
@@ -77,7 +77,7 @@ export default function Login({ onLogin }) {
         <div style={{ width: 420, background: 'white', borderRadius: 20, padding: '40px 32px', display: 'flex', flexDirection: 'column', boxShadow: '0 25px 50px -12px rgba(0, 0, 0, 0.5)' }}>
           
           <h2 style={{ fontSize: 26, fontWeight: 800, color: '#0F172A', marginBottom: 6, textAlign: 'center' }}>Welcome Back!</h2>
-          <p style={{ fontSize: 13, color: '#64748B', marginBottom: 30, textAlign: 'center' }}>Sign in to continue to GeoStride Admin Portal</p>
+          <p style={{ fontSize: 13, color: '#64748B', marginBottom: 30, textAlign: 'center' }}>Sign in to continue to SubAi Admin Portal</p>
 
           {error && (
             <div style={{ padding: 10, background: '#FEE2E2', color: '#991B1B', borderRadius: 6, fontSize: 13, marginBottom: 16, fontWeight: 500 }}>
@@ -177,7 +177,7 @@ export default function Login({ onLogin }) {
       </div>
 
       <div style={{ position: 'absolute', bottom: 20, textAlign: 'center', width: '100%', color: '#64748B', fontSize: 12, fontWeight: 500, zIndex: 10 }}>
-        © 2026 GeoStride. All rights reserved.
+        © 2026 SubAi. All rights reserved.
       </div>
     </div>
   );
