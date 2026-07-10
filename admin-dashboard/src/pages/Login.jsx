@@ -1,6 +1,7 @@
 import React, { useState } from 'react';
 import { Mail, Lock, Eye, EyeOff, ArrowRight, Activity, ShieldCheck, PieChart, Users } from 'lucide-react';
 import bgImage from '../assets/background.png';
+import logoImage from '../assets/logo.png';
 
 export default function Login({ onLogin }) {
   const [email, setEmail] = useState('');
@@ -39,7 +40,7 @@ export default function Login({ onLogin }) {
           
           {/* Logo Area */}
           <div style={{ display: 'flex', alignItems: 'center', gap: 10, marginBottom: 50 }}>
-            <img src="/src/assets/logo.png" alt="GeoStride" style={{ width: 36, height: 36 }} />
+            <img src={logoImage} alt="GeoStride" style={{ width: 36, height: 36 }} />
             <div>
               <div style={{ fontSize: 22, fontWeight: 800, color: 'white', letterSpacing: '-0.02em', background: 'linear-gradient(90deg, #FFFFFF, #93C5FD)', WebkitBackgroundClip: 'text', WebkitTextFillColor: 'transparent' }}>
                 GeoStride
