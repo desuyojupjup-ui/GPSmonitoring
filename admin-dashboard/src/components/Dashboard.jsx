@@ -1,5 +1,5 @@
 import React, { useState, useEffect } from 'react';
-import { Users, CheckCircle, MapPin, ClipboardCheck, WifiOff, ArrowRight } from 'lucide-react';
+import { Users, CheckCircle, MapPin, ClipboardCheck, WifiOff, ArrowRight, Clock, RefreshCw, Maximize2, Eye, UserCheck, Shield, Truck, Zap, Bot, Activity } from 'lucide-react';
 import { MapContainer, TileLayer, Marker, Popup, Circle, useMap } from 'react-leaflet';
 import L from 'leaflet';
 import {
@@ -8,6 +8,7 @@ import {
 } from 'recharts';
 import 'leaflet/dist/leaflet.css';
 import { MOCK_EMPLOYEES, MOCK_SITES, MOCK_LOCATIONS, MOCK_ACTIVITY_LOGS, MOCK_ASSIGNMENTS } from '../mockData';
+import MapTracking from './MapTracking';
 
 // Fix Leaflet default marker icons
 delete L.Icon.Default.prototype._getIconUrl;
@@ -23,35 +24,6 @@ const STATUS_COLORS = {
   'In Transit': '#F59E0B',
   'Offline': '#9CA3AF',
 };
-
-function createEmojiIcon(initials, color, profilePic) {
-  const content = profilePic
-    ? `<img src="${profilePic}" style="width:100%;height:100%;border-radius:50%;object-fit:cover;" />`
-    : `<span style="font-size:11px;font-weight:800;color:white;letter-spacing:-0.5px;">${initials}</span>`;
-
-  const pinSize = 40;
-  const imgSize = 30;
-  const totalH  = pinSize + 12;
-  const halfPin = pinSize / 2;
-  const pulse   = color !== '#9CA3AF';
-
-  return L.divIcon({
-    html: `
-      <div style="position:relative;width:${pinSize}px;height:${totalH}px;display:flex;flex-direction:column;align-items:center;">
-        ${pulse ? `<div style="position:absolute;top:0;left:0;width:${pinSize}px;height:${pinSize}px;border-radius:50%;background:${color};opacity:0.22;animation:pinPulse 2s ease-out infinite;"></div>` : ''}
-        <div style="position:relative;width:${pinSize}px;height:${pinSize}px;border-radius:50%;background:${color};border:3px solid white;box-shadow:0 4px 14px rgba(0,0,0,0.3),inset 0 -2px 5px rgba(0,0,0,0.12);display:flex;align-items:center;justify-content:center;overflow:hidden;z-index:2;flex-shrink:0;">
-          <div style="width:${imgSize}px;height:${imgSize}px;border-radius:50%;overflow:hidden;border:2px solid rgba(255,255,255,0.8);display:flex;align-items:center;justify-content:center;background:rgba(255,255,255,0.12);flex-shrink:0;">${content}</div>
-        </div>
-        <div style="width:0;height:0;border-left:7px solid transparent;border-right:7px solid transparent;border-top:12px solid ${color};filter:drop-shadow(0 3px 2px rgba(0,0,0,0.18));flex-shrink:0;margin-top:-2px;z-index:1;"></div>
-      </div>
-      <style>@keyframes pinPulse{0%{transform:scale(1);opacity:.22}70%{transform:scale(2.2);opacity:0}100%{transform:scale(2.2);opacity:0}}</style>
-    `,
-    className: '',
-    iconSize:   [pinSize, totalH],
-    iconAnchor: [halfPin, totalH],
-    popupAnchor:[0, -totalH],
-  });
-}
 
 function GaugeRing({ pct, a, b }) {
   const r = 17, size = 44, cx = size / 2;
@@ -108,25 +80,40 @@ function ModernKpiCard({ label, value, delta, trend, icon: Icon, color, pct }) {
   );
 }
 
-function getInitials(name) {
-  if (!name) return '??';
-  return name.split(' ').map(n => n[0]).join('').slice(0, 2).toUpperCase();
+function WorkforceInsightCard({ icon: Icon, label, value, subtitle, color, badge, onClick }) {
+  return (
+    <div className="insight-card" onClick={onClick} style={{ '--accent-a': color }}>
+      <div className="insight-card-left">
+        <div className="insight-icon-wrapper" style={{ background: color + '15', color }}>
+          <Icon size={18} />
+        </div>
+        <div className="insight-info">
+          <div className="insight-label">{label}</div>
+          <div className="insight-value">{value}</div>
+          <div className="insight-subtitle">{subtitle}</div>
+        </div>
+      </div>
+      {badge && <div className="insight-badge" style={{ background: color + '20', color }}>{badge}</div>}
+    </div>
+  );
 }
 
-// Auto fit bounds to markers on initial load
-function MapFitBounds({ boundsLocations }) {
-  const map = useMap();
-  const [hasFit, setHasFit] = useState(false);
-
-  useEffect(() => {
-    if (boundsLocations.length > 0 && !hasFit) {
-      const bounds = L.latLngBounds(boundsLocations.map(loc => [loc.lat, loc.lng]));
-      map.fitBounds(bounds, { padding: [50, 50], maxZoom: 16 });
-      setHasFit(true);
-    }
-  }, [boundsLocations, map, hasFit]);
-
-  return null;
+function ActivityFeedItem({ avatar, name, action, time, status, color }) {
+  return (
+    <div className="feed-item">
+      <div className="feed-avatar" style={{ background: color || '#3B82F6' }}>
+        {avatar || <span style={{ fontSize: 11, fontWeight: 700, color: 'white' }}>{name.charAt(0)}</span>}
+      </div>
+      <div className="feed-content">
+        <div className="feed-name">{name}</div>
+        <div className="feed-action">{action}</div>
+      </div>
+      <div className="feed-right">
+        <div className="feed-time">{time}</div>
+        <div className={`feed-status ${status === 'check-in' ? 'status-green' : status === 'enter' ? 'status-blue' : status === 'complete' ? 'status-purple' : 'status-red'}`} />
+      </div>
+    </div>
+  );
 }
 
 export default function Dashboard() {
@@ -135,6 +122,7 @@ export default function Dashboard() {
   const [locations] = useState(MOCK_LOCATIONS);
   const [recentLogs] = useState(MOCK_ACTIVITY_LOGS.slice(0, 5));
   const [assignments] = useState(MOCK_ASSIGNMENTS);
+  const [fullscreen, setFullscreen] = useState(false);
 
   // Compute Stats
   const totalEmp = employees.length;
@@ -143,11 +131,14 @@ export default function Dashboard() {
   const offlineCount = employees.filter(e => !e.status || e.status === 'Offline').length;
   const inTransitCount = employees.filter(e => e.status === 'In Transit').length;
   const completedAssignments = assignments.filter(a => a.status === 'Completed').length;
+  const geofenceViolations = 2;
+  const aiRecommendations = 3;
 
   const kpis = [
     { label: 'Total Employees', value: totalEmp, delta: '+2', trend: 'up', icon: Users, color: '#6366f1', pct: 87 },
     { label: 'On Duty', value: onDutyCount, delta: '+1', trend: 'up', icon: CheckCircle, color: '#10b981', pct: 31 },
     { label: 'On Site', value: onSiteCount, delta: '0', trend: 'flat', icon: MapPin, color: '#f59e0b', pct: 31 },
+    { label: 'Avg Time On Site', value: '6h 42m', delta: '+18m', trend: 'up', icon: Clock, color: '#3b82f6', pct: 65 },
     { label: 'Completed', value: completedAssignments, delta: '+1', trend: 'up', icon: ClipboardCheck, color: '#06b6d4', pct: 20 },
     { label: 'Offline', value: offlineCount, delta: '-1', trend: 'down', icon: WifiOff, color: '#f43f5e', pct: 15 },
   ];
@@ -159,7 +150,6 @@ export default function Dashboard() {
     { name: 'Offline', value: offlineCount, color: '#E5E7EB' },
   ].filter(s => s.value > 0);
 
-  // Dummy attendance data for visual filler
   const attendanceData = [
     { time: '12 AM', onSite: 10, onDuty: 20, offline: 15 },
     { time: '4 AM',  onSite: 8,  onDuty: 18, offline: 18 },
@@ -171,6 +161,14 @@ export default function Dashboard() {
 
   const mappableLocations = employees.filter(e => locations[e.id]).map(emp => locations[emp.id]);
 
+  const feedItems = [
+    { avatar: null, name: 'John Cruz', action: 'Checked in to Greenfield Mall', time: '1 min ago', status: 'check-in', color: '#10B981' },
+    { avatar: null, name: 'Maria Santos', action: 'Entered Central Station site', time: '3 min ago', status: 'enter', color: '#3B82F6' },
+    { avatar: null, name: 'David Reyes', action: 'Completed Riverside inspection', time: '5 min ago', status: 'complete', color: '#8B5CF6' },
+    { avatar: null, name: 'James Gonzales', action: 'Exited BGC geofence zone', time: '8 min ago', status: 'alert', color: '#EF4444' },
+    { avatar: null, name: 'Anna Lim', action: 'Assigned to new site', time: '12 min ago', status: 'enter', color: '#3B82F6' },
+  ];
+
   return (
     <div className="page-body">
       {/* KPI Cards */}
@@ -178,52 +176,102 @@ export default function Dashboard() {
         {kpis.map((k, i) => <ModernKpiCard key={i} {...k} />)}
       </div>
 
-      {/* Live Tracking Map */}
-      <div className="map-section">
-        <div className="map-section-header">
-          <div className="map-section-title">Live Employee Tracking</div>
-        </div>
-        <div className="map-wrapper">
-          <div className="map-box">
-            <MapContainer center={[14.608, 120.990]} zoom={13} scrollWheelZoom style={{ height: '100%', width: '100%' }}>
-              <TileLayer
-                attribution='&copy; <a href="https://carto.com/">CartoDB</a>'
-                url="https://{s}.basemaps.cartocdn.com/rastertiles/voyager/{z}/{x}/{y}{r}.png"
-              />
-              <MapFitBounds boundsLocations={mappableLocations} />
-              {sites.map(s => {
-                const r = typeof s.radius === 'string' ? parseInt(s.radius.replace('m', '')) : (s.radius || 300);
-                return s.lat && s.lng ? (
-                  <Circle key={s.id} center={[s.lat, s.lng]} radius={r}
-                    pathOptions={{ color: '#3B82F6', fillColor: '#3B82F6', fillOpacity: 0.12, weight: 1.5 }}
-                  />
-                ) : null;
-              })}
-              {employees.filter(e => locations[e.id]).map(emp => {
-                const loc = locations[emp.id];
-                const status = emp.status || 'Offline';
-                return (
-                  <Marker key={emp.id} position={[loc.lat, loc.lng]} icon={createEmojiIcon(getInitials(emp.name), STATUS_COLORS[status] || '#9CA3AF', emp.profilePic)}>
-                    <Popup>{emp.name}</Popup>
-                  </Marker>
-                );
-              })}
-            </MapContainer>
+      {/* Premium Workforce Monitoring Section */}
+      <div className="workforce-section">
+        <div className="workforce-header">
+          <div className="workforce-header-left">
+            <h2 className="workforce-title">Live Workforce Monitoring</h2>
+            <p className="workforce-subtitle">Real-time employee location and operational insights.</p>
           </div>
-          {/* Legend */}
-          <div className="map-legend">
-            {[
-              { label: 'On Site',    color: '#10B981' },
-              { label: 'On Duty',    color: '#3B82F6' },
-              { label: 'In Transit', color: '#F59E0B' },
-              { label: 'Offline',    color: '#9CA3AF' },
-              { label: 'Geofence',   color: '#3B82F6' },
-            ].map(l => (
-              <div key={l.label} className="legend-item">
-                <div className="legend-dot" style={{ background: l.color }} />
-                {l.label}
-              </div>
-            ))}
+          <div className="workforce-header-right">
+            <button className="wf-btn wf-btn-ghost" onClick={() => setFullscreen(!fullscreen)}>
+              <Maximize2 size={14} />
+              <span>Fullscreen</span>
+            </button>
+            <button className="wf-btn wf-btn-ghost">
+              <RefreshCw size={14} />
+              <span>Refresh</span>
+            </button>
+            <button className="wf-btn wf-btn-primary">
+              <Eye size={14} />
+              <span>View All Employees</span>
+            </button>
+          </div>
+        </div>
+
+        <div className="workforce-layout">
+          {/* Map (70%) */}
+          <div className="workforce-map-wrapper">
+            <MapTracking employees={employees} sites={sites} locations={locations} onFullscreen={() => setFullscreen(!fullscreen)} />
+          </div>
+
+          {/* Workforce Insights Panel (30%) */}
+          <div className="workforce-insights">
+            <div className="insights-header">
+              <h3 className="insights-title">Workforce Insights</h3>
+              <span className="insights-live">
+                <span className="live-dot" />
+                Live
+              </span>
+            </div>
+            <div className="insights-list">
+              <WorkforceInsightCard
+                icon={UserCheck}
+                label="Active Employees"
+                value="24 Employees"
+                subtitle="Currently working"
+                color="#10B981"
+              />
+              <WorkforceInsightCard
+                icon={Clock}
+                label="Average Time On Site"
+                value="6h 42m"
+                subtitle="Average duration today"
+                color="#3B82F6"
+              />
+              <WorkforceInsightCard
+                icon={Truck}
+                label="Employees In Transit"
+                value="5 Employees"
+                subtitle="Travelling to assigned sites"
+                color="#F59E0B"
+              />
+              <WorkforceInsightCard
+                icon={Shield}
+                label="Geofence Violations"
+                value="2 Alerts"
+                subtitle="Outside assigned work area"
+                color="#EF4444"
+                badge="View"
+                onClick={() => {}}
+              />
+              <WorkforceInsightCard
+                icon={Bot}
+                label="AI Workforce Insights"
+                value="3 Recommendations"
+                subtitle="Generated by AI Assistant"
+                color="#8B5CF6"
+                badge="View"
+                onClick={() => {}}
+              />
+            </div>
+          </div>
+        </div>
+
+        {/* Live Activity Feed */}
+        <div className="feed-section">
+          <div className="feed-header">
+            <div className="feed-header-left">
+              <Activity size={16} color="#64748B" />
+              <h3 className="feed-title">Live Activity Feed</h3>
+            </div>
+            <button className="wf-btn wf-btn-ghost">
+              <span>View All</span>
+              <ArrowRight size={14} />
+            </button>
+          </div>
+          <div className="feed-list">
+            {feedItems.map((item, i) => <ActivityFeedItem key={i} {...item} />)}
           </div>
         </div>
       </div>
@@ -341,4 +389,9 @@ export default function Dashboard() {
       </div>
     </div>
   );
+}
+
+function getInitials(name) {
+  if (!name) return '??';
+  return name.split(' ').map(n => n[0]).join('').slice(0, 2).toUpperCase();
 }

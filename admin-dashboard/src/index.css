@@ -755,3 +755,329 @@ body.dark-mode .main-content {
 
 
 
+/* Workforce Monitoring Section */
+.workforce-section {
+  background: white;
+  border-radius: 14px;
+  padding: 24px;
+  margin-bottom: 24px;
+  box-shadow: 0 1px 4px rgba(0,0,0,0.06);
+  border: 1px solid #F0F2F5;
+}
+.workforce-header {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  margin-bottom: 20px;
+  flex-wrap: wrap;
+  gap: 12px;
+}
+.workforce-title {
+  font-size: 18px;
+  font-weight: 700;
+  color: #0F172A;
+  margin: 0;
+}
+.workforce-subtitle {
+  font-size: 13px;
+  color: #64748B;
+  margin: 4px 0 0 0;
+}
+.workforce-header-right {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex-wrap: wrap;
+}
+.wf-btn {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  padding: 8px 14px;
+  border-radius: 8px;
+  font-size: 13px;
+  font-weight: 600;
+  cursor: pointer;
+  transition: all 0.2s;
+  border: none;
+  font-family: inherit;
+}
+.wf-btn-ghost {
+  background: #F8FAFC;
+  color: #475569;
+  border: 1px solid #E2E8F0;
+}
+.wf-btn-ghost:hover { background: #F1F5F9; }
+.wf-btn-primary {
+  background: #4F46E5;
+  color: white;
+}
+.wf-btn-primary:hover { background: #4338CA; }
+.workforce-layout {
+  display: grid;
+  grid-template-columns: 1.4fr 1fr;
+  gap: 16px;
+  margin-bottom: 16px;
+}
+@media (max-width: 1024px) {
+  .workforce-layout { grid-template-columns: 1fr; }
+}
+.workforce-map-wrapper {
+  border-radius: 12px;
+  overflow: hidden;
+  height: 480px;
+  position: relative;
+  border: 1px solid #E2E8F0;
+}
+.map-container-premium {
+  height: 100%;
+  width: 100%;
+  position: relative;
+}
+.map-floating-controls {
+  position: absolute;
+  top: 12px;
+  right: 12px;
+  z-index: 1000;
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+.map-ctrl-btn {
+  width: 36px;
+  height: 36px;
+  border-radius: 8px;
+  background: white;
+  border: 1px solid #E2E8F0;
+  box-shadow: 0 2px 6px rgba(0,0,0,0.08);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  cursor: pointer;
+  color: #64748B;
+  transition: all 0.2s;
+}
+.map-ctrl-btn:hover {
+  background: #F8FAFC;
+  color: #0F172A;
+}
+.map-legend-premium {
+  position: absolute;
+  bottom: 12px;
+  left: 12px;
+  z-index: 1000;
+  background: rgba(255,255,255,0.95);
+  backdrop-filter: blur(8px);
+  border-radius: 10px;
+  padding: 10px 14px;
+  border: 1px solid #E2E8F0;
+  box-shadow: 0 2px 8px rgba(0,0,0,0.06);
+  display: flex;
+  flex-direction: column;
+  gap: 5px;
+}
+.legend-premium-item {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  font-size: 11px;
+  font-weight: 500;
+  color: #475569;
+}
+.legend-premium-dot {
+  width: 10px;
+  height: 10px;
+  border-radius: 50%;
+  flex-shrink: 0;
+}
+.workforce-insights {
+  background: #FAFBFC;
+  border-radius: 12px;
+  border: 1px solid #E2E8F0;
+  overflow: hidden;
+  display: flex;
+  flex-direction: column;
+}
+.insights-header {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  padding: 16px 18px;
+  border-bottom: 1px solid #E2E8F0;
+}
+.insights-title {
+  font-size: 14px;
+  font-weight: 700;
+  color: #0F172A;
+  margin: 0;
+}
+.insights-live {
+  display: flex;
+  align-items: center;
+  gap: 5px;
+  font-size: 11px;
+  font-weight: 700;
+  color: #10B981;
+  background: #D1FAE5;
+  padding: 3px 10px;
+  border-radius: 20px;
+}
+.live-dot {
+  width: 6px;
+  height: 6px;
+  border-radius: 50%;
+  background: #10B981;
+}
+.insights-list {
+  padding: 8px;
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  flex: 1;
+  overflow-y: auto;
+}
+.insight-card {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 12px 14px;
+  border-radius: 10px;
+  cursor: pointer;
+  transition: all 0.2s;
+}
+.insight-card:hover { background: #F1F5F9; }
+.insight-card-left {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+}
+.insight-icon-wrapper {
+  width: 40px;
+  height: 40px;
+  border-radius: 10px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  flex-shrink: 0;
+}
+.insight-label {
+  font-size: 11px;
+  font-weight: 600;
+  color: #94A3B8;
+  text-transform: uppercase;
+  letter-spacing: 0.03em;
+  margin-bottom: 2px;
+}
+.insight-value {
+  font-size: 15px;
+  font-weight: 700;
+  color: #0F172A;
+  line-height: 1.3;
+}
+.insight-subtitle {
+  font-size: 11px;
+  color: #64748B;
+  margin-top: 1px;
+}
+.insight-badge {
+  font-size: 11px;
+  font-weight: 700;
+  padding: 4px 10px;
+  border-radius: 6px;
+  cursor: pointer;
+  transition: all 0.2s;
+}
+.insight-badge:hover { opacity: 0.8; }
+.feed-section {
+  background: #F8FAFC;
+  border-radius: 12px;
+  border: 1px solid #E2E8F0;
+  padding: 16px;
+}
+.feed-header {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  margin-bottom: 12px;
+}
+.feed-header-left {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+.feed-title {
+  font-size: 14px;
+  font-weight: 700;
+  color: #0F172A;
+  margin: 0;
+}
+.feed-list {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+.feed-item {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  padding: 10px 12px;
+  border-radius: 10px;
+  background: white;
+  border: 1px solid #F1F5F9;
+  transition: all 0.2s;
+}
+.feed-item:hover {
+  background: #FAFBFC;
+  border-color: #E2E8F0;
+}
+.feed-avatar {
+  width: 32px;
+  height: 32px;
+  border-radius: 50%;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  flex-shrink: 0;
+  font-weight: 700;
+  color: white;
+}
+.feed-content {
+  flex: 1;
+  min-width: 0;
+}
+.feed-name {
+  font-size: 13px;
+  font-weight: 600;
+  color: #0F172A;
+}
+.feed-action {
+  font-size: 12px;
+  color: #64748B;
+  margin-top: 1px;
+}
+.feed-right {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-end;
+  gap: 4px;
+  flex-shrink: 0;
+}
+.feed-time {
+  font-size: 11px;
+  color: #94A3B8;
+  font-weight: 500;
+}
+.feed-status {
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+}
+.status-green { background: #10B981; }
+.status-blue { background: #3B82F6; }
+.status-purple { background: #8B5CF6; }
+.status-red { background: #EF4444; }
+@media (max-width: 768px) {
+  .workforce-map-wrapper { height: 300px; }
+  .workforce-header { flex-direction: column; align-items: flex-start; }
+  .workforce-header-right { width: 100%; }
+}
