@@ -26,7 +26,7 @@ export default function Sidebar() {
     <aside className="sidebar">
       {/* Logo */}
       <div className="sidebar-logo">
-        <img src={logoImage} alt="TrackForce Logo" style={{ width: 50, height: 50, objectFit: 'contain' }} />
+        <img src={logoImage} alt="TrackForce Logo" style={{ width: 100, height: 100, objectFit: 'contain' }} />
       </div>
 
       {/* Nav */}
