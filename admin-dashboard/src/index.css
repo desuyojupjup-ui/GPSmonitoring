@@ -109,10 +109,10 @@ body.dark-mode .main-content {
   display: flex;
   align-items: center;
   justify-content: center;
-  padding: 15px;
+  padding: 5px;
   border-bottom: 1px solid #E5E7EB;
   margin-bottom: 10px;
-  min-height: 130px;
+  min-height: 60px;
 }
 
 .logo-icon-box {
