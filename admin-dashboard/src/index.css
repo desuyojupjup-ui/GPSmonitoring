@@ -18,7 +18,7 @@ body.dark-mode {
   --text-primary: #F9FAFB;
   --text-secondary: #9CA3AF;
   --border-color: #374151;
-  
+
   --bg-color: #1F2937;
   --text-color: #F9FAFB;
   --text-muted: #9CA3AF;
@@ -96,7 +96,7 @@ body.dark-mode .main-content {
 /* ─── Sidebar ─── */
 .sidebar {
   width: 240px;
-  background: #0D1B2A;
+  background: #FFFFFF;
   position: fixed;
   height: 100vh;
   display: flex;
@@ -110,7 +110,7 @@ body.dark-mode .main-content {
   align-items: center;
   gap: 10px;
   padding: 24px 20px 20px;
-  border-bottom: 1px solid rgba(255,255,255,0.07);
+  border-bottom: 1px solid #E5E7EB;
   margin-bottom: 10px;
 }
 
@@ -128,7 +128,8 @@ body.dark-mode .main-content {
 .logo-name {
   font-size: 19px;
   font-weight: 700;
-  background: linear-gradient(to right, #0EA5E9, #34D399); /* Light blue to teal/green */
+  background: linear-gradient(to right, #0EA5E9, #34D399);
+  /* Light blue to teal/green */
   -webkit-background-clip: text;
   -webkit-text-fill-color: transparent;
   line-height: 1.2;
@@ -136,7 +137,7 @@ body.dark-mode .main-content {
 
 .logo-sub {
   font-size: 10px;
-  color: #8A9BB0;
+  color: #6B7280;
   font-weight: 400;
 }
 
@@ -151,7 +152,7 @@ body.dark-mode .main-content {
   gap: 11px;
   padding: 10px 12px;
   border-radius: 8px;
-  color: #8A9BB0;
+  color: #374151;
   text-decoration: none;
   font-size: 13.5px;
   font-weight: 500;
@@ -165,8 +166,8 @@ body.dark-mode .main-content {
 }
 
 .nav-item:hover {
-  background: rgba(255,255,255,0.06);
-  color: #FFFFFF;
+  background: #F3F4F6;
+  color: #111827;
 }
 
 .nav-item.active {
@@ -176,7 +177,8 @@ body.dark-mode .main-content {
 
 .nav-item svg {
   flex-shrink: 0;
-  opacity: 0.8;
+  opacity: 1;
+  color: #6B7280;
 }
 
 .nav-item.active svg {
@@ -185,7 +187,7 @@ body.dark-mode .main-content {
 
 .sidebar-footer {
   padding: 16px 14px;
-  border-top: 1px solid rgba(255,255,255,0.07);
+  border-top: 1px solid rgba(255, 255, 255, 0.07);
   display: flex;
   align-items: center;
   gap: 10px;
@@ -209,12 +211,12 @@ body.dark-mode .main-content {
 .footer-name {
   font-size: 13px;
   font-weight: 600;
-  color: #FFFFFF;
+  color: #111827;
 }
 
 .footer-role {
   font-size: 11px;
-  color: #8A9BB0;
+  color: #6B7280;
 }
 
 /* ─── Global TopNav ─── */
@@ -239,7 +241,7 @@ body.dark-mode .main-content {
   border-radius: 4px;
   padding: 10px 14px;
   width: 250px;
-  box-shadow: 0 1px 2px rgba(0,0,0,0.02);
+  box-shadow: 0 1px 2px rgba(0, 0, 0, 0.02);
 }
 
 .topnav-search input {
@@ -292,7 +294,8 @@ body.dark-mode .main-content {
   width: 34px;
   height: 34px;
   border-radius: 50%;
-  background: #1E5ADB; /* Changed from red to blue */
+  background: #1E5ADB;
+  /* Changed from red to blue */
   color: white;
   display: flex;
   align-items: center;
@@ -373,7 +376,7 @@ body.dark-mode .main-content {
   display: flex;
   align-items: center;
   gap: 14px;
-  box-shadow: 0 1px 4px rgba(0,0,0,0.06);
+  box-shadow: 0 1px 4px rgba(0, 0, 0, 0.06);
   border: 1px solid #F0F2F5;
 }
 
@@ -388,11 +391,30 @@ body.dark-mode .main-content {
   font-size: 22px;
 }
 
-.stat-icon-box.purple { background: #EDE9FF; color: #7C3AED; }
-.stat-icon-box.green  { background: #D1FAE5; color: #059669; }
-.stat-icon-box.orange { background: #FEF3C7; color: #D97706; }
-.stat-icon-box.teal   { background: #CFFAFE; color: #0891B2; }
-.stat-icon-box.red    { background: #FEE2E2; color: #DC2626; }
+.stat-icon-box.purple {
+  background: #EDE9FF;
+  color: #7C3AED;
+}
+
+.stat-icon-box.green {
+  background: #D1FAE5;
+  color: #059669;
+}
+
+.stat-icon-box.orange {
+  background: #FEF3C7;
+  color: #D97706;
+}
+
+.stat-icon-box.teal {
+  background: #CFFAFE;
+  color: #0891B2;
+}
+
+.stat-icon-box.red {
+  background: #FEE2E2;
+  color: #DC2626;
+}
 
 .stat-label {
   font-size: 12px;
@@ -429,7 +451,7 @@ body.dark-mode .main-content {
   border-radius: 14px;
   padding: 20px;
   margin-bottom: 24px;
-  box-shadow: 0 1px 4px rgba(0,0,0,0.06);
+  box-shadow: 0 1px 4px rgba(0, 0, 0, 0.06);
   border: 1px solid #F0F2F5;
 }
 
@@ -480,7 +502,10 @@ body.dark-mode .main-content {
   border: 1px solid #E8ECF0;
 }
 
-.leaflet-container { height: 100%; width: 100%; }
+.leaflet-container {
+  height: 100%;
+  width: 100%;
+}
 
 /* ─── Bottom Grid ─── */
 .bottom-grid {
@@ -493,7 +518,7 @@ body.dark-mode .main-content {
   background: #FFFFFF;
   border-radius: 14px;
   padding: 20px;
-  box-shadow: 0 1px 4px rgba(0,0,0,0.06);
+  box-shadow: 0 1px 4px rgba(0, 0, 0, 0.06);
   border: 1px solid #F0F2F5;
 }
 
