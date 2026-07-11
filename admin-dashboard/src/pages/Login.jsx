@@ -1,8 +1,7 @@
 import React, { useState } from 'react';
-import { Mail, Lock, Eye, EyeOff, ArrowRight, Activity, ShieldCheck, Users } from 'lucide-react';
+import { Mail, Lock, Eye, EyeOff, ArrowRight, Activity, ShieldCheck, PieChart, Users } from 'lucide-react';
 import bgImage from '../assets/background.png';
 import logoImage from '../assets/logo.png';
-import analyticImage from '../assets/analytic.jpg';
 
 export default function Login({ onLogin }) {
   const [email, setEmail] = useState('');
@@ -58,7 +57,7 @@ export default function Login({ onLogin }) {
             {[
               { icon: <Activity size={18}/>, title: 'Real-time Tracking', desc: 'Live location of your employees' },
               { icon: <ShieldCheck size={18}/>, title: 'Secure & Reliable', desc: 'Enterprise-grade security' },
-              { icon: <img src={analyticImage} alt="Analytics" style={{ width: 18, height: 18, borderRadius: 4 }} />, title: 'Powerful Analytics', desc: 'Data-driven insights & reports' },
+              { icon: <PieChart size={18}/>, title: 'Powerful Analytics', desc: 'Data-driven insights & reports' },
               { icon: <Users size={18}/>, title: 'Team Management', desc: 'Manage employees and assignments' },
             ].map((f, i) => (
               <div key={i} style={{ display: 'flex', alignItems: 'center', gap: 16 }}>
