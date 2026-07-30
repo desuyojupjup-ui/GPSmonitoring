@@ -1,8 +1,8 @@
 import React, { useState } from 'react';
-import { Download, FileText, Calendar, TrendingUp, Users, MapPin, Clock, Activity, Search, Map, Filter, ChevronDown, CheckCircle, AlertTriangle, XCircle, Award } from 'lucide-react';
+import { Download, FileText, Calendar, TrendingUp, Users, MapPin, Clock, Activity, Search, Map, Filter, ChevronDown, CheckCircle, AlertTriangle, XCircle, Award, Building2, Truck, Route, ShieldAlert } from 'lucide-react';
 import { MapContainer, TileLayer, Polyline, CircleMarker } from 'react-leaflet';
 import 'leaflet/dist/leaflet.css';
-import { MOCK_EMPLOYEES, MOCK_ATTENDANCE } from '../mockData';
+import { MOCK_EMPLOYEES, MOCK_ATTENDANCE, MOCK_GEOFENCE_VIOLATIONS, MOCK_ROUTE_LOGS } from '../mockData';
 
 const STATUS_STYLES = {
   'Completed': { bg: '#D1FAE5', color: '#065F46', dot: '#10B981' },
@@ -15,29 +15,58 @@ const STATUS_STYLES = {
 export default function ReportsPage() {
   const [employees] = useState(MOCK_EMPLOYEES);
   const [attendance] = useState(MOCK_ATTENDANCE);
+  const [violations] = useState(MOCK_GEOFENCE_VIOLATIONS);
+  const [routeLogs] = useState(MOCK_ROUTE_LOGS);
   const [search, setSearch] = useState('');
+  const [reportType, setReportType] = useState('all');
 
   const totalEmployees = employees.length;
   const activeToday = employees.filter(e => e.status && e.status !== 'Offline').length;
   const completedVisits = attendance.filter(a => a.status === 'Completed').length;
   const attendanceRate = totalEmployees > 0 ? Math.round((activeToday / totalEmployees) * 100) : 0;
+  const fixedCount   = employees.filter(e => e.workType === 'Fixed Site Employee').length;
+  const mobileCount  = employees.filter(e => e.workType === 'Mobile Field Employee').length;
+  const violationCount = violations.filter(v => v.status === 'Unresolved').length;
+  const completedRoutes = routeLogs.filter(r => r.status === 'Completed').length;
+  const totalRouteKm = routeLogs.reduce((s, r) => s + r.distanceKm, 0).toFixed(1);
 
   const SUMMARY_METRICS = [
     { title: 'Total Employees', value: totalEmployees, trend: '+0%', isUp: true, color: '#3B82F6', bg: '#EFF6FF', icon: <Users size={20}/> },
     { title: 'Active Today', value: activeToday, trend: '+0%', isUp: true, color: '#10B981', bg: '#D1FAE5', icon: <Activity size={20}/> },
-    { title: 'Completed Visits', value: completedVisits, trend: '+0%', isUp: true, color: '#8B5CF6', bg: '#EDE9FF', icon: <CheckCircle size={20}/> },
+    { title: 'Fixed Site Staff', value: fixedCount, trend: '+0%', isUp: true, color: '#7C3AED', bg: '#EDE9FE', icon: <Building2 size={20}/> },
+    { title: 'Mobile Field Staff', value: mobileCount, trend: '+0%', isUp: true, color: '#D97706', bg: '#FEF3C7', icon: <Truck size={20}/> },
     { title: 'Attendance Rate', value: `${attendanceRate}%`, trend: '+0%', isUp: true, color: '#F59E0B', bg: '#FEF3C7', icon: <Clock size={20}/> },
-    { title: 'Distance Traveled', value: '1,247 km', trend: '+12%', isUp: true, color: '#EF4444', bg: '#FEE2E2', icon: <Map size={20}/> },
   ];
 
-  const filteredReports = attendance.filter(a => 
-    (a.employee_name || '').toLowerCase().includes(search.toLowerCase()) ||
-    (a.site_name || '').toLowerCase().includes(search.toLowerCase())
+  const filteredReports = attendance.filter(a =>
+    ((a.employee_name || '').toLowerCase().includes(search.toLowerCase()) ||
+    (a.site_name || '').toLowerCase().includes(search.toLowerCase())) &&
+    (reportType === 'all' || reportType === 'fixed')
+  );
+  const filteredRoutes = routeLogs.filter(r =>
+    (r.empName || '').toLowerCase().includes(search.toLowerCase()) &&
+    (reportType === 'all' || reportType === 'mobile')
   );
 
   return (
     <div style={{ padding: 24, display: 'flex', flexDirection: 'column', gap: 24, background: '#F8FAFC', minHeight: '100vh' }}>
-      <div style={{ display: 'flex', justifyContent: 'flex-end', gap: 12 }}>
+      {/* Report Type Tabs */}
+      <div style={{ display: 'flex', gap: 0, background: 'white', borderRadius: 12, border: '1px solid #E2E8F0', overflow: 'hidden', boxShadow: '0 1px 3px rgba(0,0,0,0.05)', alignSelf: 'flex-start' }}>
+        {[
+          { val: 'all',    label: 'All Reports',         icon: Activity },
+          { val: 'fixed',  label: 'Fixed Site Reports',  icon: Building2 },
+          { val: 'mobile', label: 'Mobile Field Reports',icon: Truck },
+        ].map(({ val, label, icon: Icon }) => (
+          <button key={val} onClick={() => setReportType(val)}
+            style={{ padding: '10px 20px', border: 'none', fontWeight: 600, fontSize: 13, cursor: 'pointer', display: 'flex', alignItems: 'center', gap: 7, transition: 'all 0.2s',
+              background: reportType === val ? '#4F46E5' : 'white',
+              color: reportType === val ? 'white' : '#64748B' }}>
+            <Icon size={14}/> {label}
+          </button>
+        ))}
+      </div>
+
+      <div style={{ display: 'flex', justifyContent: 'flex-end', gap: 12, marginTop: -16 }}>
         <button style={{ display: 'flex', alignItems: 'center', gap: 8, background: 'white', border: '1px solid #E2E8F0', padding: '10px 16px', borderRadius: 8, color: '#475569', fontWeight: 600, fontSize: 13, cursor: 'pointer', boxShadow: '0 1px 2px rgba(0,0,0,0.05)' }}>
           <Calendar size={16} color="#64748B" /> Today <ChevronDown size={14} />
         </button>
@@ -183,6 +212,81 @@ export default function ReportsPage() {
           </div>
         </div>
       </div>
+
+      {/* Geofence Violations – Fixed Site */}
+      {(reportType === 'all' || reportType === 'fixed') && (
+        <div style={{ background:'white', borderRadius:16, border:'1px solid #F1F5F9', overflow:'hidden', boxShadow:'0 1px 3px rgba(0,0,0,0.05)' }}>
+          <div style={{ padding:'16px 24px', borderBottom:'1px solid #F1F5F9', display:'flex', alignItems:'center', gap:10 }}>
+            <ShieldAlert size={16} color="#EF4444" />
+            <h3 style={{ fontSize:15, fontWeight:700, color:'#0F172A', margin:0 }}>Fixed Site — Geofence Violations</h3>
+          </div>
+          <table style={{ width:'100%', borderCollapse:'collapse', fontSize:13 }}>
+            <thead style={{ background:'#F8FAFC' }}>
+              <tr>{['EMPLOYEE','SITE','EVENT','TIME','DURATION','STATUS'].map(h=>(
+                <th key={h} style={{ padding:'12px 20px', textAlign:'left', color:'#64748B', fontWeight:700, fontSize:11, letterSpacing:'0.05em' }}>{h}</th>
+              ))}</tr>
+            </thead>
+            <tbody>
+              {violations.map(v=>(
+                <tr key={v.id} style={{ borderBottom:'1px solid #F1F5F9' }}>
+                  <td style={{ padding:'14px 20px', fontWeight:600, color:'#0F172A' }}>{v.employeeName}</td>
+                  <td style={{ padding:'14px 20px', color:'#475569' }}>{v.site}</td>
+                  <td style={{ padding:'14px 20px' }}>
+                    <span style={{ background:v.event==='Exit'?'#FEE2E2':'#D1FAE5', color:v.event==='Exit'?'#991B1B':'#065F46', padding:'3px 10px', borderRadius:20, fontSize:11, fontWeight:700 }}>
+                      {v.event==='Exit'?'⬆ Exit':'⬇ Entry'}
+                    </span>
+                  </td>
+                  <td style={{ padding:'14px 20px', color:'#64748B' }}>{v.timestamp?.toDate?.().toLocaleTimeString('en-US',{hour:'2-digit',minute:'2-digit',hour12:true})||'—'}</td>
+                  <td style={{ padding:'14px 20px', color:'#475569', fontWeight:600 }}>{v.duration}</td>
+                  <td style={{ padding:'14px 20px' }}>
+                    <span style={{ background:v.status==='Unresolved'?'#FEE2E2':'#D1FAE5', color:v.status==='Unresolved'?'#991B1B':'#065F46', padding:'3px 10px', borderRadius:20, fontSize:11, fontWeight:700 }}>{v.status}</span>
+                  </td>
+                </tr>
+              ))}
+              {violations.length===0&&<tr><td colSpan={6} style={{ textAlign:'center', padding:24, color:'#94A3B8' }}>No violations recorded.</td></tr>}
+            </tbody>
+          </table>
+        </div>
+      )}
+
+      {/* Route Completion – Mobile Field */}
+      {(reportType === 'all' || reportType === 'mobile') && (
+        <div style={{ background:'white', borderRadius:16, border:'1px solid #F1F5F9', overflow:'hidden', boxShadow:'0 1px 3px rgba(0,0,0,0.05)' }}>
+          <div style={{ padding:'16px 24px', borderBottom:'1px solid #F1F5F9', display:'flex', alignItems:'center', gap:10 }}>
+            <Truck size={16} color="#D97706" />
+            <h3 style={{ fontSize:15, fontWeight:700, color:'#0F172A', margin:0 }}>Mobile Field — Route Completion</h3>
+          </div>
+          <table style={{ width:'100%', borderCollapse:'collapse', fontSize:13 }}>
+            <thead style={{ background:'#F8FAFC' }}>
+              <tr>{['EMPLOYEE','ROUTE','STOPS DONE','DISTANCE','TRAVEL TIME','STATUS'].map(h=>(
+                <th key={h} style={{ padding:'12px 20px', textAlign:'left', color:'#64748B', fontWeight:700, fontSize:11, letterSpacing:'0.05em' }}>{h}</th>
+              ))}</tr>
+            </thead>
+            <tbody>
+              {filteredRoutes.map(r=>(
+                <tr key={r.id} style={{ borderBottom:'1px solid #F1F5F9' }}>
+                  <td style={{ padding:'14px 20px', fontWeight:600, color:'#0F172A' }}>{r.empName}</td>
+                  <td style={{ padding:'14px 20px', color:'#475569' }}>{r.route}</td>
+                  <td style={{ padding:'14px 20px' }}>
+                    <div style={{ display:'flex', alignItems:'center', gap:8 }}>
+                      <div style={{ flex:1, height:6, background:'#F1F5F9', borderRadius:3, overflow:'hidden', maxWidth:80 }}>
+                        <div style={{ width:`${(r.completed/r.total)*100}%`, height:'100%', background:'#10B981', borderRadius:3 }}/>
+                      </div>
+                      <span style={{ fontSize:12, fontWeight:700, color:'#111827' }}>{r.completed}/{r.total}</span>
+                    </div>
+                  </td>
+                  <td style={{ padding:'14px 20px', fontWeight:600, color:'#0F172A' }}>{r.distanceKm} km</td>
+                  <td style={{ padding:'14px 20px', color:'#475569' }}>{r.travelTime}</td>
+                  <td style={{ padding:'14px 20px' }}>
+                    <span style={{ background:r.status==='Completed'?'#D1FAE5':'#DBEAFE', color:r.status==='Completed'?'#065F46':'#1E40AF', padding:'3px 10px', borderRadius:20, fontSize:11, fontWeight:700 }}>{r.status}</span>
+                  </td>
+                </tr>
+              ))}
+              {filteredRoutes.length===0&&<tr><td colSpan={6} style={{ textAlign:'center', padding:24, color:'#94A3B8' }}>No route logs found.</td></tr>}
+            </tbody>
+          </table>
+        </div>
+      )}
 
       <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr 1fr', gap: 24 }}>
         {[

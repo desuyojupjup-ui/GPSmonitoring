@@ -101,5 +101,27 @@ service cloud.firestore {
       allow read, create: if isAuthenticated();
       allow update, delete: if isAdmin();
     }
+
+    // ── Work Type Module – New Collections ──────────────────
+
+    // Tracking logs: stores both fixed-site geofence events and
+    // mobile destination arrival/completion events.
+    // Fields: trackingType (fixed|mobile), entryExitEvents, destinationArrival
+    match /tracking_logs/{logId} {
+      allow read, create: if isAuthenticated();
+      allow update, delete: if isAdmin();
+    }
+
+    // Mobile route logs per employee per day.
+    match /route_logs/{logId} {
+      allow read, create: if isAuthenticated();
+      allow update, delete: if isAdmin();
+    }
+
+    // Detailed geofence violation records for Fixed Site employees.
+    match /geofence_violations/{docId} {
+      allow read, create: if isAuthenticated();
+      allow update, delete: if isAdmin();
+    }
   }
 }

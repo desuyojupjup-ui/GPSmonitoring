@@ -8,19 +8,149 @@
 const NOW = new Date();
 
 export const MOCK_EMPLOYEES = [
-  { id: 'emp1',  name: 'John Cruz',        email: 'john.cruz@geostride.com',    idNum: 'EMP-1001', org: 'Field Operations',  type: 'Field Inspector',    status: 'On Site',    joined: 'Jan 15, 2026\n10:30 AM', profilePic: null, phone: '09171234567', department: 'Field Operations' },
-  { id: 'emp2',  name: 'Maria Santos',     email: 'maria.santos@geostride.com',  idNum: 'EMP-1002', org: 'Security',          type: 'Security Guard',     status: 'On Duty',    joined: 'Feb 3, 2026\n9:00 AM',  profilePic: null, phone: '09179876543', department: 'Security' },
-  { id: 'emp3',  name: 'David Reyes',      email: 'david.reyes@geostride.com',   idNum: 'EMP-1003', org: 'Maintenance',       type: 'Technician',         status: 'In Transit', joined: 'Mar 12, 2026\n11:15 AM', profilePic: null, phone: '09177654321', department: 'Maintenance' },
-  { id: 'emp4',  name: 'Anna Lim',         email: 'anna.lim@geostride.com',      idNum: 'EMP-1004', org: 'Field Operations',  type: 'Site Supervisor',    status: 'On Site',    joined: 'Jan 20, 2026\n8:45 AM', profilePic: null, phone: '09175432109', department: 'Field Operations' },
-  { id: 'emp5',  name: 'James Gonzales',   email: 'james.g@geostride.com',       idNum: 'EMP-1005', org: 'Logistics',         type: 'Driver',             status: 'In Transit', joined: 'Apr 5, 2026\n1:30 PM',  profilePic: null, phone: '09173216547', department: 'Logistics' },
-  { id: 'emp6',  name: 'Sofia Martinez',   email: 'sofia.m@geostride.com',       idNum: 'EMP-1006', org: 'IT',                type: 'Support Engineer',   status: 'On Duty',    joined: 'Feb 28, 2026\n10:00 AM', profilePic: null, phone: '09178901234', department: 'IT' },
-  { id: 'emp7',  name: 'Carlos Tan',       email: 'carlos.t@geostride.com',      idNum: 'EMP-1007', org: 'Field Operations',  type: 'Field Inspector',    status: 'Offline',    joined: 'May 10, 2026\n9:30 AM', profilePic: null, phone: '09176543210', department: 'Field Operations' },
-  { id: 'emp8',  name: 'Isabella Torres',  email: 'isabella.t@geostride.com',    idNum: 'EMP-1008', org: 'Security',          type: 'Security Guard',     status: 'On Site',    joined: 'Mar 1, 2026\n7:00 AM',  profilePic: null, phone: '09172345678', department: 'Security' },
-  { id: 'emp9',  name: 'Michael Rivera',   email: 'michael.r@geostride.com',     idNum: 'EMP-1009', org: 'Maintenance',       type: 'Electrician',        status: 'On Duty',    joined: 'Jun 18, 2026\n2:00 PM', profilePic: null, phone: '09178765432', department: 'Maintenance' },
-  { id: 'emp10', name: 'Patricia Cruz',    email: 'patricia.c@geostride.com',    idNum: 'EMP-1010', org: 'Administration',    type: 'Admin Staff',        status: 'Offline',    joined: 'Apr 22, 2026\n8:00 AM', profilePic: null, phone: '09174567890', department: 'Administration' },
-  { id: 'emp11', name: 'Roberto Diaz',     email: 'roberto.d@geostride.com',     idNum: 'EMP-1011', org: 'Logistics',         type: 'Supply Coordinator', status: 'In Transit', joined: 'May 30, 2026\n10:15 AM', profilePic: null, phone: '09179871234', department: 'Logistics' },
-  { id: 'emp12', name: 'Angela Ramos',    email: 'angela.r@geostride.com',      idNum: 'EMP-1012', org: 'Field Operations',  type: 'Field Inspector',    status: 'On Site',    joined: 'Jul 8, 2026\n9:00 AM',  profilePic: null, phone: '09175678901', department: 'Field Operations' },
-  { id: 'emp13', name: 'Admin User',       email: 'admin@geostride.com',          idNum: 'ADM-001',  org: 'Administration',    type: 'Admin',              status: 'On Duty',    joined: 'Jan 1, 2026\n12:00 AM', profilePic: null, phone: '09170000001', department: 'Administration' },
+  {
+    id: 'emp1',  name: 'John Cruz',        email: 'john.cruz@geostride.com',   idNum: 'EMP-1001',
+    org: 'Field Operations', type: 'Field Inspector',  status: 'On Site',
+    joined: 'Jan 15, 2026\n10:30 AM', profilePic: null, phone: '09171234567', department: 'Field Operations',
+    workType: 'Fixed Site Employee',
+    assignedSite: 'site1',
+    geofenceRadius: 200,
+    geofenceStatus: 'Inside Assigned Site',
+    assignedRoute: null,
+    assignedDestinations: [],
+  },
+  {
+    id: 'emp2',  name: 'Maria Santos',     email: 'maria.santos@geostride.com', idNum: 'EMP-1002',
+    org: 'Security',  type: 'Security Guard',  status: 'On Duty',
+    joined: 'Feb 3, 2026\n9:00 AM', profilePic: null, phone: '09179876543', department: 'Security',
+    workType: 'Fixed Site Employee',
+    assignedSite: 'site2',
+    geofenceRadius: 150,
+    geofenceStatus: 'Inside Assigned Site',
+    assignedRoute: null,
+    assignedDestinations: [],
+  },
+  {
+    id: 'emp3',  name: 'David Reyes',      email: 'david.reyes@geostride.com',  idNum: 'EMP-1003',
+    org: 'Maintenance', type: 'Technician',  status: 'In Transit',
+    joined: 'Mar 12, 2026\n11:15 AM', profilePic: null, phone: '09177654321', department: 'Maintenance',
+    workType: 'Fixed Site Employee',
+    assignedSite: 'site3',
+    geofenceRadius: 100,
+    geofenceStatus: 'Outside Assigned Site',
+    assignedRoute: null,
+    assignedDestinations: [],
+  },
+  {
+    id: 'emp4',  name: 'Anna Lim',         email: 'anna.lim@geostride.com',     idNum: 'EMP-1004',
+    org: 'Field Operations', type: 'Site Supervisor',  status: 'On Site',
+    joined: 'Jan 20, 2026\n8:45 AM', profilePic: null, phone: '09175432109', department: 'Field Operations',
+    workType: 'Fixed Site Employee',
+    assignedSite: 'site6',
+    geofenceRadius: 300,
+    geofenceStatus: 'Inside Assigned Site',
+    assignedRoute: null,
+    assignedDestinations: [],
+  },
+  {
+    id: 'emp5',  name: 'James Gonzales',   email: 'james.g@geostride.com',      idNum: 'EMP-1005',
+    org: 'Logistics', type: 'Driver',  status: 'In Transit',
+    joined: 'Apr 5, 2026\n1:30 PM', profilePic: null, phone: '09173216547', department: 'Logistics',
+    workType: 'Mobile Field Employee',
+    assignedSite: null,
+    geofenceRadius: null,
+    geofenceStatus: null,
+    assignedRoute: 'route1',
+    assignedDestinations: ['dest1','dest2','dest3'],
+  },
+  {
+    id: 'emp6',  name: 'Sofia Martinez',   email: 'sofia.m@geostride.com',      idNum: 'EMP-1006',
+    org: 'IT', type: 'Support Engineer',  status: 'On Duty',
+    joined: 'Feb 28, 2026\n10:00 AM', profilePic: null, phone: '09178901234', department: 'IT',
+    workType: 'Fixed Site Employee',
+    assignedSite: 'site5',
+    geofenceRadius: 180,
+    geofenceStatus: 'Inside Assigned Site',
+    assignedRoute: null,
+    assignedDestinations: [],
+  },
+  {
+    id: 'emp7',  name: 'Carlos Tan',       email: 'carlos.t@geostride.com',     idNum: 'EMP-1007',
+    org: 'Field Operations', type: 'Field Inspector',  status: 'Offline',
+    joined: 'May 10, 2026\n9:30 AM', profilePic: null, phone: '09176543210', department: 'Field Operations',
+    workType: 'Fixed Site Employee',
+    assignedSite: 'site1',
+    geofenceRadius: 100,
+    geofenceStatus: null,
+    assignedRoute: null,
+    assignedDestinations: [],
+  },
+  {
+    id: 'emp8',  name: 'Isabella Torres',  email: 'isabella.t@geostride.com',   idNum: 'EMP-1008',
+    org: 'Security', type: 'Security Guard',  status: 'On Site',
+    joined: 'Mar 1, 2026\n7:00 AM', profilePic: null, phone: '09172345678', department: 'Security',
+    workType: 'Fixed Site Employee',
+    assignedSite: 'site3',
+    geofenceRadius: 250,
+    geofenceStatus: 'Inside Assigned Site',
+    assignedRoute: null,
+    assignedDestinations: [],
+  },
+  {
+    id: 'emp9',  name: 'Michael Rivera',   email: 'michael.r@geostride.com',    idNum: 'EMP-1009',
+    org: 'Maintenance', type: 'Electrician',  status: 'On Duty',
+    joined: 'Jun 18, 2026\n2:00 PM', profilePic: null, phone: '09178765432', department: 'Maintenance',
+    workType: 'Fixed Site Employee',
+    assignedSite: 'site2',
+    geofenceRadius: 100,
+    geofenceStatus: 'Inside Assigned Site',
+    assignedRoute: null,
+    assignedDestinations: [],
+  },
+  {
+    id: 'emp10', name: 'Patricia Cruz',    email: 'patricia.c@geostride.com',   idNum: 'EMP-1010',
+    org: 'Administration', type: 'Admin Staff',  status: 'Offline',
+    joined: 'Apr 22, 2026\n8:00 AM', profilePic: null, phone: '09174567890', department: 'Administration',
+    workType: 'Fixed Site Employee',
+    assignedSite: null,
+    geofenceRadius: 100,
+    geofenceStatus: null,
+    assignedRoute: null,
+    assignedDestinations: [],
+  },
+  {
+    id: 'emp11', name: 'Roberto Diaz',     email: 'roberto.d@geostride.com',    idNum: 'EMP-1011',
+    org: 'Logistics', type: 'Supply Coordinator',  status: 'In Transit',
+    joined: 'May 30, 2026\n10:15 AM', profilePic: null, phone: '09179871234', department: 'Logistics',
+    workType: 'Mobile Field Employee',
+    assignedSite: null,
+    geofenceRadius: null,
+    geofenceStatus: null,
+    assignedRoute: 'route2',
+    assignedDestinations: ['dest4','dest5'],
+  },
+  {
+    id: 'emp12', name: 'Angela Ramos',     email: 'angela.r@geostride.com',     idNum: 'EMP-1012',
+    org: 'Field Operations', type: 'Field Inspector',  status: 'On Site',
+    joined: 'Jul 8, 2026\n9:00 AM', profilePic: null, phone: '09175678901', department: 'Field Operations',
+    workType: 'Fixed Site Employee',
+    assignedSite: 'site6',
+    geofenceRadius: 100,
+    geofenceStatus: 'Inside Assigned Site',
+    assignedRoute: null,
+    assignedDestinations: [],
+  },
+  {
+    id: 'emp13', name: 'Admin User',       email: 'admin@geostride.com',         idNum: 'ADM-001',
+    org: 'Administration', type: 'Admin',  status: 'On Duty',
+    joined: 'Jan 1, 2026\n12:00 AM', profilePic: null, phone: '09170000001', department: 'Administration',
+    workType: 'Fixed Site Employee',
+    assignedSite: null,
+    geofenceRadius: 100,
+    geofenceStatus: null,
+    assignedRoute: null,
+    assignedDestinations: [],
+  },
 ];
 
 // ─── LOCATIONS (Manila area coordinates) ────────────────────
@@ -180,6 +310,36 @@ export const MOCK_GEOFENCE_EVENTS = [
   { id: 'g2', employee: 'John Cruz',      site: 'Greenfield Mall',         event: 'Entry', time: '7:05 AM', date: 'May 22, 2026' },
   { id: 'g3', employee: 'Maria Santos',   site: 'Central Station',         event: 'Entry', time: '7:55 AM', date: 'May 22, 2026' },
   { id: 'g4', employee: 'Anna Lim',       site: 'BGC Construction Site',   event: 'Exit',  time: '3:30 PM', date: 'May 21, 2026' },
+];
+
+// ─── GEOFENCE VIOLATIONS (Fixed Site) ──────────────────────
+export const MOCK_GEOFENCE_VIOLATIONS = [
+  { id: 'gv1', employeeId: 'emp3', employeeName: 'David Reyes', site: 'Riverside Business Park', event: 'Exit', timestamp: mockTimestamp(timeAgo(30)), lat: 14.625, lng: 120.970, duration: '22 min', status: 'Unresolved' },
+  { id: 'gv2', employeeId: 'emp4', employeeName: 'Anna Lim',   site: 'BGC Construction Site',   event: 'Exit', timestamp: mockTimestamp(timeAgo(280)), lat: 14.553, lng: 121.058, duration: '8 min',  status: 'Resolved' },
+];
+
+// ─── MOBILE ROUTE DESTINATIONS ─────────────────────────────
+export const MOCK_DESTINATIONS = {
+  dest1: { id: 'dest1', name: 'Warehouse A (Start)',       type: 'Warehouse',    lat: 14.608, lng: 120.990, status: 'Completed',  arrivedAt: '07:05 AM', completedAt: '07:20 AM', notes: 'Picked up goods' },
+  dest2: { id: 'dest2', name: 'Makati Customer Hub',       type: 'Customer Location', lat: 14.557, lng: 121.017, status: 'In Progress', arrivedAt: '08:45 AM', completedAt: null,        notes: '' },
+  dest3: { id: 'dest3', name: 'BGC Delivery Point',        type: 'Delivery Destination', lat: 14.549, lng: 121.054, status: 'Pending',    arrivedAt: null,       completedAt: null,        notes: '' },
+  dest4: { id: 'dest4', name: 'North Ave Depot (Start)',   type: 'Warehouse',    lat: 14.654, lng: 121.032, status: 'Completed',  arrivedAt: '06:55 AM', completedAt: '07:10 AM', notes: 'Loaded supplies' },
+  dest5: { id: 'dest5', name: 'QC Distribution Center',   type: 'Delivery Destination', lat: 14.631, lng: 121.041, status: 'Pending',    arrivedAt: null,       completedAt: null,        notes: '' },
+};
+
+// ─── ROUTE LOGS (Mobile Field) ─────────────────────────────
+export const MOCK_ROUTE_LOGS = [
+  { id: 'rl1', empId: 'emp5',  empName: 'James Gonzales', route: 'Route A – City South', destinations: ['dest1','dest2','dest3'], completed: 1, total: 3, date: 'Jul 30, 2026', distanceKm: 14.2, travelTime: '1h 45m', status: 'In Progress' },
+  { id: 'rl2', empId: 'emp11', empName: 'Roberto Diaz',   route: 'Route B – North QC',  destinations: ['dest4','dest5'],         completed: 1, total: 2, date: 'Jul 30, 2026', distanceKm: 9.8,  travelTime: '55m',    status: 'In Progress' },
+];
+
+// ─── TRACKING LOGS (extended for work type) ────────────────
+export const MOCK_TRACKING_LOGS = [
+  { id: 'tl1', empId: 'emp1',  trackingType: 'fixed',  event: 'Geofence Entry',    site: 'Greenfield Mall',  lat: 14.610, lng: 120.985, timestamp: mockTimestamp(timeAgo(60)),  notes: 'Employee entered geofence' },
+  { id: 'tl2', empId: 'emp3',  trackingType: 'fixed',  event: 'Geofence Exit',     site: 'Riverside Business Park', lat: 14.625, lng: 120.970, timestamp: mockTimestamp(timeAgo(30)), notes: 'Exit alert triggered' },
+  { id: 'tl3', empId: 'emp5',  trackingType: 'mobile', event: 'Destination Arrived', destinationId: 'dest1', lat: 14.608, lng: 120.990, timestamp: mockTimestamp(timeAgo(90)), notes: 'Arrived at Warehouse A' },
+  { id: 'tl4', empId: 'emp5',  trackingType: 'mobile', event: 'Destination Completed', destinationId: 'dest1', lat: 14.608, lng: 120.990, timestamp: mockTimestamp(timeAgo(75)), notes: 'Departure confirmed' },
+  { id: 'tl5', empId: 'emp11', trackingType: 'mobile', event: 'Route Started',     destinationId: 'dest4', lat: 14.654, lng: 121.032, timestamp: mockTimestamp(timeAgo(120)), notes: 'Route B started' },
 ];
 
 // ─── HELPER FUNCTIONS ──────────────────────────────────────

@@ -2,20 +2,27 @@ import React, { useState } from 'react';
 import { Eye, Check, Trash2, Bell, AlertTriangle, CheckCircle } from 'lucide-react';
 
 const INIT_NOTIFS = [
-  { id: 1, sender: 'System Admin', sub: 'Admin', title: 'System Update Completed', message: 'The platform has been updated to version 2.4.0 successfully.', date: 'May 23, 2026', time: '7:00 PM', status: 'Unread', type: 'System' },
-  { id: 2, sender: 'Geofence Alert', sub: 'Automated', title: 'Employee out of bounds', message: 'David Wilson has exited the Riverside Bldg geofence.', date: 'May 22, 2026', time: '3:15 PM', status: 'Read', type: 'Alert' },
-  { id: 3, sender: 'Manager John', sub: 'Manager', title: 'New Schedule Posted', message: 'The field schedule for next week is now available.', date: 'May 20, 2026', time: '9:00 AM', status: 'Read', type: 'Message' },
+  { id: 1, sender: 'System Admin',     sub: 'Admin',     title: 'System Update Completed',           message: 'The platform has been updated to version 2.4.0 successfully.',                           date: 'May 23, 2026', time: '7:00 PM', status: 'Unread', type: 'System',  workType: null },
+  { id: 2, sender: 'Geofence Alert',   sub: 'Automated', title: 'Employee Exited Assigned Site',     message: 'David Reyes has exited the Riverside Business Park geofence. GPS logged at 3:50 PM.',   date: 'Jul 30, 2026', time: '3:50 PM', status: 'Unread', type: 'Alert',   workType: 'Fixed Site' },
+  { id: 3, sender: 'Geofence Alert',   sub: 'Automated', title: 'Employee Returned Inside Geofence', message: 'Anna Lim has re-entered the BGC Construction Site geofence.',                           date: 'Jul 30, 2026', time: '2:10 PM', status: 'Read',   type: 'Alert',   workType: 'Fixed Site' },
+  { id: 4, sender: 'Route Monitor',    sub: 'Automated', title: 'Employee Arrived at Destination',   message: 'James Gonzales arrived at Makati Customer Hub. Destination marked In Progress.',         date: 'Jul 30, 2026', time: '8:45 AM', status: 'Unread', type: 'Route',   workType: 'Mobile Field' },
+  { id: 5, sender: 'Route Monitor',    sub: 'Automated', title: 'Destination Completed',             message: 'James Gonzales completed Warehouse A (Start). 1 of 3 stops done.',                      date: 'Jul 30, 2026', time: '7:20 AM', status: 'Read',   type: 'Route',   workType: 'Mobile Field' },
+  { id: 6, sender: 'Route Monitor',    sub: 'Automated', title: 'Route Started',                     message: 'Roberto Diaz started Route B – North QC. 2 destinations assigned.',                     date: 'Jul 30, 2026', time: '6:55 AM', status: 'Read',   type: 'Route',   workType: 'Mobile Field' },
+  { id: 7, sender: 'Manager John',     sub: 'Manager',   title: 'New Schedule Posted',               message: 'The field schedule for next week is now available.',                                     date: 'May 20, 2026', time: '9:00 AM', status: 'Read',   type: 'Message', workType: null },
+  { id: 8, sender: 'Attendance Alert', sub: 'Auto',      title: 'Late Check-in Detected',            message: 'Roberto Diaz checked in 45 minutes late this morning.',                                  date: 'May 18, 2026', time: '8:45 AM', status: 'Unread', type: 'Alert',   workType: 'Fixed Site' },
 ];
 
 export default function NotificationsPage() {
   const [activeTab, setActiveTab] = useState('All Notifications');
   const [notifs, setNotifs] = useState(INIT_NOTIFS);
 
-  const TABS = ['All Notifications', 'Unread Messages', 'System Alerts'];
+  const TABS = ['All Notifications','Unread Messages','Geofence Alerts','Mobile Routes','System Alerts'];
 
   const filtered = notifs.filter(n => {
     if (activeTab === 'Unread Messages') return n.status === 'Unread';
-    if (activeTab === 'System Alerts') return n.type === 'Alert' || n.type === 'System';
+    if (activeTab === 'System Alerts')  return n.type === 'Alert' || n.type === 'System';
+    if (activeTab === 'Geofence Alerts')return n.workType === 'Fixed Site';
+    if (activeTab === 'Mobile Routes')  return n.workType === 'Mobile Field';
     return true;
   });
 
@@ -73,6 +80,13 @@ export default function NotificationsPage() {
                 <td style={{ padding: '16px' }}>
                   <div style={{ fontWeight: 600, color: '#374151', marginBottom: 2 }}>{row.title}</div>
                   <div style={{ color: '#6B7280', fontSize: 12 }}>{row.message}</div>
+                  {row.workType && (
+                    <span style={{ marginTop: 5, display: 'inline-block', fontSize: 10, fontWeight: 700, padding: '2px 7px', borderRadius: 10,
+                      background: row.workType === 'Fixed Site' ? '#EDE9FE' : '#FEF3C7',
+                      color: row.workType === 'Fixed Site' ? '#5B21B6' : '#92400E' }}>
+                      {row.workType === 'Fixed Site' ? '🏢 Fixed Site' : '🚚 Mobile Field'}
+                    </span>
+                  )}
                 </td>
                 <td style={{ padding: '16px' }}>
                   <div style={{ color: '#374151', fontWeight: 500 }}>{row.date}</div>

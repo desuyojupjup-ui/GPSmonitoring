@@ -1,5 +1,5 @@
 import React, { useState, useEffect } from 'react';
-import { Users, CheckCircle, MapPin, ClipboardCheck, WifiOff, ArrowRight, Clock, RefreshCw, Maximize2, Eye, UserCheck, Shield, Truck, Zap, Bot, Activity } from 'lucide-react';
+import { Users, CheckCircle, MapPin, ClipboardCheck, WifiOff, ArrowRight, Clock, RefreshCw, Maximize2, Eye, UserCheck, Shield, Truck, Zap, Bot, Activity, Building2, Navigation, ShieldAlert, Route } from 'lucide-react';
 import { MapContainer, TileLayer, Marker, Popup, Circle, useMap } from 'react-leaflet';
 import L from 'leaflet';
 import {
@@ -7,7 +7,7 @@ import {
   ResponsiveContainer, PieChart, Pie, Cell
 } from 'recharts';
 import 'leaflet/dist/leaflet.css';
-import { MOCK_EMPLOYEES, MOCK_SITES, MOCK_LOCATIONS, MOCK_ACTIVITY_LOGS, MOCK_ASSIGNMENTS } from '../mockData';
+import { MOCK_EMPLOYEES, MOCK_SITES, MOCK_LOCATIONS, MOCK_ACTIVITY_LOGS, MOCK_ASSIGNMENTS, MOCK_ROUTE_LOGS } from '../mockData';
 import MapTracking from './MapTracking';
 
 // Fix Leaflet default marker icons
@@ -122,6 +122,7 @@ export default function Dashboard() {
   const [locations] = useState(MOCK_LOCATIONS);
   const [recentLogs] = useState(MOCK_ACTIVITY_LOGS.slice(0, 5));
   const [assignments] = useState(MOCK_ASSIGNMENTS);
+  const [routeLogs] = useState(MOCK_ROUTE_LOGS);
   const [fullscreen, setFullscreen] = useState(false);
 
   // Compute Stats
@@ -132,12 +133,25 @@ export default function Dashboard() {
   const inTransitCount = employees.filter(e => e.status === 'In Transit').length;
   const completedAssignments = assignments.filter(a => a.status === 'Completed').length;
 
+  // Work Type Stats
+  const fixedCount   = employees.filter(e => e.workType === 'Fixed Site Employee').length;
+  const mobileCount  = employees.filter(e => e.workType === 'Mobile Field Employee').length;
+  const outsideCount = employees.filter(e => e.geofenceStatus === 'Outside Assigned Site').length;
+  const completedSiteVisits = routeLogs.reduce((sum, r) => sum + r.completed, 0);
+
   const kpis = [
     { label: 'Total Employees', value: totalEmp, delta: '+2', trend: 'up', icon: Users, color: '#6366f1', pct: 87 },
     { label: 'On Duty', value: onDutyCount, delta: '+1', trend: 'up', icon: CheckCircle, color: '#10b981', pct: 31 },
     { label: 'On Site', value: onSiteCount, delta: '0', trend: 'flat', icon: MapPin, color: '#f59e0b', pct: 31 },
     { label: 'Completed', value: completedAssignments, delta: '+1', trend: 'up', icon: ClipboardCheck, color: '#06b6d4', pct: 20 },
     { label: 'Offline', value: offlineCount, delta: '-1', trend: 'down', icon: WifiOff, color: '#f43f5e', pct: 15 },
+  ];
+
+  const workTypeKpis = [
+    { label: 'Fixed Site Employees',     value: fixedCount,          delta: '0',   trend: 'flat', icon: Building2,   color: '#7c3aed', pct: Math.round(fixedCount/totalEmp*100) },
+    { label: 'Mobile Field Employees',   value: mobileCount,         delta: '0',   trend: 'flat', icon: Truck,       color: '#d97706', pct: Math.round(mobileCount/totalEmp*100) },
+    { label: 'Outside Geofence',         value: outsideCount,        delta: outsideCount>0?'+1':'0', trend: outsideCount>0?'up':'flat', icon: ShieldAlert, color: '#dc2626', pct: Math.round(outsideCount/totalEmp*100) },
+    { label: 'Completed Site Visits',    value: completedSiteVisits, delta: '+1',  trend: 'up',  icon: Route,      color: '#0891b2', pct: 40 },
   ];
 
   const statusData = [
@@ -171,6 +185,14 @@ export default function Dashboard() {
       {/* KPI Cards */}
       <div className="kpi-grid">
         {kpis.map((k, i) => <ModernKpiCard key={i} {...k} />)}
+      </div>
+
+      {/* Work Type KPI Cards */}
+      <div style={{ marginTop: 0 }}>
+        <div style={{ fontSize: 12, fontWeight: 700, color: '#6B7280', letterSpacing: '0.07em', marginBottom: 10 }}>EMPLOYEE WORK TYPE MONITORING</div>
+        <div className="kpi-grid">
+          {workTypeKpis.map((k, i) => <ModernKpiCard key={i} {...k} />)}
+        </div>
       </div>
 
       {/* Premium Workforce Monitoring + Live Activity Feed (side by side) */}
