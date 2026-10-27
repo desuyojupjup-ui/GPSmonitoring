@@ -155,8 +155,9 @@ export async function startSession({ employee, assignment, attendanceId }) {
   _context = ctx;
   await saveCtx(ctx);
 
-  // Poll every 60 seconds
-  _interval = setInterval(tick, 60 * 1000);
+  // Poll every 30 seconds
+  if (_interval) clearInterval(_interval);
+  _interval = setInterval(tick, 30 * 1000);
 }
 
 /**
@@ -172,6 +173,22 @@ export async function stopSession() {
   }
   await clearCtx();
   _context = null;
+}
+
+/**
+ * Check if a random verification scheduler session is currently active.
+ */
+export function isSchedulerActive() {
+  return Boolean(_context && _context.sessionActive);
+}
+
+/**
+ * Manually trigger the random selfie prompt immediately (for testing or supervisor prompt).
+ */
+export function triggerPromptNow() {
+  if (_promptCallback) {
+    _promptCallback({ triggerType: 'scheduled_random' });
+  }
 }
 
 /**
@@ -218,7 +235,9 @@ export async function restoreSession(onPromptReadyCb) {
     _context = ctx;
     if (onPromptReadyCb) _promptCallback = onPromptReadyCb;
     if (!_interval) {
-      _interval = setInterval(tick, 60 * 1000);
+      _interval = setInterval(tick, 30 * 1000);
     }
+    // Immediately check if prompt is due
+    tick();
   }
 }

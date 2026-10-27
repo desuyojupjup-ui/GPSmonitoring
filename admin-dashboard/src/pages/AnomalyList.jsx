@@ -499,7 +499,16 @@ export default function AnomalyList() {
                         <td style={{ padding: '14px 16px', fontWeight: '600', color: '#0F172A', whiteSpace: 'nowrap' }}>
                           {item.employeeName || 'Field Employee'}
                         </td>
-                        <td style={{ padding: '14px 16px', color: '#1F2937', fontWeight: '500', whiteSpace: 'nowrap' }}>{item.type || 'Velocity Discrepancy'}</td>
+                        <td style={{ padding: '14px 16px', color: '#1F2937', fontWeight: '500', whiteSpace: 'nowrap' }}>
+                          <div style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
+                            <span>{item.type || 'Velocity Discrepancy'}</span>
+                            {(item.type?.toLowerCase().includes('geofence') || item.eventType === 'UNAUTHORIZED_LOCATION') && (
+                              <span style={{ fontSize: '10px', fontWeight: '700', color: '#5B21B6', backgroundColor: '#EDE9FE', padding: '1px 5px', borderRadius: '4px', border: '1px solid #DDD6FE' }}>
+                                🏢 Fixed Site Only
+                              </span>
+                            )}
+                          </div>
+                        </td>
                         <td style={{ padding: '14px 16px', whiteSpace: 'nowrap' }}>
                           <span style={{
                             padding: '4px 10px', borderRadius: '12px', fontSize: '12px', fontWeight: '700',
@@ -513,9 +522,16 @@ export default function AnomalyList() {
                           {item.confidence || '92%'}
                         </td>
                         <td style={{ padding: '14px 16px', whiteSpace: 'nowrap' }}>
-                          <span style={{ fontSize: '13px', fontWeight: '600', color: item.status === 'Resolved' ? '#10B981' : item.status === 'Dismissed' ? '#64748B' : '#EF4444' }}>
-                            {item.status || 'Active'}
-                          </span>
+                          <div style={{ display: 'flex', flexDirection: 'column', gap: 3 }}>
+                            <span style={{ fontSize: '13px', fontWeight: '600', color: item.status === 'Resolved' ? '#10B981' : item.status === 'Dismissed' ? '#64748B' : item.employeeResponse ? '#2563EB' : '#EF4444' }}>
+                              {item.status || 'Active'}
+                            </span>
+                            {item.employeeResponse && (
+                              <span style={{ fontSize: '10px', fontWeight: '700', color: '#1E40AF', backgroundColor: '#EFF6FF', border: '1px solid #BFDBFE', borderRadius: '4px', padding: '1px 5px', width: 'fit-content' }}>
+                                💬 Responded
+                              </span>
+                            )}
+                          </div>
                         </td>
                         <td style={{ padding: '14px 16px', color: '#64748B', whiteSpace: 'nowrap' }}>{formatAnomalyTimestamp(item.timestamp || item.createdAt)}</td>
                         <td style={{ padding: '10px 16px', textAlign: 'right', whiteSpace: 'nowrap' }}>
@@ -789,28 +805,80 @@ export default function AnomalyList() {
               <h3 style={{ fontSize: '18px', fontWeight: '700', color: '#0F172A', margin: 0 }}>Anomaly Action Center</h3>
               <button onClick={() => setSelectedAnomaly(null)} style={{ background: 'none', border: 'none', cursor: 'pointer', fontSize: '18px', color: '#64748B' }}>✕</button>
             </div>
-            <div style={{ backgroundColor: '#F8FAFC', borderRadius: '12px', padding: '16px', marginBottom: '20px', display: 'flex', flexDirection: 'column', gap: '8px', fontSize: '14px', border: '1px solid #E2E8F0' }}>
+            <div style={{ backgroundColor: '#F8FAFC', borderRadius: '12px', padding: '16px', marginBottom: '20px', display: 'flex', flexDirection: 'column', gap: '8px', fontSize: '14px', border: '1px solid #E2E8F0', maxHeight: '380px', overflowY: 'auto' }}>
               <p style={{ margin: 0 }}><strong>Employee:</strong> {selectedAnomaly.employeeName}</p>
-              <p style={{ margin: 0 }}><strong>Type:</strong> {selectedAnomaly.type}</p>
+              <p style={{ margin: 0 }}>
+                <strong>Type:</strong> {selectedAnomaly.type}
+                {(selectedAnomaly.type?.toLowerCase().includes('geofence') || selectedAnomaly.eventType === 'UNAUTHORIZED_LOCATION') && (
+                  <span style={{ marginLeft: 8, fontSize: '11px', fontWeight: '700', color: '#5B21B6', backgroundColor: '#EDE9FE', padding: '2px 6px', borderRadius: '4px', border: '1px solid #DDD6FE' }}>
+                    🏢 Fixed Site Policy (Not applied to field employees)
+                  </span>
+                )}
+              </p>
               <p style={{ margin: 0 }}><strong>Severity:</strong> <span style={{ fontWeight: 700, color: selectedAnomaly.severity === 'High' ? '#EF4444' : '#F59E0B' }}>{selectedAnomaly.severity}</span></p>
               <p style={{ margin: 0 }}><strong>Description:</strong> {selectedAnomaly.description || 'Fast travel speed anomaly detected.'}</p>
               <p style={{ margin: 0 }}><strong>Location:</strong> {selectedAnomaly.location || 'N/A'}</p>
               <p style={{ margin: 0 }}><strong>Status:</strong> {selectedAnomaly.status}</p>
+
+              {/* EMPLOYEE DIRECT RESPONSE SECTION */}
+              {selectedAnomaly.employeeResponse ? (
+                <div style={{ marginTop: '8px', padding: '12px', backgroundColor: '#EFF6FF', borderRadius: '10px', border: '1px solid #BFDBFE' }}>
+                  <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '6px' }}>
+                    <span style={{ fontWeight: 700, color: '#1E40AF', fontSize: '13px' }}>💬 Employee Explanation:</span>
+                    <span style={{ fontSize: '11px', color: '#64748B' }}>
+                      {selectedAnomaly.respondedAt ? formatAnomalyTimestamp(selectedAnomaly.respondedAt) : 'Recently submitted'}
+                    </span>
+                  </div>
+                  <p style={{ margin: 0, fontStyle: 'italic', color: '#1E293B', fontSize: '13px', lineHeight: 1.45, backgroundColor: '#FFFFFF', padding: '10px', borderRadius: '6px', border: '1px solid #DBEAFE' }}>
+                    "{selectedAnomaly.employeeResponse}"
+                  </p>
+                  {selectedAnomaly.responseCategory && (
+                    <div style={{ marginTop: '8px', fontSize: '11px', color: '#2563EB', fontWeight: 600 }}>
+                      Reason Category: <strong style={{ color: '#1E40AF' }}>{selectedAnomaly.responseCategory}</strong>
+                    </div>
+                  )}
+                  {selectedAnomaly.responsePhoto && (
+                    <div style={{ marginTop: '10px' }}>
+                      <span style={{ fontSize: '11px', color: '#64748B', display: 'block', marginBottom: '4px', fontWeight: 600 }}>Attached Proof Photo:</span>
+                      <img
+                        src={selectedAnomaly.responsePhoto}
+                        alt="Employee photo proof"
+                        style={{ width: '100%', maxHeight: '180px', objectFit: 'cover', borderRadius: '8px', border: '1px solid #CBD5E1' }}
+                      />
+                    </div>
+                  )}
+                </div>
+              ) : (
+                <div style={{ marginTop: '6px', padding: '10px 12px', backgroundColor: '#FFFBEB', borderRadius: '8px', color: '#B45309', fontSize: '12.5px', border: '1px solid #FDE68A', display: 'flex', alignItems: 'center', gap: '8px' }}>
+                  <span>⏳</span>
+                  <span>Awaiting employee explanation via the Mobile Anomaly Alerts screen.</span>
+                </div>
+              )}
             </div>
 
             <div style={{ display: 'flex', flexDirection: 'column', gap: '10px' }}>
+              {selectedAnomaly.employeeResponse && (
+                <button
+                  onClick={() => handleAction(selectedAnomaly.id, 'Resolved')}
+                  style={{ padding: '10px', backgroundColor: '#10B981', color: 'white', border: 'none', borderRadius: '8px', fontWeight: '700', cursor: 'pointer', display: 'flex', alignItems: 'center', justifyContent: 'center', gap: '6px', boxShadow: '0 2px 4px rgba(16, 185, 129, 0.2)' }}
+                >
+                  ✓ Accept Explanation & Resolve
+                </button>
+              )}
               <button
                 onClick={() => handleAction(selectedAnomaly.id, 'Acknowledged')}
                 style={{ padding: '10px', backgroundColor: '#3B82F6', color: 'white', border: 'none', borderRadius: '8px', fontWeight: '600', cursor: 'pointer' }}
               >
                 Acknowledge Alert
               </button>
-              <button
-                onClick={() => handleAction(selectedAnomaly.id, 'Resolved')}
-                style={{ padding: '10px', backgroundColor: '#10B981', color: 'white', border: 'none', borderRadius: '8px', fontWeight: '600', cursor: 'pointer' }}
-              >
-                Mark as Resolved
-              </button>
+              {!selectedAnomaly.employeeResponse && (
+                <button
+                  onClick={() => handleAction(selectedAnomaly.id, 'Resolved')}
+                  style={{ padding: '10px', backgroundColor: '#10B981', color: 'white', border: 'none', borderRadius: '8px', fontWeight: '600', cursor: 'pointer' }}
+                >
+                  Mark as Resolved
+                </button>
+              )}
               <button
                 onClick={() => handleAction(selectedAnomaly.id, 'Escalated to Fraud')}
                 style={{ padding: '10px', backgroundColor: '#EF4444', color: 'white', border: 'none', borderRadius: '8px', fontWeight: '600', cursor: 'pointer' }}

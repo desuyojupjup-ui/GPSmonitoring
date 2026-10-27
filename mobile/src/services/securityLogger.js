@@ -105,6 +105,14 @@ export async function writeSecurityEvent(params) {
     return null;
   }
 
+  // Outside assigned geofence anomalies apply ONLY to Fixed Site Employees, NOT Field Employees
+  const empWorkType = (employee.workType || employee.employeeType || employee.type || '').toString().toLowerCase();
+  const isFieldEmp = empWorkType.includes('mobile') || empWorkType.includes('field');
+  if (isFieldEmp && (eventType === 'UNAUTHORIZED_LOCATION' || (eventType && eventType.includes('GEOFENCE')))) {
+    console.log(`[securityLogger] Suppressed geofence anomaly for field employee: ${employee.name || employee.id}`);
+    return null;
+  }
+
   // Ensure authenticated Firebase session before performing Firestore writes
   try {
     await ensureAuthenticatedSession();

@@ -1,4 +1,4 @@
-import React, { useState } from 'react';
+import React, { useState, useEffect } from 'react';
 import { 
   View, 
   Text, 
@@ -10,7 +10,10 @@ import {
   Image,
   KeyboardAvoidingView,
   Platform,
-  Dimensions
+  Dimensions,
+  ScrollView,
+  StatusBar,
+  ImageBackground
 } from 'react-native';
 import { Ionicons } from '@expo/vector-icons';
 import { 
@@ -43,12 +46,44 @@ const clearStaleCache = async () => {
 
 const { width } = Dimensions.get('window');
 
+// ── CUSTOMIZE LOGIN CARD SIZE HERE ───────────────────────────────
+// login card.png is tightly cropped (850 x 1243), so the card is sized from
+// its real aspect ratio. Change CARD_WIDTH only; height follows automatically.
+const CARD_ASPECT = 850 / 1243;
+export const CARD_WIDTH = Math.min(width * 0.98, 420);
+export const CARD_HEIGHT = CARD_WIDTH / CARD_ASPECT;
+
+// Safe area of the white card body (as % of the card image), measured to
+// avoid the side tabs and the chamfered corners.
+const INSET_TOP = CARD_HEIGHT * 0.068;
+const INSET_BOTTOM = CARD_HEIGHT * 0.16;
+const INSET_LEFT = CARD_WIDTH * 0.127;
+const INSET_RIGHT = CARD_WIDTH * 0.134;
+// ─────────────────────────────────────────────────────────────────
+
 export default function LoginScreen({ navigation, route, onLogin: propOnLogin }) {
   const onLogin = propOnLogin || route?.params?.onLogin;
   const [email, setEmail] = useState('');
   const [password, setPassword] = useState('');
   const [loading, setLoading] = useState(false);
   const [showPassword, setShowPassword] = useState(false);
+  const [rememberMe, setRememberMe] = useState(true);
+
+  // Load remembered email if previously stored
+  useEffect(() => {
+    const loadRememberedEmail = async () => {
+      try {
+        const savedEmail = await AsyncStorage.getItem('@subai_remembered_email');
+        if (savedEmail) {
+          setEmail(savedEmail);
+          setRememberMe(true);
+        }
+      } catch (err) {
+        console.warn('Load remembered email error:', err);
+      }
+    };
+    loadRememberedEmail();
+  }, []);
 
   const handleLogin = async () => {
     const cleanEmail = email.trim().toLowerCase();
@@ -191,6 +226,17 @@ export default function LoginScreen({ navigation, route, onLogin: propOnLogin })
         }
       }
 
+      // Persist or clear remembered email based on user preference
+      try {
+        if (rememberMe) {
+          await AsyncStorage.setItem('@subai_remembered_email', cleanEmail);
+        } else {
+          await AsyncStorage.removeItem('@subai_remembered_email');
+        }
+      } catch (err) {
+        console.warn('Remember me storage warning:', err);
+      }
+
       await saveUserSession(sessionPayload);
       if (onLogin) {
         onLogin(sessionPayload.email, sessionPayload.name);
@@ -207,185 +253,272 @@ export default function LoginScreen({ navigation, route, onLogin: propOnLogin })
   };
 
   return (
-    <KeyboardAvoidingView 
-      style={styles.container}
-      behavior={Platform.OS === 'ios' ? 'padding' : 'height'}
-    >
-      <View style={styles.contentContainer}>
-        {/* Logo & Header */}
-        <View style={styles.headerContainer}>
-          <Image 
-            source={require('../../assets/logo.png')} 
-            style={styles.logo} 
-            resizeMode="contain"
-          />
-          <Text style={styles.subtitle}>Workforce Employee Mobile Portal</Text>
-          
-          <View style={styles.employeeOnlyChip}>
-            <Ionicons name="people" size={14} color="#059669" />
-            <Text style={styles.employeeOnlyText}>Fixed & Mobile Employee Access</Text>
-          </View>
-        </View>
-
-        {/* Input Form */}
-        <View style={styles.formContainer}>
-          <View style={styles.inputContainer}>
-            <Ionicons name="mail-outline" size={20} color="#6B7280" style={styles.inputIcon} />
-            <TextInput
-              style={styles.input}
-              placeholder="Employee Email Address"
-              placeholderTextColor="#9CA3AF"
-              value={email}
-              onChangeText={setEmail}
-              autoCapitalize="none"
-              keyboardType="email-address"
-            />
-          </View>
-
-          <View style={styles.inputContainer}>
-            <Ionicons name="lock-closed-outline" size={20} color="#6B7280" style={styles.inputIcon} />
-            <TextInput
-              style={styles.input}
-              placeholder="Password"
-              placeholderTextColor="#9CA3AF"
-              value={password}
-              onChangeText={setPassword}
-              secureTextEntry={!showPassword}
-            />
-            <TouchableOpacity onPress={() => setShowPassword(!showPassword)} style={styles.eyeIcon}>
-              <Ionicons name={showPassword ? "eye-outline" : "eye-off-outline"} size={20} color="#6B7280" />
-            </TouchableOpacity>
-          </View>
-
-          <TouchableOpacity style={styles.forgotPassword} onPress={() => Alert.alert('Reset Password', 'Please contact your system administrator to reset your employee account credentials.')}>
-            <Text style={styles.forgotPasswordText}>Forgot Password?</Text>
-          </TouchableOpacity>
-
-          <TouchableOpacity 
-            style={styles.button} 
-            onPress={handleLogin} 
-            disabled={loading}
-            activeOpacity={0.8}
+    <View style={styles.mainContainer}>
+      <StatusBar barStyle="dark-content" backgroundColor="transparent" translucent />
+      <ImageBackground
+        source={require('../../assets/login_background.jpg')}
+        style={styles.bgContainer}
+        resizeMode="cover"
+      >
+        <KeyboardAvoidingView
+          style={{ flex: 1 }}
+          behavior={Platform.OS === 'ios' ? 'padding' : undefined}
+        >
+          <ScrollView
+            contentContainerStyle={styles.scrollContent}
+            keyboardShouldPersistTaps="handled"
+            showsVerticalScrollIndicator={false}
           >
-            {loading ? (
-              <ActivityIndicator color="#fff" size="small" />
-            ) : (
-              <Text style={styles.buttonText}>Sign In as Employee</Text>
-            )}
-          </TouchableOpacity>
-        </View>
-      </View>
-      
-      {/* Footer */}
-      <View style={styles.footer}>
-        <Text style={styles.footerText}>Authorized Employee Access (Fixed On-Site & Mobile Field Workers) • Admin Portal Required for Management</Text>
-      </View>
-    </KeyboardAvoidingView>
+            {/* ── Custom Cyber Login Card ── */}
+            <View style={styles.cardContainer}>
+              <ImageBackground
+                source={require('../../assets/login card.png')}
+                style={styles.cardImageBg}
+                resizeMode="stretch"
+              >
+                <View style={styles.cardContent}>
+                  {/* Brand Logo Header */}
+                  <View style={styles.brandRow}>
+                    <Image
+                      source={require('../../assets/logo.png')}
+                      style={styles.logo}
+                      resizeMode="contain"
+                    />
+                  </View>
+
+                  {/* Title & Subtitle */}
+                  <Text style={styles.title}>Login</Text>
+                  <Text style={styles.subtitle}>
+                    Enter your assigned employee credentials to access presence tracking and field operations.
+                  </Text>
+
+                  {/* Divider line as in design */}
+                  <View style={styles.divider} />
+
+                  {/* Input Form */}
+                  <View style={styles.formContainer}>
+                    {/* Email */}
+                    <Text style={styles.inputLabel}>Email</Text>
+                    <View style={styles.inputBox}>
+                      <Ionicons name="mail-outline" size={18} color="#64748B" style={styles.fieldIcon} />
+                      <TextInput
+                        style={styles.input}
+                        placeholder="Enter your email"
+                        placeholderTextColor="#94A3B8"
+                        value={email}
+                        onChangeText={setEmail}
+                        autoCapitalize="none"
+                        keyboardType="email-address"
+                        autoCorrect={false}
+                      />
+                    </View>
+
+                    {/* Password */}
+                    <Text style={styles.inputLabel}>Password</Text>
+                    <View style={styles.inputBox}>
+                      <Ionicons name="lock-closed-outline" size={18} color="#64748B" style={styles.fieldIcon} />
+                      <TextInput
+                        style={styles.input}
+                        placeholder="Enter your password"
+                        placeholderTextColor="#94A3B8"
+                        value={password}
+                        onChangeText={setPassword}
+                        secureTextEntry={!showPassword}
+                      />
+                      {/* Eye icon only appears once a password is being typed */}
+                      {password.length > 0 && (
+                        <TouchableOpacity
+                          onPress={() => setShowPassword(!showPassword)}
+                          style={styles.eyeBtn}
+                          activeOpacity={0.7}
+                          hitSlop={{ top: 8, bottom: 8, left: 8, right: 8 }}
+                        >
+                          <Ionicons
+                            name={showPassword ? 'eye-outline' : 'eye-off-outline'}
+                            size={18}
+                            color="#64748B"
+                          />
+                        </TouchableOpacity>
+                      )}
+                    </View>
+
+                    {/* Remember Me Toggle */}
+                    <TouchableOpacity
+                      style={styles.rememberMeRow}
+                      onPress={() => setRememberMe(!rememberMe)}
+                      activeOpacity={0.7}
+                    >
+                      <Ionicons
+                        name={rememberMe ? 'checkbox' : 'square-outline'}
+                        size={20}
+                        color={rememberMe ? '#1D68EE' : '#94A3B8'}
+                      />
+                      <Text style={styles.rememberMeText}>Remember me</Text>
+                    </TouchableOpacity>
+
+                    {/* Login Pill Button */}
+                    <TouchableOpacity
+                      style={styles.button}
+                      onPress={handleLogin}
+                      disabled={loading}
+                      activeOpacity={0.85}
+                    >
+                      {loading ? (
+                        <ActivityIndicator color="#FFFFFF" size="small" />
+                      ) : (
+                        <Text style={styles.buttonText}>Login</Text>
+                      )}
+                    </TouchableOpacity>
+                  </View>
+                </View>
+              </ImageBackground>
+            </View>
+
+            {/* Footer */}
+            <View style={styles.footer}>
+              <Text style={styles.footerText}>
+                Authorized Employee Access • Fixed & Mobile Field Operations
+              </Text>
+            </View>
+          </ScrollView>
+        </KeyboardAvoidingView>
+      </ImageBackground>
+    </View>
   );
 }
 
 const styles = StyleSheet.create({
-  container: {
+  mainContainer: {
     flex: 1,
-    backgroundColor: '#FFFFFF',
+    backgroundColor: '#F1F5F9',
   },
-  contentContainer: {
+  bgContainer: {
+    flex: 1,
+    width: '100%',
+    height: '100%',
+  },
+  scrollContent: {
+    flexGrow: 1,
+    justifyContent: 'center',
+    alignItems: 'center',
+    paddingHorizontal: 4,
+    paddingVertical: 20,
+  },
+  cardContainer: {
+    width: CARD_WIDTH,
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  cardImageBg: {
+    width: CARD_WIDTH,
+    height: CARD_HEIGHT,
+  },
+  cardContent: {
     flex: 1,
     justifyContent: 'center',
-    paddingHorizontal: 32,
+    paddingTop: INSET_TOP,
+    paddingBottom: INSET_BOTTOM,
+    paddingLeft: INSET_LEFT,
+    paddingRight: INSET_RIGHT,
   },
-  headerContainer: {
-    alignItems: 'center',
-    marginBottom: 36,
+  brandRow: {
+    alignItems: 'flex-start',
+    marginBottom: 4,
   },
   logo: {
-    width: 140,
-    height: 140,
-    marginBottom: 16,
+    width: 98,
+    height: 31,
+  },
+  title: {
+    fontSize: 24,
+    fontWeight: '800',
+    color: '#0F275A',
+    marginTop: 4,
+    marginBottom: 2,
+    letterSpacing: -0.3,
   },
   subtitle: {
-    fontSize: 15,
-    color: '#6B7280',
-    fontWeight: '600',
+    fontSize: 11,
+    color: '#64748B',
+    lineHeight: 15,
+    marginBottom: 10,
+  },
+  divider: {
+    height: 1,
+    backgroundColor: '#E2E8F0',
     marginBottom: 12,
-  },
-  employeeOnlyChip: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    gap: 6,
-    backgroundColor: '#ECFDF5',
-    borderColor: '#A7F3D0',
-    borderWidth: 1,
-    paddingHorizontal: 14,
-    paddingVertical: 6,
-    borderRadius: 20,
-  },
-  employeeOnlyText: {
-    fontSize: 12,
-    color: '#047857',
-    fontWeight: '700',
+    width: '100%',
   },
   formContainer: {
     width: '100%',
   },
-  inputContainer: {
+  inputLabel: {
+    fontSize: 12,
+    fontWeight: '700',
+    color: '#1E293B',
+    marginBottom: 4,
+  },
+  inputBox: {
+    backgroundColor: '#F1F5F9',
+    borderRadius: 14,
+    height: 44,
+    paddingHorizontal: 14,
     flexDirection: 'row',
     alignItems: 'center',
-    backgroundColor: '#F3F4F6',
-    borderRadius: 12,
-    marginBottom: 16,
-    paddingHorizontal: 16,
-    height: 56,
-    borderWidth: 1,
-    borderColor: '#E5E7EB',
-  },
-  inputIcon: {
-    marginRight: 12,
+    marginBottom: 10,
   },
   input: {
     flex: 1,
-    fontSize: 16,
-    color: '#111827',
     height: '100%',
+    color: '#0F172A',
+    fontSize: 13,
   },
-  eyeIcon: {
-    padding: 8,
+  fieldIcon: {
+    marginRight: 10,
   },
-  forgotPassword: {
-    alignSelf: 'flex-end',
-    marginBottom: 28,
+  eyeBtn: {
+    padding: 6,
   },
-  forgotPasswordText: {
-    color: '#4F46E5',
-    fontSize: 14,
+  rememberMeRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    marginTop: 2,
+    marginBottom: 14,
+    alignSelf: 'flex-start',
+  },
+  rememberMeText: {
+    marginLeft: 8,
+    fontSize: 12.5,
     fontWeight: '600',
+    color: '#475569',
   },
   button: {
-    backgroundColor: '#4F46E5',
-    height: 56,
-    borderRadius: 12,
+    backgroundColor: '#1A6BFF',
+    height: 46,
+    borderRadius: 23,
     justifyContent: 'center',
     alignItems: 'center',
-    shadowColor: '#4F46E5',
+    shadowColor: '#1A6BFF',
     shadowOffset: { width: 0, height: 4 },
-    shadowOpacity: 0.3,
+    shadowOpacity: 0.32,
     shadowRadius: 8,
     elevation: 5,
   },
   buttonText: {
     color: '#FFFFFF',
-    fontSize: 16,
+    fontSize: 15,
     fontWeight: '700',
-    letterSpacing: 0.5,
+    letterSpacing: 0.2,
   },
   footer: {
-    paddingBottom: Platform.OS === 'ios' ? 40 : 24,
-    paddingHorizontal: 20,
+    marginTop: 14,
     alignItems: 'center',
   },
   footerText: {
     fontSize: 11,
-    color: '#9CA3AF',
+    color: '#64748B',
     textAlign: 'center',
-  }
+    fontWeight: '500',
+    maxWidth: 340,
+  },
 });

@@ -203,6 +203,8 @@ export default function ProfileScreen({ navigation, route, user: propUser, onLog
       navigation.navigate('Tasks');
     } else if (title === 'My Attendance') {
       navigation.navigate('Attendance');
+    } else if (title === 'Anomaly Alerts') {
+      navigation.navigate('AnomalyAlerts', { employee, user: propUser });
     } else if (title === 'Report Incident / Delay') {
       setShowDelayModal(true);
     } else if (title === 'Location History') {
@@ -225,19 +227,24 @@ export default function ProfileScreen({ navigation, route, user: propUser, onLog
           text: 'Logout', 
           style: 'destructive', 
           onPress: async () => {
-            try {
-              await presenceService.stopPresence(employee || propUser || { email: currentEmail });
-            } catch (e) {
-              console.warn('Presence stop error:', e);
+            // 1. Immediately trigger onLogout callback so user state clears instantly
+            const logoutCallback = onLogout || route?.params?.onLogout;
+            if (typeof logoutCallback === 'function') {
+              try { logoutCallback(); } catch (_) {}
             }
+
+            // 2. Clear global user session & notify listeners
             try {
               await performGlobalLogout();
             } catch (e) {
               console.warn('Global logout error:', e);
             }
-            const logoutCallback = onLogout || route?.params?.onLogout;
-            if (typeof logoutCallback === 'function') {
-              try { logoutCallback(); } catch (_) {}
+
+            // 3. Stop presence in background (fire-and-forget)
+            try {
+              presenceService.stopPresence(employee || propUser || { email: currentEmail }).catch(() => {});
+            } catch (e) {
+              console.warn('Presence stop error:', e);
             }
           } 
         }
@@ -384,6 +391,7 @@ export default function ProfileScreen({ navigation, route, user: propUser, onLog
   const menuItems = [
     { icon: 'clipboard-outline',   title: 'My Assignments' },
     { icon: 'time-outline',        title: 'My Attendance' },
+    { icon: 'shield-alert-outline', title: 'Anomaly Alerts' },
     { icon: 'warning-outline',     title: 'Report Incident / Delay' },
     { icon: 'location-outline',    title: 'Location History' },
     { icon: 'settings-outline',    title: 'Settings' },

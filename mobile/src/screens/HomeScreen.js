@@ -12,9 +12,10 @@ import {
   Modal
 } from 'react-native';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
-import { Ionicons } from '@expo/vector-icons';
+import { Ionicons, MaterialCommunityIcons } from '@expo/vector-icons';
 import * as Location from 'expo-location';
 import * as ImagePicker from 'expo-image-picker';
+import AsyncStorage from '@react-native-async-storage/async-storage';
 import {
   auth,
   db,
@@ -44,8 +45,11 @@ import {
   onPromptReady,
   restoreSession,
   updateLastKnownLocation,
+  isSchedulerActive,
 } from '../services/verificationScheduler';
 import presenceService from '../services/presenceService';
+import locationLogService from '../services/locationLogService';
+import { fetchCurrentWeather } from '../services/weatherService';
 
 
 
@@ -167,6 +171,8 @@ export default function HomeScreen({ navigation, route, user: propUser }) {
   const [activeAnomaly, setActiveAnomaly] = useState(null);
   const [pendingSyncCount, setPendingSyncCount] = useState(0);
   const [isSyncing, setIsSyncing] = useState(false);
+  const [unresolvedAnomalyCount, setUnresolvedAnomalyCount] = useState(0);
+  const [weather, setWeather] = useState(null);
   const currentAttendanceIdRef = useRef(null);
 
   const hasSetOnline = useRef(false);
@@ -183,6 +189,22 @@ export default function HomeScreen({ navigation, route, user: propUser }) {
     || route?.params?.user?.name
     || formattedEmailName
     || 'Employee';
+
+  useEffect(() => {
+    let active = true;
+    fetchCurrentWeather().then(w => {
+      if (active && w) setWeather(w);
+    });
+    const interval = setInterval(() => {
+      fetchCurrentWeather().then(w => {
+        if (active && w) setWeather(w);
+      });
+    }, 10 * 60 * 1000);
+    return () => {
+      active = false;
+      clearInterval(interval);
+    };
+  }, []);
 
   useEffect(() => {
     getPendingSyncCount().then(setPendingSyncCount);
@@ -206,6 +228,104 @@ export default function HomeScreen({ navigation, route, user: propUser }) {
       setShowFacialModal(true);
     });
   }, []);
+
+  const lastViewedAnomalyTimeRef = useRef(0);
+
+  useEffect(() => {
+    if (currentEmail) {
+      AsyncStorage.getItem('last_viewed_anomaly_time_' + currentEmail).then((val) => {
+        if (val) lastViewedAnomalyTimeRef.current = Number(val);
+      }).catch(() => {});
+    }
+  }, [currentEmail]);
+
+  useEffect(() => {
+    const unsubFocus = navigation.addListener('focus', async () => {
+      if (currentEmail) {
+        try {
+          const val = await AsyncStorage.getItem('last_viewed_anomaly_time_' + currentEmail);
+          if (val) {
+            lastViewedAnomalyTimeRef.current = Number(val);
+            setUnresolvedAnomalyCount(0);
+          }
+        } catch (_) {}
+      }
+    });
+    return unsubFocus;
+  }, [navigation, currentEmail]);
+
+  // ── Track Unresolved Anomaly Alerts for Employee ──
+  useEffect(() => {
+    const emailToMatch = currentEmail?.toLowerCase() || '';
+    const nameToMatch = displayName?.toLowerCase() || '';
+    const empId = employee?.id || auth.currentUser?.uid || '';
+
+    const unsub = onSnapshot(collection(db, 'ai_analysis'), (snapshot) => {
+      let count = 0;
+      snapshot.forEach(docSnap => {
+        const d = docSnap.data();
+        const matchesEmployee = (
+          (d.employeeId && d.employeeId === empId) ||
+          (d.userId && d.userId === empId) ||
+          (emailToMatch && (
+            (d.employeeEmail && d.employeeEmail.toLowerCase() === emailToMatch) ||
+            (d.userEmail && d.userEmail.toLowerCase() === emailToMatch) ||
+            (d.email && d.email.toLowerCase() === emailToMatch)
+          )) ||
+          (nameToMatch && (
+            (d.employeeName && d.employeeName.toLowerCase().includes(nameToMatch)) ||
+            (d.userName && d.userName.toLowerCase().includes(nameToMatch))
+          ))
+        );
+        if (matchesEmployee && !d.employeeResponse && d.status !== 'Resolved' && d.status !== 'Approved') {
+          // If alert is already viewed or marked as read by employee, remove badge!
+          if (d.read === true || d.viewedByEmployee === true) {
+            return;
+          }
+
+          // If alert occurred before or at the time employee last viewed the alerts screen, remove badge!
+          const docTs = (
+            (d.timestamp?.toDate ? d.timestamp.toDate().getTime() : (typeof d.timestamp === 'number' ? d.timestamp : 0)) ||
+            (d.createdAt?.toDate ? d.createdAt.toDate().getTime() : (typeof d.createdAt === 'number' ? d.createdAt : 0)) ||
+            0
+          );
+          if (lastViewedAnomalyTimeRef.current && docTs > 0 && docTs <= lastViewedAnomalyTimeRef.current) {
+            return;
+          }
+
+          // Outside geofence alerts apply ONLY to Fixed Site Employees
+          const alertType = (d.type || d.eventType || '').toLowerCase();
+          const alertDesc = (d.description || '').toLowerCase();
+          const isGeofenceAlert = (
+            d.eventType === 'UNAUTHORIZED_LOCATION' ||
+            alertType.includes('geofence') ||
+            alertDesc.includes('outside the assigned geofence') ||
+            alertDesc.includes('outside assigned site')
+          );
+          const empWorkType = (employee?.workType || employee?.employeeType || '').toLowerCase();
+          const isFieldEmployee = empWorkType.includes('mobile') || empWorkType.includes('field');
+
+          if (isFieldEmployee && isGeofenceAlert) {
+            return;
+          }
+
+          count++;
+        }
+      });
+      setUnresolvedAnomalyCount(count);
+    }, (err) => console.warn('ai_analysis alert badge error:', err.message));
+
+    return () => unsub();
+  }, [currentEmail, displayName, employee?.id]);
+
+  const handleOpenAnomalyAlerts = () => {
+    if (currentEmail) {
+      AsyncStorage.setItem('last_viewed_anomaly_time_' + currentEmail, String(Date.now())).catch(() => {});
+      lastViewedAnomalyTimeRef.current = Date.now();
+    }
+    setUnresolvedAnomalyCount(0);
+    navigation.navigate('AnomalyAlerts', { employee, user: propUser });
+  };
 
   // 1. Fetch Employee Profile
   useEffect(() => {
@@ -537,8 +657,30 @@ export default function HomeScreen({ navigation, route, user: propUser }) {
 
         if (isCurrentlyCheckedIn) {
           presenceService.setCurrentStatus('On Duty');
+          const currentEmp = employeeRef.current || employee;
+          if (!locationLogService.isPeriodicLoggingActive() && currentEmp) {
+            locationLogService.startPeriodicLogging({
+              employee: currentEmp,
+              site,
+              assignment,
+              attendanceId: todayRecord.id,
+            });
+          }
+          if (!isSchedulerActive() && currentEmp) {
+            schedulerStart({
+              employee: currentEmp,
+              assignment,
+              attendanceId: todayRecord.id,
+            });
+          }
         } else {
           presenceService.setCurrentStatus('Online');
+          if (locationLogService.isPeriodicLoggingActive()) {
+            locationLogService.stopPeriodicLogging();
+          }
+          if (isSchedulerActive()) {
+            schedulerStop();
+          }
         }
       }
     };
@@ -613,18 +755,23 @@ export default function HomeScreen({ navigation, route, user: propUser }) {
       const checkResult = await runPreAttendanceChecks({ employee, site: sitesToCheck, action: 'time_in' });
       if (!checkResult.passed) {
         if (checkResult.failedCheck === 'geofence') {
-          const lat = checkResult.report?.latitude || 0;
-          const lng = checkResult.report?.longitude || 0;
-          const matchedSite = checkResult.report?.matchedSite || site;
-          Alert.alert(
-            'Geofence Warning',
-            'You are outside your assigned site radius. Check-in registered with out-of-bounds flag.',
-            [
-              { text: 'Proceed', onPress: () => processCheckIn(lat, lng, false, matchedSite) },
-              { text: 'Cancel', style: 'cancel' }
-            ]
-          );
-          return;
+          const empWorkType = (employee?.workType || employee?.employeeType || employee?.type || '').toString().toLowerCase();
+          const isFieldEmployee = empWorkType.includes('mobile') || empWorkType.includes('field');
+
+          if (!isFieldEmployee) {
+            const lat = checkResult.report?.latitude || 0;
+            const lng = checkResult.report?.longitude || 0;
+            const matchedSite = checkResult.report?.matchedSite || site;
+            Alert.alert(
+              'Geofence Warning',
+              'You are outside your assigned fixed worksite perimeter. Check-in registered with out-of-bounds flag.',
+              [
+                { text: 'Proceed', onPress: () => processCheckIn(lat, lng, false, matchedSite) },
+                { text: 'Cancel', style: 'cancel' }
+              ]
+            );
+            return;
+          }
         }
 
         // Hard security enforcement: VPN, Mock GPS, Root Integrity, Speed Jumps
@@ -695,6 +842,24 @@ export default function HomeScreen({ navigation, route, user: propUser }) {
         type: 'Attendance',
         timestamp: serverTimestamp(),
         status: inFence ? 'Normal' : 'Warning'
+      });
+
+      // 1. Immediately capture and save current location in the Location Log
+      await locationLogService.captureAndSaveCurrentLocation({
+        employee,
+        site: siteToUse,
+        assignment,
+        attendanceId: attId,
+        trigger: 'check_in',
+        coords: { latitude: lat, longitude: lng },
+      });
+
+      // 2. Start periodic 5-minute location recording while checked in
+      locationLogService.startPeriodicLogging({
+        employee,
+        site: siteToUse,
+        assignment,
+        attendanceId: attId,
       });
 
       // Start verification scheduler for this session
@@ -772,6 +937,9 @@ export default function HomeScreen({ navigation, route, user: propUser }) {
       // Stop verification scheduler
       await schedulerStop();
       currentAttendanceIdRef.current = null;
+
+      // Stop periodic location logging upon check-out
+      await locationLogService.stopPeriodicLogging();
 
       Alert.alert('Check Out Successful', 'Have a great day!');
     } catch (e) {
@@ -872,26 +1040,73 @@ export default function HomeScreen({ navigation, route, user: propUser }) {
   return (
     <View style={styles.container}>
       {/* ── Fixed Header Banner ── */}
-      <View style={[styles.header, { paddingTop: insets.top + 16 }]}>
-        <View style={styles.headerContent}>
-          <View style={{ flex: 1 }}>
+      <View style={[styles.header, { paddingTop: insets.top + 12 }]}>
+        {/* Top Row: App Logo on Left, Action Nav Icons on Right */}
+        <View style={styles.headerTopRow}>
+          <Image
+            source={require('../../assets/logo.png')}
+            style={styles.headerLogo}
+            resizeMode="contain"
+          />
+          <View style={styles.actionNavGroup}>
+            <TouchableOpacity style={styles.notifBtn} onPress={() => setShowFacialModal(true)}>
+              <Image
+                source={require('../../assets/identify.png')}
+                style={styles.identifyIcon}
+                resizeMode="contain"
+              />
+            </TouchableOpacity>
+            <TouchableOpacity style={styles.notifBtn} onPress={() => navigation.navigate('SecurityStatus')}>
+              <Ionicons name="shield-checkmark-outline" size={22} color="white" />
+            </TouchableOpacity>
+            <TouchableOpacity style={styles.notifBtn} onPress={handleOpenAnomalyAlerts}>
+              <Ionicons name="warning-outline" size={22} color="white" />
+              {unresolvedAnomalyCount > 0 && (
+                <View style={styles.navBadge}>
+                  <Text style={styles.navBadgeText}>
+                    {unresolvedAnomalyCount > 9 ? '9+' : unresolvedAnomalyCount}
+                  </Text>
+                </View>
+              )}
+            </TouchableOpacity>
+            <TouchableOpacity style={styles.notifBtn} onPress={() => navigation.navigate('Notifications')}>
+              <Ionicons name="notifications-outline" size={22} color="white" />
+            </TouchableOpacity>
+          </View>
+        </View>
+
+        {/* Row 2: Greeting & Employee Name on Left, Weather Forecast on Right */}
+        <View style={styles.headerGreetingRow}>
+          <View style={styles.greetingLeftCol}>
             <Text style={styles.greeting}>{getGreeting()}</Text>
             <View style={{ flexDirection: 'row', alignItems: 'center', flexWrap: 'wrap' }}>
               <Text style={styles.name}>{displayName}</Text>
               <Image source={require('../../assets/wave.png')} style={{ width: 22, height: 22, marginLeft: 6, marginTop: 2 }} />
             </View>
           </View>
-          <View style={styles.actionNavGroup}>
-            <TouchableOpacity style={styles.notifBtn} onPress={() => setShowFacialModal(true)}>
-              <Ionicons name="scan-circle-outline" size={22} color="white" />
-            </TouchableOpacity>
-            <TouchableOpacity style={styles.notifBtn} onPress={() => navigation.navigate('SecurityStatus')}>
-              <Ionicons name="shield-checkmark-outline" size={22} color="white" />
-            </TouchableOpacity>
-            <TouchableOpacity style={styles.notifBtn} onPress={() => navigation.navigate('Notifications')}>
-              <Ionicons name="notifications-outline" size={22} color="white" />
-            </TouchableOpacity>
-          </View>
+
+          {weather && (
+            <View style={styles.modernWeatherBox}>
+              <View style={styles.weatherIconTempRow}>
+                <Ionicons name={weather.icon || 'partly-sunny-outline'} size={18} color="#FDE047" />
+                <Text style={styles.modernWeatherTemp}>{weather.temp}</Text>
+              </View>
+              {(() => {
+                const rawCond = (weather.condition || '')
+                  .replace(/overcast/gi, '')
+                  .replace(/^[•\s-]+|[•\s-]+$/g, '')
+                  .trim();
+                const subtitle = weather.location
+                  ? (rawCond ? `${rawCond} • ${weather.location}` : weather.location)
+                  : rawCond;
+                return subtitle ? (
+                  <Text style={styles.modernWeatherCondition} numberOfLines={1}>
+                    {subtitle}
+                  </Text>
+                ) : null;
+              })()}
+            </View>
+          )}
         </View>
 
         {/* Offline Sync Banner Indicator */}
@@ -1085,13 +1300,6 @@ export default function HomeScreen({ navigation, route, user: propUser }) {
                 <Ionicons name="camera-outline" size={22} color="#4F46E5" />
               )}
             </TouchableOpacity>
-
-            <TouchableOpacity
-              style={[styles.photoBtn, { backgroundColor: '#FEF2F2', borderColor: '#FCA5A5' }]}
-              onPress={() => setShowDelayModal(true)}
-            >
-              <Ionicons name="warning-outline" size={22} color="#EF4444" />
-            </TouchableOpacity>
           </View>
         </View>
 
@@ -1112,6 +1320,7 @@ export default function HomeScreen({ navigation, route, user: propUser }) {
             <Ionicons name="chevron-forward" size={16} color="#EF4444" />
           </View>
         </TouchableOpacity>
+
 
         {/* ── Assigned Worksites (Rendered as Separate Cards) ── */}
         {assignedSitesList && assignedSitesList.length > 0 ? (
@@ -1374,14 +1583,55 @@ const styles = StyleSheet.create({
   header: {
     backgroundColor: '#4F46E5',
     paddingHorizontal: 20,
-    paddingBottom: 20,
+    paddingBottom: 22,
     borderBottomLeftRadius: 24,
     borderBottomRightRadius: 24,
   },
-  headerContent: {
+  headerTopRow: {
     flexDirection: 'row',
     justifyContent: 'space-between',
     alignItems: 'center',
+    marginBottom: 10,
+  },
+  headerLogo: {
+    width: 108,
+    height: 36,
+  },
+  headerGreetingRow: {
+    flexDirection: 'row',
+    justifyContent: 'space-between',
+    alignItems: 'center',
+    marginTop: 4,
+  },
+  greetingLeftCol: {
+    flex: 1,
+    paddingRight: 10,
+  },
+  modernWeatherBox: {
+    alignItems: 'flex-end',
+    justifyContent: 'center',
+    backgroundColor: 'rgba(255, 255, 255, 0.12)',
+    paddingHorizontal: 12,
+    paddingVertical: 6,
+    borderRadius: 14,
+  },
+  weatherIconTempRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 5,
+  },
+  modernWeatherTemp: {
+    color: '#FFFFFF',
+    fontSize: 16,
+    fontWeight: '800',
+    letterSpacing: -0.2,
+  },
+  modernWeatherCondition: {
+    color: '#E0E7FF',
+    fontSize: 11,
+    fontWeight: '500',
+    marginTop: 1,
+    maxWidth: 130,
   },
   actionNavGroup: {
     flexDirection: 'row',
@@ -1405,6 +1655,31 @@ const styles = StyleSheet.create({
     backgroundColor: 'rgba(255, 255, 255, 0.15)',
     justifyContent: 'center',
     alignItems: 'center',
+    position: 'relative',
+  },
+  identifyIcon: {
+    width: 32,
+    height: 32,
+    tintColor: '#FFFFFF',
+  },
+  navBadge: {
+    position: 'absolute',
+    top: -3,
+    right: -3,
+    backgroundColor: '#EF4444',
+    borderRadius: 9,
+    minWidth: 18,
+    height: 18,
+    paddingHorizontal: 4,
+    justifyContent: 'center',
+    alignItems: 'center',
+    borderWidth: 1.5,
+    borderColor: '#4F46E5',
+  },
+  navBadgeText: {
+    color: '#FFFFFF',
+    fontSize: 9.5,
+    fontWeight: '800',
   },
   offlineBanner: {
     flexDirection: 'row',

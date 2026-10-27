@@ -87,6 +87,29 @@ TaskManager.defineTask(TASK, async ({ data, error }) => {
         siteId: ctx.site?.id ?? null,
       });
 
+      // Also record to LocationLogs, location_logs, and tracking_logs
+      const locLogItem = {
+        employee_id: ctx.employeeId,
+        employeeId: ctx.employeeId,
+        employeeName: ctx.employeeName,
+        site_id: ctx.site?.id ?? null,
+        siteId: ctx.site?.id ?? null,
+        siteName: ctx.site?.name ?? 'Assigned Worksite',
+        latitude: fix.latitude,
+        longitude: fix.longitude,
+        lat: fix.latitude,
+        lng: fix.longitude,
+        accuracy: fix.accuracy,
+        trigger: 'background_periodic',
+        action: 'Background Location Logged',
+        event: 'Periodic GPS Update',
+        trackingType: 'location_log',
+        recordedAt: new Date().toISOString(),
+      };
+      await safeAdd('LocationLogs', locLogItem);
+      await safeAdd('location_logs', locLogItem);
+      await safeAdd('tracking_logs', { ...locLogItem, empId: ctx.employeeId, empName: ctx.employeeName });
+
       // Impossible-travel speed flag → GPS_SPEED_ANOMALY
       const sp = validateSpeed(last, fix);
       if (!sp.ok) {
@@ -119,8 +142,11 @@ TaskManager.defineTask(TASK, async ({ data, error }) => {
         }
       }
 
-      // Unexpected site exit.
-      if (ctx.site && (ctx.site.lat != null || ctx.site.polygon)) {
+      // Unexpected site exit (Applicable ONLY to Fixed Site Employees; Mobile Field Employees move freely)
+      const empWorkType = (ctx.workType || ctx.employeeType || '').toString().toLowerCase();
+      const isFieldEmployee = empWorkType.includes('mobile') || empWorkType.includes('field');
+
+      if (!isFieldEmployee && ctx.site && (ctx.site.lat != null || ctx.site.polygon)) {
         const geo = evaluateGeofence(fix.latitude, fix.longitude, ctx.site);
         if (!geo.inside) {
           await safeAdd(C.GEOFENCE_EVENTS, {
@@ -177,6 +203,7 @@ export async function startMonitoring({ employee, site, deviceId }) {
         JSON.stringify({
           employeeId: employee?.id,
           employeeName: employee?.name,
+          workType: employee?.workType || employee?.employeeType || employee?.type || 'Fixed Site Employee',
           deviceId,
           site: site
             ? { id: site.id, name: site.name, lat: site.lat, lng: site.lng, radius: site.radius, polygon: site.polygon }

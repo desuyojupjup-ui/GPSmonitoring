@@ -2,7 +2,7 @@
   "expo": {
     "name": "SubAi",
     "slug": "subai",
-    "version": "1.0.8",
+    "version": "1.0.9",
     "orientation": "portrait",
     "icon": "./assets/icon.png",
     "userInterfaceStyle": "light",
@@ -17,7 +17,7 @@
     },
     "android": {
       "package": "com.subai.monitoring",
-      "versionCode": 10,
+      "versionCode": 11,
       "adaptiveIcon": {
         "backgroundColor": "#E6F4FE",
         "foregroundImage": "./assets/icon.png"

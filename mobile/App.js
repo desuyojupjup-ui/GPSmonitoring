@@ -15,6 +15,7 @@ import NotificationsScreen from './src/screens/NotificationsScreen';
 import ChatbotScreen from './src/screens/ChatbotScreen';
 import SecurityStatusScreen from './src/screens/SecurityStatusScreen';
 import AttendanceScreen from './src/screens/AttendanceScreen';
+import AnomalyAlertsScreen from './src/screens/AnomalyAlertsScreen';
 
 import FloatingChatButton from './src/components/FloatingChatButton';
 
@@ -23,6 +24,7 @@ const Tab = createBottomTabNavigator();
 
 function TabNavigator({ route }) {
   const user = route?.params?.user;
+  const onLogout = route?.params?.onLogout;
 
   return (
     <Tab.Navigator
@@ -61,7 +63,7 @@ function TabNavigator({ route }) {
       <Tab.Screen name="Home" component={HomeScreen} initialParams={{ user }} />
       <Tab.Screen name="Map" component={MapScreen} initialParams={{ user }} />
       <Tab.Screen name="Tasks" component={TasksScreen} initialParams={{ user }} />
-      <Tab.Screen name="Profile" component={ProfileScreen} initialParams={{ user }} />
+      <Tab.Screen name="Profile" component={ProfileScreen} initialParams={{ user, onLogout }} />
     </Tab.Navigator>
   );
 }
@@ -134,13 +136,13 @@ export default function App() {
   };
 
   const handleLogout = async () => {
+    setUser(null);
     try {
-      await presenceService.stopPresence(user);
+      presenceService.stopPresence(user).catch(() => {});
     } catch (e) {
       console.warn('Sign out warning:', e);
     }
     await performGlobalLogout();
-    setUser(null);
   };
 
   if (loading) {
@@ -168,11 +170,12 @@ export default function App() {
         <Stack.Navigator screenOptions={{ headerShown: false }}>
           {user ? (
             <>
-              <Stack.Screen name="Main" component={TabNavigator} initialParams={{ user }} />
+              <Stack.Screen name="Main" component={TabNavigator} initialParams={{ user, onLogout: handleLogout }} />
               <Stack.Screen name="Notifications" component={NotificationsScreen} initialParams={{ user }} />
               <Stack.Screen name="Chatbot" component={ChatbotScreen} initialParams={{ user }} />
               <Stack.Screen name="SecurityStatus" component={SecurityStatusScreen} initialParams={{ user }} />
               <Stack.Screen name="Attendance" component={AttendanceScreen} initialParams={{ user }} />
+              <Stack.Screen name="AnomalyAlerts" component={AnomalyAlertsScreen} initialParams={{ user }} />
             </>
           ) : (
             <Stack.Screen name="Login" component={LoginScreen} initialParams={{ onLogin: handleLogin }} />

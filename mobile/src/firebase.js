@@ -81,18 +81,24 @@ export const performGlobalLogout = async () => {
   try {
     currentAuthUser = null;
     await AsyncStorage.removeItem('@geostride_user_session');
-    authListeners.forEach(cb => {
-      try { cb(null); } catch (e) {}
-    });
-    if (auth && typeof auth.signOut === 'function') {
-      await auth.signOut().catch(() => {});
-    }
   } catch (e) {
     console.warn('[Firebase] performGlobalLogout warning:', e);
   }
+
+  // Immediately notify all logout listeners so UI navigates to Login screen instantaneously
   logoutListeners.forEach(cb => {
     try { cb(); } catch (err) {}
   });
+
+  authListeners.forEach(cb => {
+    try { cb(null); } catch (e) {}
+  });
+
+  try {
+    if (auth && typeof auth.signOut === 'function') {
+      await auth.signOut().catch(() => {});
+    }
+  } catch (e) {}
 };
 
 export const loadUserSession = async () => {

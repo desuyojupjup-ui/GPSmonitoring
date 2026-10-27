@@ -191,52 +191,103 @@ export default function TasksScreen({ navigation, route, user: propUser }) {
       // Final filter to strictly exclude any passed assignments and deduplicate records
       data = deduplicateAssignments(data.filter(item => !isAssignmentDatePassed(item)));
 
-      // Fallback: ONLY if employee has NO explicit assignment records in the database,
-      // use the employee's assignedSite configured on their profile by admin.
-      // If the employee had an assignment but its date passed, do NOT synthesize an active assignment!
-      const hasEmployeeAssignmentsInDb = asgDocs.some(a => isAssignmentForEmployee(a, emp, emailToUse, currentUserName));
+      // Explode assignments so every assigned site gets its own distinct card
+      const exploded = [];
+      const seenSiteKeys = new Set();
 
-      if (data.length === 0 && emp && !hasEmployeeAssignmentsInDb) {
-        const profileSite = (emp.assignedSite || emp.site || emp.assignedSiteName || '').trim();
-        if (profileSite && profileSite.toLowerCase() !== 'unassigned' && profileSite.toLowerCase() !== 'none') {
-          data = [{
-            id: `profile_site_${emp.id || 'emp'}`,
-            assignmentId: `profile_site_${emp.id || 'emp'}`,
-            site: profileSite,
-            siteName: profileSite,
-            siteId: emp.assignedSiteId || emp.siteId || 'site-active',
-            siteAddress: emp.assignedSiteAddress || emp.address || '',
-            shift: emp.shift || '08:00 AM - 05:00 PM',
-            status: 'Active',
-            geofenceRadius: emp.geofenceRadius || 200,
-            employeeName: emp.name || currentUserName || 'Employee',
-            employeeEmail: emp.email || emailToUse || '',
-            employeeId: emp.id || emp.idNum || '',
-            assignDate: new Date().toISOString().split('T')[0],
-            isVirtualFromProfile: true
-          }];
+      const addCard = (rawSiteName, asgDoc, isVirtual = false) => {
+        if (!rawSiteName || typeof rawSiteName !== 'string') return;
+        const clean = rawSiteName.trim();
+        if (!clean || clean.toLowerCase() === 'unassigned' || clean.toLowerCase() === 'none') return;
+
+        const docId = asgDoc?.id || (isVirtual ? `virtual_${clean.toLowerCase().replace(/\s+/g, '_')}` : 'asg');
+        const key = `${docId}_${clean.toLowerCase().replace(/\s+/g, '_')}`;
+        if (seenSiteKeys.has(key)) return;
+        seenSiteKeys.add(key);
+
+        const composedShift = resolveShift(asgDoc, emp) || emp?.shift || '08:00 AM - 05:00 PM';
+        const asgDate = asgDoc?.assignDate || asgDoc?.assignedAt || new Date().toISOString().split('T')[0];
+        const priority = asgDoc?.priority || 'Medium';
+        const status = asgDoc?.status || 'Active';
+
+        exploded.push({
+          ...(asgDoc || {}),
+          id: key,
+          originalId: asgDoc?.id || key,
+          site: clean,
+          siteName: clean,
+          shift: composedShift,
+          status: status,
+          priority: priority,
+          assignDate: asgDate,
+          employeeName: asgDoc?.employeeName || emp?.name || currentUserName || 'Employee',
+          employeeEmail: asgDoc?.employeeEmail || emp?.email || emailToUse || '',
+          employeeId: asgDoc?.employeeId || emp?.id || emp?.idNum || '',
+          isVirtualFromProfile: isVirtual
+        });
+      };
+
+      for (const asg of data) {
+        if (Array.isArray(asg.assignedSites) && asg.assignedSites.length > 0) {
+          asg.assignedSites.forEach(s => addCard(s, asg));
+        } else if (asg.site && asg.site.includes(',')) {
+          asg.site.split(',').forEach(s => addCard(s, asg));
+        } else if (asg.site || asg.siteName) {
+          addCard(asg.site || asg.siteName, asg);
         }
       }
 
-      const asgKey = JSON.stringify(data.map(d => ({ id: d.id, site: d.site, shift: d.shift, status: d.status })));
+      // Fallback: ONLY if employee has NO explicit assignment records in the database,
+      // use the employee's assignedSites or assignedSite configured on their profile by admin.
+      const hasEmployeeAssignmentsInDb = asgDocs.some(a => isAssignmentForEmployee(a, emp, emailToUse, currentUserName));
+
+      if (exploded.length === 0 && emp && !hasEmployeeAssignmentsInDb) {
+        if (Array.isArray(emp.assignedSites) && emp.assignedSites.length > 0) {
+          emp.assignedSites.forEach(s => addCard(s, null, true));
+        } else if (emp.assignedSite && emp.assignedSite.includes(',')) {
+          emp.assignedSite.split(',').forEach(s => addCard(s, null, true));
+        } else {
+          const profileSite = (emp.assignedSite || emp.site || emp.assignedSiteName || '').trim();
+          if (profileSite && profileSite.toLowerCase() !== 'unassigned' && profileSite.toLowerCase() !== 'none') {
+            addCard(profileSite, null, true);
+          }
+        }
+      }
+
+      const asgKey = JSON.stringify(exploded.map(d => ({ id: d.id, site: d.site, shift: d.shift, status: d.status })));
       if (asgKey !== lastAsgKeyRef.current) {
         lastAsgKeyRef.current = asgKey;
 
         const siteMap = { ...sites };
         const allSitesSnap = await getDocs(collection(db, 'Sites')).catch(() => ({ empty: true, docs: [] }));
-        const allSitesDocs = allSitesSnap.empty ? [] : allSitesSnap.docs.map(d => ({ id: d.id, ...d.data() }));
+        let allSitesDocs = allSitesSnap.empty ? [] : allSitesSnap.docs.map(d => ({ id: d.id, ...d.data() }));
 
-        for (const a of data) {
+        if (allSitesDocs.length === 0) {
+          const lowerSnap = await getDocs(collection(db, 'sites')).catch(() => ({ empty: true, docs: [] }));
+          if (!lowerSnap.empty) {
+            allSitesDocs = lowerSnap.docs.map(d => ({ id: d.id, ...d.data() }));
+          }
+        }
+
+        for (const a of exploded) {
           const sName = a.site || a.siteName || a.location;
-          if (sName && !siteMap[sName]) {
-            const targetSite = allSitesDocs.find(s => s.name && s.name.trim().toLowerCase() === sName.trim().toLowerCase());
+          if (sName) {
+            const cleanSName = sName.trim().toLowerCase();
+            const targetSite = allSitesDocs.find(s => {
+              const sn = (s.name || s.siteName || s.id || '').trim().toLowerCase();
+              return sn === cleanSName || sn.includes(cleanSName) || cleanSName.includes(sn);
+            });
             if (targetSite) {
               siteMap[sName] = targetSite;
+              if (!a.siteAddress) a.siteAddress = targetSite.address || targetSite.location || '';
+              if (!a.latitude && targetSite.latitude) a.latitude = targetSite.latitude;
+              if (!a.longitude && targetSite.longitude) a.longitude = targetSite.longitude;
+              if (!a.geofenceRadius && targetSite.radius) a.geofenceRadius = targetSite.radius;
             }
           }
         }
         setSites(siteMap);
-        setAssignments(data);
+        setAssignments(exploded);
       }
       setLoading(false);
     };
@@ -280,16 +331,27 @@ export default function TasksScreen({ navigation, route, user: propUser }) {
             <Text style={styles.emptySub}>You currently have no scheduled site assignments.</Text>
           </View>
         ) : (
-          assignments.map((item) => {
-            const sName = item.site || item.siteName || item.location;
-            const siteObj = sites[sName];
+          assignments.map((item, index) => {
+            const sName = (typeof item.site === 'string' ? item.site : (typeof item.siteName === 'string' ? item.siteName : (typeof item.location === 'string' ? item.location : 'Assigned Site'))).trim();
+            const siteObj = sites[sName] || sites[item.site] || sites[item.siteName];
+            const addressText = (typeof siteObj?.address === 'string' && siteObj.address) 
+              || (typeof item.siteAddress === 'string' && item.siteAddress) 
+              || (typeof item.address === 'string' && item.address) 
+              || 'GPS Live Monitoring Active';
 
             return (
-              <View key={item.id} style={styles.assignmentCard}>
+              <View key={item.id || `asg_${index}`} style={styles.assignmentCard}>
                 <View style={styles.cardHeader}>
-                  <View style={{ flex: 1 }}>
-                    <Text style={styles.siteTitle}>{sName || 'Assigned Site'}</Text>
-                    <Text style={styles.siteSub}>{siteObj?.address || item.siteAddress || item.address || 'GPS Live Monitoring Active'}</Text>
+                  <View style={{ flex: 1, paddingRight: 8 }}>
+                    <View style={styles.siteTitleRow}>
+                      <Text style={styles.siteTitle} numberOfLines={1}>{sName}</Text>
+                      {assignments.length > 1 && (
+                        <View style={styles.siteIndexBadge}>
+                          <Text style={styles.siteIndexBadgeText}>Site {index + 1} of {assignments.length}</Text>
+                        </View>
+                      )}
+                    </View>
+                    <Text style={styles.siteSub} numberOfLines={2}>{addressText}</Text>
                   </View>
                   {getStatusBadge(item.status)}
                 </View>
@@ -299,12 +361,12 @@ export default function TasksScreen({ navigation, route, user: propUser }) {
                 <View style={styles.infoGrid}>
                   <View style={styles.infoRow}>
                     <Ionicons name="business-outline" size={16} color="#4F46E5" />
-                    <Text style={styles.infoText}>Site Name: <Text style={styles.boldText}>{sName || 'Assigned Site'}</Text></Text>
+                    <Text style={styles.infoText}>Site Name: <Text style={styles.boldText}>{sName}</Text></Text>
                   </View>
 
                   <View style={styles.infoRow}>
                     <Ionicons name="location-outline" size={16} color="#4F46E5" />
-                    <Text style={styles.infoText}>Address: <Text style={styles.boldText}>{siteObj?.address || item.siteAddress || item.address || 'GPS Live Monitoring Active'}</Text></Text>
+                    <Text style={styles.infoText} numberOfLines={2}>Address: <Text style={styles.boldText}>{addressText}</Text></Text>
                   </View>
 
                   <View style={styles.infoRow}>
@@ -327,7 +389,7 @@ export default function TasksScreen({ navigation, route, user: propUser }) {
 
                 <TouchableOpacity 
                   style={styles.detailBtn}
-                  onPress={() => navigation.navigate('Map', { assignment: item })}
+                  onPress={() => navigation.navigate('Map', { assignment: item, site: siteObj })}
                 >
                   <Text style={styles.detailBtnText}>View Site Map & Geofence</Text>
                   <Ionicons name="chevron-forward" size={16} color="#4F46E5" />
@@ -384,10 +446,30 @@ const styles = StyleSheet.create({
     justifyContent: 'space-between',
     alignItems: 'flex-start',
   },
+  siteTitleRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 8,
+    flexWrap: 'wrap',
+    marginBottom: 2,
+  },
   siteTitle: {
     fontSize: 16,
     fontWeight: '700',
     color: '#111827',
+  },
+  siteIndexBadge: {
+    backgroundColor: '#EEF2FF',
+    paddingHorizontal: 8,
+    paddingVertical: 2,
+    borderRadius: 8,
+    borderWidth: 1,
+    borderColor: '#C7D2FE',
+  },
+  siteIndexBadgeText: {
+    fontSize: 10,
+    fontWeight: '700',
+    color: '#4F46E5',
   },
   siteSub: {
     fontSize: 12,

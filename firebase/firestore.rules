@@ -51,6 +51,10 @@ service cloud.firestore {
       allow read, create: if isAuthenticated();
       allow update, delete: if isAdmin();
     }
+    match /location_logs/{logId} {
+      allow read, create: if isAuthenticated();
+      allow update, delete: if isAdmin();
+    }
     
     match /Attendance/{attendanceId} {
       allow read, create, update: if isAuthenticated();
@@ -106,15 +110,20 @@ service cloud.firestore {
     
     // Notifications and history logging
     match /ActivityLogs/{logId} {
-      allow read, create: if isAuthenticated();
-      allow update, delete: if isAdmin();
+      allow read, create, update: if isAuthenticated();
+      allow delete: if isAdmin();
     }
 
-    // AI risk assessments — written by the Cloud Function (admin SDK bypasses
-    // these rules); clients may only read their own / all (admin).
+    // AI risk assessments & anomaly alerts
     match /ai_analysis/{docId} {
-      allow read: if isAuthenticated();
-      allow write: if isAdmin();
+      allow read, create, update: if isAuthenticated();
+      allow delete: if isAdmin();
+    }
+
+    // Employee anomaly responses & explanations
+    match /anomaly_responses/{docId} {
+      allow read, create, update: if isAuthenticated();
+      allow delete: if isAdmin();
     }
 
     // Device binding. An employee can register/append a record for their own

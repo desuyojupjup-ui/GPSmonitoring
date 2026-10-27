@@ -158,20 +158,29 @@ export async function runPreAttendanceChecks({ employee, site, action = 'time_in
     return fail('accuracy', acc.reason);
   }
 
-  // 5. Geofence
-  const geo = verifyGeofence(latest.latitude, latest.longitude, site);
-  report.geofenceOk = geo.ok;
-  report.distanceToBoundary = geo.distanceToBoundary;
-  if (!geo.ok) {
-    writeSecurityEvent({
-      eventType: 'UNAUTHORIZED_LOCATION',
-      employee: { id: employee?.id, name: employee?.name, email: employee?.email },
-      assignment: { siteId: site?.id, siteName: site?.name },
-      coords: { latitude: latest?.latitude, longitude: latest?.longitude, accuracy: latest?.accuracy },
-      deviceInfo: { deviceId, ipAddress: ip },
-      extra: { distance: geo.distanceToBoundary },
-    });
-    return fail('geofence', geo.reason, () => writeGeofenceEvent(report, 'violation'));
+  // 5. Geofence (Enforced ONLY for Fixed Site Employees; Mobile Field Employees travel across sites)
+  const empWorkType = (employee?.workType || employee?.employeeType || employee?.type || '').toString().toLowerCase();
+  const isFieldEmployee = empWorkType.includes('mobile') || empWorkType.includes('field');
+
+  if (!isFieldEmployee) {
+    const geo = verifyGeofence(latest.latitude, latest.longitude, site);
+    report.geofenceOk = geo.ok;
+    report.distanceToBoundary = geo.distanceToBoundary;
+    if (!geo.ok) {
+      writeSecurityEvent({
+        eventType: 'UNAUTHORIZED_LOCATION',
+        employee: { id: employee?.id, name: employee?.name, email: employee?.email, workType: employee?.workType || 'Fixed Site Employee' },
+        assignment: { siteId: site?.id, siteName: site?.name },
+        coords: { latitude: latest?.latitude, longitude: latest?.longitude, accuracy: latest?.accuracy },
+        deviceInfo: { deviceId, ipAddress: ip },
+        extra: { distance: geo.distanceToBoundary },
+      });
+      return fail('geofence', geo.reason, () => writeGeofenceEvent(report, 'violation'));
+    }
+  } else {
+    // For Field Employees, being outside a fixed static geofence is standard field work
+    report.geofenceOk = true;
+    report.distanceToBoundary = 0;
   }
 
   // 6. Consistency + speed

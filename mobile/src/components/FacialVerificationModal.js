@@ -29,6 +29,7 @@ import { queueOfflineRecord } from '../services/offlineSyncService';
 import { markPromptAnswered } from '../services/verificationScheduler';
 import { writeSecurityEvent } from '../services/securityLogger';
 import { SECURITY } from '../services/securityConfig';
+import locationLogService from '../services/locationLogService';
 
 // ─────────────────────────────────────────────────────────────────────────────
 // FacialVerificationModal
@@ -252,6 +253,19 @@ export default function FacialVerificationModal({
           timestamp: serverTimestamp(),
         }).catch(() => {});
 
+        // 4. Save location log entry for the selfie verification
+        if (coords.latitude && coords.longitude) {
+          await locationLogService.saveLocationLogEntry({
+            employee: emp,
+            site: { id: recordData.siteId, name: emp.assignedSite || emp.site },
+            attendanceId,
+            latitude: coords.latitude,
+            longitude: coords.longitude,
+            accuracy: coords.accuracy,
+            trigger: triggerType === 'scheduled_random' ? 'periodic_selfie_verification' : 'check_in_selfie',
+          }).catch(() => {});
+        }
+
         // 4. Admin notification on failure
         if (verResult === 'failed') {
           await addDoc(collection(db, 'notifications'), {
@@ -379,10 +393,12 @@ export default function FacialVerificationModal({
                 <Ionicons name="scan-circle" size={22} color="#4F46E5" />
               </View>
               <View>
-                <Text style={styles.headerTitle}>Identity Verification</Text>
+                <Text style={styles.headerTitle}>
+                  {triggerType === 'scheduled_random' ? 'Random Selfie Verification' : 'Identity Verification'}
+                </Text>
                 <Text style={styles.headerSub}>
-                  {triggerType === 'check_in' ? 'Check-in Verification' :
-                   triggerType === 'scheduled_random' ? 'Scheduled Security Check' :
+                  {triggerType === 'check_in' ? 'Check-in Selfie Verification' :
+                   triggerType === 'scheduled_random' ? 'Scheduled 30-Minute Random Check' :
                    'Manual Verification'}
                 </Text>
               </View>
@@ -403,9 +419,15 @@ export default function FacialVerificationModal({
                 </View>
               </View>
 
-              <Text style={styles.promptTitle}>Identity Verification Required</Text>
+              <Text style={styles.promptTitle}>
+                {triggerType === 'scheduled_random' 
+                  ? 'Random Selfie Verification' 
+                  : (triggerType === 'check_in' ? 'Check-In Verification Required' : 'Identity Verification Required')}
+              </Text>
               <Text style={styles.promptBody}>
-                Please verify your identity to continue your work session. Align your face within the guide in a well-lit environment.
+                {triggerType === 'scheduled_random'
+                  ? 'It is time for your scheduled 30-minute random selfie verification. Please take a quick selfie to confirm your active presence at your assigned worksite.'
+                  : 'Please verify your identity to continue your work session. Align your face within the guide in a well-lit environment.'}
               </Text>
 
               <View style={styles.hintRow}>
@@ -425,7 +447,9 @@ export default function FacialVerificationModal({
 
               <TouchableOpacity style={styles.primaryBtn} onPress={() => setStage('camera')}>
                 <Ionicons name="camera" size={18} color="white" />
-                <Text style={styles.btnText}>Verify Now</Text>
+                <Text style={styles.btnText}>
+                  {triggerType === 'scheduled_random' ? 'Take Selfie Now' : 'Verify Now'}
+                </Text>
               </TouchableOpacity>
 
               {triggerType === 'scheduled_random' && (
@@ -438,7 +462,7 @@ export default function FacialVerificationModal({
 
           {/* ── STAGE: Camera ── */}
           {stage === 'camera' && (
-            <View>
+            <ScrollView showsVerticalScrollIndicator={false} contentContainerStyle={{ paddingBottom: 16 }}>
               <Text style={styles.subtitle}>
                 Align your face within the oval guide below, then tap Capture Selfie.
               </Text>
@@ -476,7 +500,7 @@ export default function FacialVerificationModal({
                   <Text style={styles.laterText}>Later</Text>
                 </TouchableOpacity>
               )}
-            </View>
+            </ScrollView>
           )}
 
           {/* ── STAGE: Processing ── */}

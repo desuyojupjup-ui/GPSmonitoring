@@ -211,7 +211,7 @@ class PresenceService {
     } catch (e) {}
 
     const empId = await this.resolveEmployeeId(this.currentUser);
-    const loc = await this.getQuickLocation();
+    const loc = isOnline ? await this.getQuickLocation() : this.lastFix;
 
     const now = Date.now();
     const isoString = new Date().toISOString();
@@ -349,14 +349,14 @@ class PresenceService {
     }
 
     if (this.appStateSubscription) {
-      this.appStateSubscription.remove();
+      try { this.appStateSubscription.remove(); } catch (e) {}
       this.appStateSubscription = null;
     }
 
     if (user) this.currentUser = user;
 
-    // Immediately notify that employee is offline
-    await this.sendHeartbeat(false, 'Offline');
+    // Send offline heartbeat in background without blocking logout
+    this.sendHeartbeat(false, 'Offline').catch(() => {});
 
     this.currentUser = null;
     this.currentEmployeeId = null;

@@ -12,6 +12,8 @@ import {
 } from '../firebase';
 import { isMobileFieldWithoutSite } from '../utils/assignmentUtils';
 import presenceService from '../services/presenceService';
+import locationLogService from '../services/locationLogService';
+import { startSession as schedulerStart, stopSession as schedulerStop } from '../services/verificationScheduler';
 
 // ─── Helpers ─────────────────────────────────────────────────────────────────
 
@@ -301,8 +303,33 @@ export default function AttendanceScreen({ navigation, route, user: propUser }) 
         verification: 'GPS',
         createdAt: Date.now(),
       };
-      await addDoc(collection(db, 'Attendance'), attData);
-      await addDoc(collection(db, 'attendance'), attData).catch(() => { });
+      const attRef = await addDoc(collection(db, 'Attendance'), attData);
+      const attId = attRef?.id;
+      await addDoc(collection(db, 'attendance'), { ...attData, id: attId }).catch(() => { });
+
+      // 1. Immediately capture and save current location in the Location Log
+      await locationLogService.captureAndSaveCurrentLocation({
+        employee: emp,
+        site: { name: attData.siteName },
+        attendanceId: attId,
+        trigger: 'check_in',
+        coords: { latitude: loc.coords.latitude, longitude: loc.coords.longitude },
+      });
+
+      // 2. Start periodic 5-minute location recording while checked in
+      locationLogService.startPeriodicLogging({
+        employee: emp,
+        site: { name: attData.siteName },
+        attendanceId: attId,
+      });
+
+      // 3. Start 30-minute random selfie verification scheduler
+      await schedulerStart({
+        employee: emp,
+        assignment: null,
+        attendanceId: attId,
+      });
+
       if (emp.id !== 'emp_fallback') {
         await updateDoc(doc(db, 'employees', emp.id), {
           status: 'On Duty',
@@ -345,6 +372,13 @@ export default function AttendanceScreen({ navigation, route, user: propUser }) 
         presenceService.setCurrentStatus('Online');
         presenceService.sendHeartbeat(true, 'Online');
       }
+
+      // Stop periodic location logging upon check-out
+      await locationLogService.stopPeriodicLogging();
+
+      // Stop 30-minute random selfie verification scheduler
+      await schedulerStop();
+
       Alert.alert('✅ Checked Out', 'Have a great day!');
     } catch (e) {
       Alert.alert('Error', e.message || 'Failed to check out.');

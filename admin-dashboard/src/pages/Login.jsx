@@ -7,6 +7,7 @@ import {
 import Swal from 'sweetalert2';
 import bgImage from '../assets/background.png';
 import logoImage from '../assets/logo.png';
+import loginCardImage from '../assets/login-card-backup.png';
 import { showToast } from '../utils/toast';
 import { 
   auth, 
@@ -230,7 +231,7 @@ export default function Login({ onLogin, currentUser, onLogout }) {
             Command <span style={{ color: '#38BDF8', background: 'linear-gradient(90deg, #38BDF8, #818CF8)', WebkitBackgroundClip: 'text', WebkitTextFillColor: 'transparent' }}>Center.</span>
           </h1>
           <p style={{ fontSize: 16, color: '#94A3B8', lineHeight: 1.6, maxWidth: 440, marginBottom: 36 }}>
-            Real-time GPS telemetry, biometric attendance verification, and AI anomaly tracking for enterprise field operations.
+            Real-time GPS tracking, geofenced attendance monitoring, and AI anomaly detection for enterprise field operations.
           </p>
 
           {/* Feature Badges */}
@@ -275,15 +276,29 @@ export default function Login({ onLogin, currentUser, onLogout }) {
 
         {/* Right Side: Admin Login Card */}
         <div className="subai-login-card" style={{ 
-          width: 440, 
-          background: 'white', 
-          borderRadius: 24, 
-          padding: '40px 34px', 
+          width: 470, 
+          aspectRatio: '850 / 1243',
+          padding: '47px 63px 110px 60px', 
           display: 'flex', 
           flexDirection: 'column', 
-          boxShadow: '0 25px 60px -15px rgba(0, 0, 0, 0.6), 0 0 0 1px rgba(255, 255, 255, 0.1)',
-          position: 'relative'
+          justifyContent: 'center',
+          boxSizing: 'border-box',
+          position: 'relative',
+          isolation: 'isolate'
         }}>
+          {/* Card artwork (login card image). The PNG has transparent margins, so the
+              size/position below map just the visible card area onto this box. */}
+          <div aria-hidden="true" style={{
+            position: 'absolute',
+            inset: 0,
+            zIndex: -1,
+            pointerEvents: 'none',
+            backgroundImage: `url(${loginCardImage})`,
+            backgroundRepeat: 'no-repeat',
+            backgroundSize: '127.76% 116.49%',
+            backgroundPosition: '54.66% 61.46%',
+            filter: 'drop-shadow(0 28px 36px rgba(0, 0, 0, 0.45))'
+          }} />
           
           {/* Card Header */}
           <div style={{ textAlign: 'center', marginBottom: 24 }}>
@@ -386,7 +401,7 @@ export default function Login({ onLogin, currentUser, onLogout }) {
             {/* Email Field */}
             <div>
               <label style={{ display: 'block', fontSize: 12, fontWeight: 600, color: '#334155', marginBottom: 6 }}>
-                Administrator Email Address
+                Email Address
               </label>
               <div style={{ position: 'relative' }}>
                 <div style={{ position: 'absolute', left: 12, top: '50%', transform: 'translateY(-50%)', color: '#94A3B8' }}>
@@ -550,8 +565,8 @@ export default function Login({ onLogin, currentUser, onLogout }) {
           }
           .subai-login-card {
             width: 100% !important;
-            max-width: 440px !important;
-            padding: 28px 20px !important;
+            max-width: 470px !important;
+            padding: 10% 13.4% 23.4% 12.7% !important;
           }
         }
       `}</style>
