@@ -1,7 +1,35 @@
 import { auth } from '../firebase';
 
+function parseTimeToHoursMinutes(timeStr) {
+  if (!timeStr || typeof timeStr !== 'string') return null;
+  const str = timeStr.trim();
+  if (!str) return null;
+
+  const ampmMatch = str.match(/^(\d{1,2}):(\d{2})(?::(\d{2}))?\s*([AP]M)$/i);
+  if (ampmMatch) {
+    let h = parseInt(ampmMatch[1], 10);
+    const m = parseInt(ampmMatch[2], 10);
+    const s = ampmMatch[3] ? parseInt(ampmMatch[3], 10) : 0;
+    const ampm = ampmMatch[4].toUpperCase();
+    if (ampm === 'PM' && h < 12) h += 12;
+    if (ampm === 'AM' && h === 12) h = 0;
+    return { hours: h, minutes: m, seconds: s };
+  }
+
+  const h24Match = str.match(/^(\d{1,2}):(\d{2})(?::(\d{2}))?$/);
+  if (h24Match) {
+    const h = parseInt(h24Match[1], 10);
+    const m = parseInt(h24Match[2], 10);
+    const s = h24Match[3] ? parseInt(h24Match[3], 10) : 0;
+    return { hours: h, minutes: m, seconds: s };
+  }
+
+  return null;
+}
+
 /**
  * Returns true if the assignment is expired/done and should NOT be shown to the employee.
+ * Checks both the scheduled assignment date and shift end time (e.g. 05:00 PM).
  */
 export function isAssignmentDatePassed(asg) {
   if (!asg) return true;
@@ -12,43 +40,71 @@ export function isAssignmentDatePassed(asg) {
     return true;
   }
 
-  // Check scheduled assignment date: if date is strictly in the past (before today), it has expired!
+  // Check scheduled assignment date and shift end time
   const rawDate = asg.assignDate || asg.scheduleDate || asg.date || asg.assignmentDate || asg.scheduledDate || asg.endDate;
-  if (rawDate) {
-    let dateObj = null;
+  if (!rawDate) return false;
 
-    if (rawDate?.toDate && typeof rawDate.toDate === 'function') {
-      try { dateObj = rawDate.toDate(); } catch (_) {}
-    } else if (typeof rawDate?.seconds === 'number') {
-      dateObj = new Date(rawDate.seconds * 1000);
-    } else if (typeof rawDate === 'number') {
-      dateObj = new Date(rawDate);
-    } else if (typeof rawDate === 'string') {
-      const trimmed = rawDate.trim();
-      const ymdMatch = trimmed.match(/^(\d{4})-(\d{2})-(\d{2})/);
-      if (ymdMatch) {
-        const year = parseInt(ymdMatch[1], 10);
-        const month = parseInt(ymdMatch[2], 10) - 1;
-        const day = parseInt(ymdMatch[3], 10);
-        dateObj = new Date(year, month, day, 23, 59, 59, 999);
-      } else {
-        const parsed = new Date(trimmed);
-        if (!isNaN(parsed.getTime())) {
-          dateObj = new Date(parsed.getFullYear(), parsed.getMonth(), parsed.getDate(), 23, 59, 59, 999);
-        }
-      }
-    }
-
-    if (dateObj && !isNaN(dateObj.getTime())) {
-      const now = new Date();
-      // If the scheduled date (end of that calendar day) has already elapsed, it has expired!
-      if (dateObj.getTime() < now.getTime()) {
-        return true;
+  let y, m, d;
+  if (rawDate?.toDate && typeof rawDate.toDate === 'function') {
+    try { const dt = rawDate.toDate(); y = dt.getFullYear(); m = dt.getMonth(); d = dt.getDate(); } catch (_) {}
+  } else if (typeof rawDate?.seconds === 'number') {
+    const dt = new Date(rawDate.seconds * 1000); y = dt.getFullYear(); m = dt.getMonth(); d = dt.getDate();
+  } else if (typeof rawDate === 'number') {
+    const dt = new Date(rawDate); y = dt.getFullYear(); m = dt.getMonth(); d = dt.getDate();
+  } else if (typeof rawDate === 'string') {
+    const trimmed = rawDate.trim();
+    const ymdMatch = trimmed.match(/^(\d{4})-(\d{2})-(\d{2})/);
+    if (ymdMatch) {
+      y = parseInt(ymdMatch[1], 10);
+      m = parseInt(ymdMatch[2], 10) - 1;
+      d = parseInt(ymdMatch[3], 10);
+    } else {
+      const parsed = new Date(trimmed);
+      if (!isNaN(parsed.getTime())) {
+        y = parsed.getFullYear();
+        m = parsed.getMonth();
+        d = parsed.getDate();
       }
     }
   }
 
-  return false;
+  if (y === undefined || m === undefined || d === undefined) return false;
+
+  // Resolve shift times
+  let startStr = asg.shiftStart || asg.startTime || '';
+  let endStr = asg.shiftEnd || asg.endTime || '';
+
+  if ((!startStr || !endStr) && (asg.shift || asg.shiftTime)) {
+    const shiftStr = asg.shift || asg.shiftTime || '';
+    const parts = shiftStr.split(/\s*[-~]|(?:\s+to\s+)\s*/i).filter(Boolean);
+    if (parts.length >= 2) {
+      if (!startStr) startStr = parts[0].trim();
+      if (!endStr) endStr = parts[1].trim();
+    } else if (parts.length === 1 && !endStr) {
+      endStr = parts[0].trim();
+    }
+  }
+
+  const startParsed = parseTimeToHoursMinutes(startStr);
+  const endParsed = parseTimeToHoursMinutes(endStr);
+
+  let endHour = 23;
+  let endMin = 59;
+  let endSec = 59;
+  let isNextDay = false;
+
+  if (endParsed) {
+    endHour = endParsed.hours;
+    endMin = endParsed.minutes;
+    endSec = endParsed.seconds || 0;
+
+    if (startParsed && endParsed.hours < startParsed.hours) {
+      isNextDay = true;
+    }
+  }
+
+  const endDateTime = new Date(y, m, isNextDay ? d + 1 : d, endHour, endMin, endSec, 999);
+  return Date.now() >= endDateTime.getTime();
 }
 
 /**

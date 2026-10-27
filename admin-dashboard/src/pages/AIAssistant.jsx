@@ -1,6 +1,7 @@
 import React, { useState, useRef, useEffect } from 'react';
 import { Bot, Send, User, BarChart2, Users, MapPin, Clock, AlertCircle } from 'lucide-react';
 import { db, collection, onSnapshot, query } from '../firebase';
+import { resolveAssignmentStatus } from './Assignments';
 
 function isEmployeeOnline(emp) {
   if (!emp) return false;
@@ -157,7 +158,7 @@ export default function AIAssistant() {
       // 4. Assignments
       if (text.includes('assignment') || text.includes('task') || text.includes('schedule')) {
         if (assignments.length === 0) return '📋 No assignments recorded in the database.';
-        const active = assignments.filter(a => a.status === 'Active');
+        const active = assignments.filter(a => resolveAssignmentStatus(a) === 'Active');
         if (active.length === 0) return '📋 No active assignments right now.';
         return (
           `📋 **${active.length} active assignment(s):**\n\n` +

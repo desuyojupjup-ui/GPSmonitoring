@@ -109,6 +109,172 @@ const PRIORITY_COLOR = {
   'Low': '#10B981'
 };
 
+export function parseTimeToHoursMinutes(timeStr) {
+  if (!timeStr || typeof timeStr !== 'string') return null;
+  const str = timeStr.trim();
+  if (!str) return null;
+
+  const ampmMatch = str.match(/^(\d{1,2}):(\d{2})(?::(\d{2}))?\s*([AP]M)$/i);
+  if (ampmMatch) {
+    let h = parseInt(ampmMatch[1], 10);
+    const m = parseInt(ampmMatch[2], 10);
+    const s = ampmMatch[3] ? parseInt(ampmMatch[3], 10) : 0;
+    const ampm = ampmMatch[4].toUpperCase();
+    if (ampm === 'PM' && h < 12) h += 12;
+    if (ampm === 'AM' && h === 12) h = 0;
+    return { hours: h, minutes: m, seconds: s };
+  }
+
+  const h24Match = str.match(/^(\d{1,2}):(\d{2})(?::(\d{2}))?$/);
+  if (h24Match) {
+    const h = parseInt(h24Match[1], 10);
+    const m = parseInt(h24Match[2], 10);
+    const s = h24Match[3] ? parseInt(h24Match[3], 10) : 0;
+    return { hours: h, minutes: m, seconds: s };
+  }
+
+  return null;
+}
+
+export function getAssignmentShiftTimes(asg) {
+  let startStr = asg?.shiftStart || asg?.startTime || '';
+  let endStr = asg?.shiftEnd || asg?.endTime || '';
+
+  if ((!startStr || !endStr) && (asg?.shift || asg?.shiftTime)) {
+    const combined = asg.shift || asg.shiftTime || '';
+    const parts = combined.split(/\s*[-~]|(?:\s+to\s+)\s*/i).filter(Boolean);
+    if (parts.length >= 2) {
+      if (!startStr) startStr = parts[0].trim();
+      if (!endStr) endStr = parts[1].trim();
+    } else if (parts.length === 1 && !endStr) {
+      endStr = parts[0].trim();
+    }
+  }
+
+  const startParsed = parseTimeToHoursMinutes(startStr);
+  const endParsed = parseTimeToHoursMinutes(endStr);
+
+  return {
+    start: startParsed,
+    end: endParsed,
+  };
+}
+
+export function getAssignmentScheduledDate(asg) {
+  if (!asg) return null;
+  const rawDate = asg.assignDate || asg.scheduleDate || asg.date || asg.assignmentDate || asg.scheduledDate || asg.endDate;
+  if (!rawDate) return null;
+
+  let y, m, d;
+  if (typeof rawDate === 'string') {
+    const trimmed = rawDate.trim();
+    const ymdMatch = trimmed.match(/^(\d{4})-(\d{2})-(\d{2})/);
+    if (ymdMatch) {
+      y = parseInt(ymdMatch[1], 10);
+      m = parseInt(ymdMatch[2], 10) - 1;
+      d = parseInt(ymdMatch[3], 10);
+    } else {
+      const parsed = new Date(trimmed);
+      if (!isNaN(parsed.getTime())) {
+        y = parsed.getFullYear();
+        m = parsed.getMonth();
+        d = parsed.getDate();
+      }
+    }
+  } else if (rawDate?.toDate && typeof rawDate.toDate === 'function') {
+    const dt = rawDate.toDate();
+    y = dt.getFullYear();
+    m = dt.getMonth();
+    d = dt.getDate();
+  } else if (typeof rawDate?.seconds === 'number') {
+    const dt = new Date(rawDate.seconds * 1000);
+    y = dt.getFullYear();
+    m = dt.getMonth();
+    d = dt.getDate();
+  } else if (typeof rawDate === 'number') {
+    const dt = new Date(rawDate);
+    y = dt.getFullYear();
+    m = dt.getMonth();
+    d = dt.getDate();
+  }
+
+  if (y === undefined || m === undefined || d === undefined) return null;
+  return { year: y, month: m, day: d };
+}
+
+export function isAssignmentEnded(asg, now = new Date()) {
+  if (!asg) return false;
+  const status = (asg.status || '').toString().trim().toLowerCase();
+  if (status === 'completed' || status === 'cancelled' || status === 'archived' || status === 'expired') {
+    return true;
+  }
+
+  const dateParts = getAssignmentScheduledDate(asg);
+  if (!dateParts) return false;
+
+  const { year, month, day } = dateParts;
+  const shiftTimes = getAssignmentShiftTimes(asg);
+
+  let endHour = 23;
+  let endMin = 59;
+  let endSec = 59;
+  let isNextDay = false;
+
+  if (shiftTimes.end) {
+    endHour = shiftTimes.end.hours;
+    endMin = shiftTimes.end.minutes;
+    endSec = shiftTimes.end.seconds || 0;
+
+    if (shiftTimes.start && shiftTimes.end.hours < shiftTimes.start.hours) {
+      isNextDay = true;
+    }
+  }
+
+  const endDateTime = new Date(year, month, isNextDay ? day + 1 : day, endHour, endMin, endSec, 999);
+  return now.getTime() >= endDateTime.getTime();
+}
+
+export function isAssignmentUpcoming(asg, now = new Date()) {
+  if (!asg) return false;
+  const status = (asg.status || '').toString().trim().toLowerCase();
+  if (status === 'completed' || status === 'cancelled') return false;
+
+  const dateParts = getAssignmentScheduledDate(asg);
+  if (!dateParts) return false;
+
+  const { year, month, day } = dateParts;
+  const shiftTimes = getAssignmentShiftTimes(asg);
+
+  let startHour = 0;
+  let startMin = 0;
+  if (shiftTimes.start) {
+    startHour = shiftTimes.start.hours;
+    startMin = shiftTimes.start.minutes;
+  }
+
+  const startDateTime = new Date(year, month, day, startHour, startMin, 0, 0);
+  return now.getTime() < startDateTime.getTime();
+}
+
+export function resolveAssignmentStatus(asg, now = new Date()) {
+  if (!asg) return 'Completed';
+  const raw = (asg.status || 'Active').trim();
+  const rawLower = raw.toLowerCase();
+
+  if (rawLower === 'cancelled') return 'Cancelled';
+  if (rawLower === 'completed') return 'Completed';
+
+  if (isAssignmentEnded(asg, now)) {
+    return 'Completed';
+  }
+
+  if (isAssignmentUpcoming(asg, now)) {
+    return 'Upcoming';
+  }
+
+  return 'Active';
+}
+
 const EMPTY = { empName: '', empId: '', site: '', assignedSites: [], assignDate: '', shiftStart: '08:00', shiftEnd: '17:00', shift: '08:00 AM - 05:00 PM', priority: 'Medium', status: 'Active' };
 
 const selStyle = { width: '100%', padding: '9px 12px', borderRadius: 8, border: '1px solid #E5E7EB', fontSize: 13, outline: 'none', background: 'white', fontFamily: 'Inter, sans-serif' };
@@ -168,13 +334,40 @@ export default function Assignments() {
     }
   }, []);
 
+  const [, setTick] = useState(0);
+  useEffect(() => {
+    const timer = setInterval(() => setTick(t => t + 1), 10000);
+    return () => clearInterval(timer);
+  }, []);
+
+  // Background auto-sync: persistently update ended assignments in Firestore to 'Completed'
+  useEffect(() => {
+    if (!data.length) return;
+    const now = new Date();
+    const endedDocs = data.filter(d => 
+      (d.status === 'Active' || d.status === 'active' || d.status === 'Upcoming' || d.status === 'upcoming') &&
+      isAssignmentEnded(d, now)
+    );
+
+    if (endedDocs.length > 0) {
+      endedDocs.forEach(async (asg) => {
+        try {
+          if (asg.id) {
+            await updateDoc(doc(db, 'Assignments', asg.id), { status: 'Completed', updatedAt: Date.now() }).catch(() => {});
+            await updateDoc(doc(db, 'assignments', asg.id), { status: 'Completed', updatedAt: Date.now() }).catch(() => {});
+          }
+        } catch (_) {}
+      });
+    }
+  }, [data]);
+
   const totalAssignments = data.length || 1;
 
-  // Chart 1: Assignment Status Breakdown Donut Data
-  const activeCount    = data.filter(d => d.status === 'Active').length;
-  const upcomingCount  = data.filter(d => d.status === 'Upcoming').length;
-  const completedCount = data.filter(d => d.status === 'Completed').length;
-  const cancelledCount = data.filter(d => d.status === 'Cancelled').length;
+  // Chart 1: Assignment Status Breakdown Donut Data (Dynamically resolved)
+  const activeCount    = data.filter(d => resolveAssignmentStatus(d) === 'Active').length;
+  const upcomingCount  = data.filter(d => resolveAssignmentStatus(d) === 'Upcoming').length;
+  const completedCount = data.filter(d => resolveAssignmentStatus(d) === 'Completed').length;
+  const cancelledCount = data.filter(d => resolveAssignmentStatus(d) === 'Cancelled').length;
 
   const asgStatusChartData = [
     { name: 'Active', value: activeCount, color: '#3B82F6', pct: ((activeCount / totalAssignments) * 100).toFixed(0) },
@@ -207,7 +400,8 @@ export default function Assignments() {
 
   const filtered = data.filter(d =>
     (d.empName || '').toLowerCase().includes(search.toLowerCase()) ||
-    (d.site || '').toLowerCase().includes(search.toLowerCase())
+    (d.site || '').toLowerCase().includes(search.toLowerCase()) ||
+    (resolveAssignmentStatus(d) || '').toLowerCase().includes(search.toLowerCase())
   );
 
   // Pagination metrics
@@ -603,8 +797,8 @@ export default function Assignments() {
 
   const stats = ['Active','Upcoming','Completed','Cancelled'].map(s => ({
     label: s,
-    count: data.filter(d => d.status === s).length,
-    pct: data.length ? ((data.filter(d => d.status === s).length / data.length) * 100).toFixed(1) + '%' : '0.0%',
+    count: data.filter(d => resolveAssignmentStatus(d) === s).length,
+    pct: data.length ? ((data.filter(d => resolveAssignmentStatus(d) === s).length / data.length) * 100).toFixed(1) + '%' : '0.0%',
     color: STATUS_STYLE[s]?.dot || '#9CA3AF',
     bg: STATUS_STYLE[s]?.background || '#F3F4F6',
     icon: s === 'Active' ? <ClipboardList size={14}/> : s === 'Upcoming' ? <Clock size={14}/> : s === 'Completed' ? <CheckCircle size={14}/> : <XCircle size={14}/>
@@ -711,10 +905,16 @@ export default function Assignments() {
                       <td style={{ padding: '12px 16px', color: '#6B7280', whiteSpace: 'nowrap' }}>{row.shift || '—'}</td>
                       <td style={{ padding: '12px 16px', fontWeight: 700, color: PRIORITY_COLOR[row.priority] || '#374151', whiteSpace: 'nowrap' }}>{row.priority}</td>
                       <td style={{ padding: '12px 16px', whiteSpace: 'nowrap' }}>
-                        <div style={{ display: 'inline-flex', alignItems: 'center', gap: 6, background: STATUS_STYLE[row.status]?.background || '#F3F4F6', color: STATUS_STYLE[row.status]?.color || '#374151', padding: '4px 10px', borderRadius: 20, fontWeight: 600, fontSize: 11 }}>
-                          <div style={{ width: 6, height: 6, borderRadius: '50%', background: STATUS_STYLE[row.status]?.dot || '#9CA3AF' }}></div>
-                          {row.status}
-                        </div>
+                        {(() => {
+                          const status = resolveAssignmentStatus(row);
+                          const style = STATUS_STYLE[status] || STATUS_STYLE.Active;
+                          return (
+                            <div style={{ display: 'inline-flex', alignItems: 'center', gap: 6, background: style.background, color: style.color, padding: '4px 10px', borderRadius: 20, fontWeight: 600, fontSize: 11 }}>
+                              <div style={{ width: 6, height: 6, borderRadius: '50%', background: style.dot }}></div>
+                              {status}
+                            </div>
+                          );
+                        })()}
                       </td>
                       <td style={{ padding: '12px 16px', color: '#6B7280', fontSize: 11, whiteSpace: 'nowrap' }}>
                         {row.assignDate && <div style={{ fontWeight: 600, color: '#374151', marginBottom: 2 }}>📅 {row.assignDate}</div>}

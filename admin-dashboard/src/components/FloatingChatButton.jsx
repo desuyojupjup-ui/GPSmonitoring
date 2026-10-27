@@ -3,6 +3,7 @@ import { useLocation } from 'react-router-dom';
 import { MessageSquare, X, Bot, Send, User, Minimize2 } from 'lucide-react';
 import chatbotIcon from '../assets/chatbot.png';
 import { db, collection, onSnapshot, query } from '../firebase';
+import { resolveAssignmentStatus } from '../pages/Assignments';
 
 export function isEmployeeOnline(emp) {
   if (!emp) return false;
@@ -179,7 +180,7 @@ export default function FloatingChatButton() {
       // 4. Assignments inquiry
       if (text.includes('assignment') || text.includes('task') || text.includes('schedule')) {
         if (assignments.length === 0) return '📋 No assignments recorded in the database.';
-        const active = assignments.filter(a => a.status === 'Active');
+        const active = assignments.filter(a => resolveAssignmentStatus(a) === 'Active');
         if (active.length === 0) return '📋 No active assignments right now.';
         return (
           `📋 **${active.length} active assignment(s):**\n\n` +
