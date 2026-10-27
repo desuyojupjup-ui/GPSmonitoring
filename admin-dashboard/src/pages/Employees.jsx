@@ -340,12 +340,16 @@ export default function Employees() {
     if (!form.name || !form.email) return showToast('Validation Error', 'Name and Email are required.', 'error');
     setIsSaving(true);
     try {
+      const dataToSave = {
+        ...form,
+        assignedSite: form.workType === 'Mobile Field Employee' ? '' : (form.assignedSite || '')
+      };
       if (editId) {
-        await updateDoc(doc(db, 'employees', editId), form);
+        await updateDoc(doc(db, 'employees', editId), dataToSave);
         showToast('Employee Updated', 'Record saved successfully.', 'success');
       } else {
         const nowStr = new Date().toLocaleString('en-US', { month: 'short', day: 'numeric', year: 'numeric', hour: 'numeric', minute: 'numeric', hour12: true });
-        const newEmp = { ...form, joined: nowStr.replace(', ', '\n'), profilePic: null };
+        const newEmp = { ...dataToSave, joined: nowStr.replace(', ', '\n'), profilePic: null };
         await addDoc(collection(db, 'employees'), newEmp);
         showToast('Employee Created', 'New employee added to database.', 'success');
       }
@@ -1284,46 +1288,89 @@ export default function Employees() {
               )}
 
               {modalTab === 'all' && (
-                <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 14 }}>
-                  <div>
-                    <label style={{ fontSize: 11, fontWeight: 700, color: '#475569', display: 'block', marginBottom: 4 }}>Full Name *</label>
-                    <input type="text" value={form.name || ''} onChange={e => setForm(p => ({ ...p, name: e.target.value }))} placeholder="John Doe" style={{ width: '100%', padding: '8px 12px', borderRadius: 10, border: '1.5px solid #E2E8F0', fontSize: 12, outline: 'none', background: '#FFFFFF', boxSizing: 'border-box' }} />
+                <div style={{ display: 'flex', flexDirection: 'column', gap: 14 }}>
+                  <div style={{ 
+                    display: 'flex', 
+                    justifyContent: 'space-between', 
+                    alignItems: 'center', 
+                    background: '#F8FAFC', 
+                    padding: '10px 14px', 
+                    borderRadius: 10, 
+                    border: '1px solid #E2E8F0' 
+                  }}>
+                    <div style={{ display: 'flex', alignItems: 'center', gap: 6, fontSize: 12, fontWeight: 700, color: '#1E5ADB' }}>
+                      <Check size={15} color="#10B981" /> Profile Summary Review
+                    </div>
+                    <span style={{ fontSize: 11, color: '#64748B', display: 'flex', alignItems: 'center', gap: 4 }}>
+                      <Lock size={12} color="#94A3B8" /> View-only • Click Back to modify
+                    </span>
                   </div>
-                  <div>
-                    <label style={{ fontSize: 11, fontWeight: 700, color: '#475569', display: 'block', marginBottom: 4 }}>Email Address *</label>
-                    <input type="email" value={form.email || ''} onChange={e => setForm(p => ({ ...p, email: e.target.value }))} placeholder="johndoe@subai.com" style={{ width: '100%', padding: '8px 12px', borderRadius: 10, border: '1.5px solid #E2E8F0', fontSize: 12, outline: 'none', background: '#FFFFFF', boxSizing: 'border-box' }} />
-                  </div>
-                  <div>
-                    <label style={{ fontSize: 11, fontWeight: 700, color: '#475569', display: 'block', marginBottom: 4 }}>ID Number</label>
-                    <input type="text" value={form.idNum || ''} onChange={e => setForm(p => ({ ...p, idNum: e.target.value }))} placeholder="EMP-1001" style={{ width: '100%', padding: '8px 12px', borderRadius: 10, border: '1.5px solid #E2E8F0', fontSize: 12, outline: 'none', background: '#FFFFFF', boxSizing: 'border-box' }} />
-                  </div>
-                  <div>
-                    <label style={{ fontSize: 11, fontWeight: 700, color: '#475569', display: 'block', marginBottom: 4 }}>Department</label>
-                    <input type="text" value={form.org || ''} onChange={e => setForm(p => ({ ...p, org: e.target.value }))} placeholder="Field Operations" style={{ width: '100%', padding: '8px 12px', borderRadius: 10, border: '1.5px solid #E2E8F0', fontSize: 12, outline: 'none', background: '#FFFFFF', boxSizing: 'border-box' }} />
-                  </div>
-                  <div>
-                    <label style={{ fontSize: 11, fontWeight: 700, color: '#475569', display: 'block', marginBottom: 4 }}>Role / Title</label>
-                    <input type="text" value={form.type || ''} onChange={e => setForm(p => ({ ...p, type: e.target.value }))} placeholder="Security Guard" style={{ width: '100%', padding: '8px 12px', borderRadius: 10, border: '1.5px solid #E2E8F0', fontSize: 12, outline: 'none', background: '#FFFFFF', boxSizing: 'border-box' }} />
-                  </div>
-                  <div>
-                    <label style={{ fontSize: 11, fontWeight: 700, color: '#475569', display: 'block', marginBottom: 4 }}>Status</label>
-                    <select value={form.status || 'Offline'} onChange={e => setForm(p => ({ ...p, status: e.target.value }))} style={{ width: '100%', padding: '8px 12px', borderRadius: 10, border: '1.5px solid #E2E8F0', fontSize: 12, outline: 'none', background: '#FFFFFF', boxSizing: 'border-box' }}>
-                      {['On Site', 'On Duty', 'In Transit', 'Offline'].map(s => <option key={s}>{s}</option>)}
-                    </select>
-                  </div>
-                  <div>
-                    <label style={{ fontSize: 11, fontWeight: 700, color: '#475569', display: 'block', marginBottom: 4 }}>Work Type</label>
-                    <select value={form.workType || 'Fixed Site Employee'} onChange={e => setForm(p => ({ ...p, workType: e.target.value }))} style={{ width: '100%', padding: '8px 12px', borderRadius: 10, border: '1.5px solid #E2E8F0', fontSize: 12, outline: 'none', background: '#FFFFFF', boxSizing: 'border-box' }}>
-                      <option value="Fixed Site Employee">Fixed Site Employee</option>
-                      <option value="Mobile Field Employee">Mobile Field Employee</option>
-                    </select>
-                  </div>
-                  <div>
-                    <label style={{ fontSize: 11, fontWeight: 700, color: '#475569', display: 'block', marginBottom: 4 }}>Assigned Site</label>
-                    <select value={form.assignedSite || ''} onChange={e => setForm(p => ({ ...p, assignedSite: e.target.value }))} style={{ width: '100%', padding: '8px 12px', borderRadius: 10, border: '1.5px solid #E2E8F0', fontSize: 12, outline: 'none', background: '#FFFFFF', boxSizing: 'border-box' }}>
-                      <option value="">— Select Site —</option>
-                      {sites.map(s => <option key={s.id} value={s.name || s.id}>{s.name}</option>)}
-                    </select>
+
+                  <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 12 }}>
+                    <div style={{ background: '#FFFFFF', padding: '10px 14px', borderRadius: 10, border: '1px solid #E2E8F0' }}>
+                      <div style={{ fontSize: 10, fontWeight: 700, color: '#64748B', textTransform: 'uppercase', letterSpacing: '0.04em', marginBottom: 3 }}>Full Name</div>
+                      <div style={{ fontSize: 13, fontWeight: 600, color: '#0F172A' }}>{form.name || '—'}</div>
+                    </div>
+
+                    <div style={{ background: '#FFFFFF', padding: '10px 14px', borderRadius: 10, border: '1px solid #E2E8F0' }}>
+                      <div style={{ fontSize: 10, fontWeight: 700, color: '#64748B', textTransform: 'uppercase', letterSpacing: '0.04em', marginBottom: 3 }}>Email Address</div>
+                      <div style={{ fontSize: 13, fontWeight: 600, color: '#0F172A', wordBreak: 'break-all' }}>{form.email || '—'}</div>
+                    </div>
+
+                    <div style={{ background: '#FFFFFF', padding: '10px 14px', borderRadius: 10, border: '1px solid #E2E8F0' }}>
+                      <div style={{ fontSize: 10, fontWeight: 700, color: '#64748B', textTransform: 'uppercase', letterSpacing: '0.04em', marginBottom: 3 }}>ID Number</div>
+                      <div style={{ fontSize: 13, fontWeight: 600, color: '#0F172A' }}>{form.idNum || '—'}</div>
+                    </div>
+
+                    <div style={{ background: '#FFFFFF', padding: '10px 14px', borderRadius: 10, border: '1px solid #E2E8F0' }}>
+                      <div style={{ fontSize: 10, fontWeight: 700, color: '#64748B', textTransform: 'uppercase', letterSpacing: '0.04em', marginBottom: 3 }}>Department</div>
+                      <div style={{ fontSize: 13, fontWeight: 600, color: '#0F172A' }}>{form.org || '—'}</div>
+                    </div>
+
+                    <div style={{ background: '#FFFFFF', padding: '10px 14px', borderRadius: 10, border: '1px solid #E2E8F0' }}>
+                      <div style={{ fontSize: 10, fontWeight: 700, color: '#64748B', textTransform: 'uppercase', letterSpacing: '0.04em', marginBottom: 3 }}>Role / Title</div>
+                      <div style={{ fontSize: 13, fontWeight: 600, color: '#0F172A' }}>{form.type || '—'}</div>
+                    </div>
+
+                    <div style={{ 
+                      background: '#FFFFFF', 
+                      padding: '10px 14px', 
+                      borderRadius: 10, 
+                      border: '1px solid #E2E8F0',
+                      gridColumn: form.workType === 'Mobile Field Employee' ? 'span 1' : 'span 1'
+                    }}>
+                      <div style={{ fontSize: 10, fontWeight: 700, color: '#64748B', textTransform: 'uppercase', letterSpacing: '0.04em', marginBottom: 3 }}>Work Type</div>
+                      <div style={{ 
+                        fontSize: 13, 
+                        fontWeight: 700, 
+                        color: form.workType === 'Mobile Field Employee' ? '#92400E' : '#5B21B6',
+                        display: 'flex',
+                        alignItems: 'center',
+                        gap: 6
+                      }}>
+                        {form.workType === 'Mobile Field Employee' ? <Truck size={14} color="#D97706" /> : <Building2 size={14} color="#7C3AED" />}
+                        {form.workType || 'Fixed Site Employee'}
+                      </div>
+                    </div>
+
+                    {form.workType !== 'Mobile Field Employee' && (
+                      <div style={{ background: '#FFFFFF', padding: '10px 14px', borderRadius: 10, border: '1px solid #E2E8F0', gridColumn: 'span 2' }}>
+                        <div style={{ fontSize: 10, fontWeight: 700, color: '#64748B', textTransform: 'uppercase', letterSpacing: '0.04em', marginBottom: 3 }}>Assigned Site & Geofence</div>
+                        <div style={{ fontSize: 13, fontWeight: 600, color: '#0F172A', display: 'flex', alignItems: 'center', gap: 6 }}>
+                          <MapPin size={14} color="#1E5ADB" />
+                          {form.assignedSite ? (
+                            <>
+                              <span>{form.assignedSite}</span>
+                              <span style={{ fontSize: 11, background: '#EFF6FF', color: '#1E5ADB', padding: '2px 8px', borderRadius: 6, fontWeight: 700 }}>
+                                {form.geofenceRadius || 20}m radius
+                              </span>
+                            </>
+                          ) : (
+                            <span style={{ color: '#94A3B8' }}>No site assigned</span>
+                          )}
+                        </div>
+                      </div>
+                    )}
                   </div>
                 </div>
               )}
