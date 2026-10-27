@@ -126,7 +126,7 @@ export default function ProfileScreen({ navigation, route, user: propUser, onLog
           id: auth.currentUser?.uid || 'emp_' + currentEmail.replace(/[^a-zA-Z0-9]/g, '_'),
           name: displayName,
           email: currentEmail,
-          status: 'On Duty',
+          status: 'Online',
           profilePic: null
         };
       }
@@ -295,7 +295,7 @@ export default function ProfileScreen({ navigation, route, user: propUser, onLog
                   name: displayName,
                   email: currentEmail,
                   profilePic: photoUri || null,
-                  status: 'On Duty'
+                  status: 'Online'
                 });
               }
               window.localStorage.setItem('subai_store_employees', JSON.stringify(updated));
@@ -433,8 +433,13 @@ export default function ProfileScreen({ navigation, route, user: propUser, onLog
             <Text style={[styles.emailText, isDarkMode && styles.darkSubText]}>{currentEmail}</Text>
             
             <View style={{ flexDirection: 'row', alignItems: 'center', gap: 8, marginTop: 4 }}>
-              <View style={[styles.dutyBadge, { backgroundColor: employee?.status === 'On Site' ? '#D1FAE5' : (isDarkMode ? '#374151' : '#F3F4F6'), borderColor: employee?.status === 'On Site' ? '#10B981' : (isDarkMode ? '#4B5563' : '#E5E7EB') }]}>
-                <Text style={[styles.dutyBadgeText, { color: employee?.status === 'On Site' ? '#059669' : (isDarkMode ? '#D1D5DB' : '#6B7280') }]}>{employee?.status || 'On Duty'}</Text>
+              <View style={[styles.dutyBadge, { 
+                backgroundColor: (employee?.status === 'On Duty' || employee?.status === 'On Site') ? '#DBEAFE' : (employee?.status === 'Online' ? '#E0F2FE' : (isDarkMode ? '#374151' : '#F3F4F6')), 
+                borderColor: (employee?.status === 'On Duty' || employee?.status === 'On Site') ? '#3B82F6' : (employee?.status === 'Online' ? '#38BDF8' : (isDarkMode ? '#4B5563' : '#E5E7EB')) 
+              }]}>
+                <Text style={[styles.dutyBadgeText, { 
+                  color: (employee?.status === 'On Duty' || employee?.status === 'On Site') ? '#1E40AF' : (employee?.status === 'Online' ? '#0369A1' : (isDarkMode ? '#D1D5DB' : '#6B7280')) 
+                }]}>{employee?.status || 'Online'}</Text>
               </View>
 
               <TouchableOpacity 

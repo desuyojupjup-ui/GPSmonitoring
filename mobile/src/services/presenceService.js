@@ -67,8 +67,15 @@ class PresenceService {
     this.appStateSubscription = null;
     this.currentEmployeeId = null;
     this.currentUser = null;
+    this.currentStatus = 'Online';
     this.isRunning = false;
     this.lastFix = null;
+  }
+
+  setCurrentStatus(status) {
+    if (status) {
+      this.currentStatus = status;
+    }
   }
 
   setEmployeeId(empId) {
@@ -218,9 +225,10 @@ class PresenceService {
     };
 
     if (explicitStatus) {
+      this.currentStatus = explicitStatus;
       payload.status = explicitStatus;
     } else if (isOnline) {
-      payload.status = 'On Duty';
+      payload.status = this.currentStatus || 'Online';
     } else {
       payload.status = 'Offline';
     }
@@ -286,12 +294,15 @@ class PresenceService {
     } catch (e) {}
   }
 
-  async startPresence(user, employeeId = null) {
+  async startPresence(user, employeeId = null, initialStatus = null) {
     if (!user && !employeeId) return;
 
     this.currentUser = user || this.currentUser;
     if (employeeId && employeeId !== 'emp_fallback' && !employeeId.startsWith('emp_current')) {
       this.currentEmployeeId = employeeId;
+    }
+    if (initialStatus) {
+      this.currentStatus = initialStatus;
     }
     this.isRunning = true;
 
@@ -301,7 +312,7 @@ class PresenceService {
     }
 
     // Send immediate initial heartbeat
-    await this.sendHeartbeat(true);
+    await this.sendHeartbeat(true, this.currentStatus || 'Online');
 
     // Stop existing timer if any
     if (this.timer) clearInterval(this.timer);

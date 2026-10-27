@@ -18,6 +18,8 @@ import {
   auth, 
   collection, 
   getDocs, 
+  doc,
+  updateDoc,
   signInWithEmailAndPassword, 
   saveUserSession,
   ensureAuthenticatedSession 
@@ -171,8 +173,23 @@ export default function LoginScreen({ navigation, route, onLogin: propOnLogin })
         ...empData,
         email: targetEmail,
         name: targetName,
-        uid: empData.id || ('emp_' + Date.now())
+        uid: empData.id || ('emp_' + Date.now()),
+        status: 'Online',
+        isOnline: true
       };
+
+      if (empData.id && empData.id !== 'emp_fallback') {
+        try {
+          await updateDoc(doc(db, 'employees', empData.id), {
+            status: 'Online',
+            isOnline: true,
+            lastLogin: new Date().toISOString(),
+            lastActive: Date.now()
+          });
+        } catch (err) {
+          console.warn('Set online status upon login warning:', err);
+        }
+      }
 
       await saveUserSession(sessionPayload);
       if (onLogin) {

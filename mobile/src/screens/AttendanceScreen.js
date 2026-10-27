@@ -11,6 +11,7 @@ import {
   doc, serverTimestamp, getDocs, query, orderBy, getCleanEmployeeEmail
 } from '../firebase';
 import { isMobileFieldWithoutSite } from '../utils/assignmentUtils';
+import presenceService from '../services/presenceService';
 
 // ─── Helpers ─────────────────────────────────────────────────────────────────
 
@@ -304,11 +305,13 @@ export default function AttendanceScreen({ navigation, route, user: propUser }) 
       await addDoc(collection(db, 'attendance'), attData).catch(() => { });
       if (emp.id !== 'emp_fallback') {
         await updateDoc(doc(db, 'employees', emp.id), {
-          status: 'On Site',
+          status: 'On Duty',
           lastCheckIn: serverTimestamp(),
           lastActive: Date.now(),
           isOnline: true,
         }).catch(() => { });
+        presenceService.setCurrentStatus('On Duty');
+        presenceService.sendHeartbeat(true, 'On Duty');
       }
       Alert.alert('✅ Checked In', `Recorded at ${new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit', hour12: true })}`);
     } catch (e) {
@@ -338,7 +341,9 @@ export default function AttendanceScreen({ navigation, route, user: propUser }) 
       await updateDoc(doc(db, 'attendance', rec.id), { timeOut: serverTimestamp(), status: 'Completed' }).catch(() => { });
       const emp = employeeRef.current;
       if (emp?.id && emp.id !== 'emp_fallback') {
-        await updateDoc(doc(db, 'employees', emp.id), { status: 'On Duty' }).catch(() => { });
+        await updateDoc(doc(db, 'employees', emp.id), { status: 'Online', lastActive: Date.now(), isOnline: true }).catch(() => { });
+        presenceService.setCurrentStatus('Online');
+        presenceService.sendHeartbeat(true, 'Online');
       }
       Alert.alert('✅ Checked Out', 'Have a great day!');
     } catch (e) {

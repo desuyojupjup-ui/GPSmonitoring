@@ -265,7 +265,7 @@ export default function HomeScreen({ navigation, route, user: propUser }) {
           id: auth.currentUser?.uid || 'emp_fallback',
           name: propUser?.name || route?.params?.user?.name || formattedEmailName || 'Employee',
           email: currentEmail || 'employee@subai.com',
-          status: 'On Duty'
+          status: 'Online'
         };
       }
 
@@ -280,7 +280,7 @@ export default function HomeScreen({ navigation, route, user: propUser }) {
         presenceService.setEmployeeId(empData.id);
         if (!hasSetOnline.current) {
           hasSetOnline.current = true;
-          presenceService.startPresence(empData, empData.id);
+          presenceService.startPresence(empData, empData.id, empData.status || 'Online');
         }
       }
       setLoading(false);
@@ -473,6 +473,17 @@ export default function HomeScreen({ navigation, route, user: propUser }) {
         lastAttKeyRef.current = attKey;
         setAllAttendance(all);
         setAttendance(todayRecord || null);
+
+        const isCurrentlyCheckedIn = Boolean(
+          todayRecord && (todayRecord.timeIn || todayRecord.checkIn || todayRecord.check_in) &&
+          !(todayRecord.timeOut || todayRecord.checkOut || todayRecord.check_out || todayRecord.status === 'Completed')
+        );
+
+        if (isCurrentlyCheckedIn) {
+          presenceService.setCurrentStatus('On Duty');
+        } else {
+          presenceService.setCurrentStatus('Online');
+        }
       }
     };
 
@@ -606,11 +617,13 @@ export default function HomeScreen({ navigation, route, user: propUser }) {
 
       if (employee.id && employee.id !== 'emp_fallback') {
         await updateDoc(doc(db, 'employees', employee.id), {
-          status: 'On Site',
+          status: 'On Duty',
           lastCheckIn: serverTimestamp(),
           lastActive: Date.now(),
           isOnline: true,
         });
+        presenceService.setCurrentStatus('On Duty');
+        presenceService.sendHeartbeat(true, 'On Duty');
       }
 
       await addDoc(collection(db, 'ActivityLogs'), {
@@ -677,8 +690,12 @@ export default function HomeScreen({ navigation, route, user: propUser }) {
 
       if (employee.id && employee.id !== 'emp_fallback') {
         await updateDoc(doc(db, 'employees', employee.id), {
-          status: 'On Duty'
+          status: 'Online',
+          lastActive: Date.now(),
+          isOnline: true
         });
+        presenceService.setCurrentStatus('Online');
+        presenceService.sendHeartbeat(true, 'Online');
       }
 
       await addDoc(collection(db, 'ActivityLogs'), {
@@ -753,17 +770,17 @@ export default function HomeScreen({ navigation, route, user: propUser }) {
     );
   }
 
-  const displayStatus = (assignment?.status === 'Active' || assignment?.status === 'On Duty')
-    ? (employee?.status === 'On Site' ? 'On Site' : 'Active')
-    : (employee?.status || 'Active');
-  const statusColor = (displayStatus === 'On Site' || displayStatus === 'Active' || displayStatus === 'On Duty') ? '#10B981' : '#F59E0B';
-
   const isCheckedIn = Boolean(
     attendance?.timeIn || attendance?.checkIn || attendance?.check_in
   );
   const isCheckedOut = Boolean(
     isCheckedIn && (attendance?.timeOut || attendance?.checkOut || attendance?.check_out || attendance?.status === 'Completed')
   );
+
+  const displayStatus = (isCheckedIn && !isCheckedOut)
+    ? 'On Duty'
+    : (employee?.status || 'Online');
+  const statusColor = (displayStatus === 'On Duty' || displayStatus === 'On Site') ? '#10B981' : (displayStatus === 'Online' ? '#0284C7' : '#F59E0B');
 
   const effectiveTimeIn = attendance?.timeIn || attendance?.checkIn || attendance?.check_in;
   const effectiveTimeOut = attendance?.timeOut || attendance?.checkOut || attendance?.check_out;

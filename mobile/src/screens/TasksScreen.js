@@ -85,7 +85,7 @@ export default function TasksScreen({ navigation, route, user: propUser }) {
           id: auth.currentUser?.uid || 'emp_fallback',
           name: propUser?.name || route?.params?.user?.name || formattedEmailName || 'Employee',
           email: currentEmail,
-          status: 'On Duty'
+          status: 'Online'
         };
       }
 

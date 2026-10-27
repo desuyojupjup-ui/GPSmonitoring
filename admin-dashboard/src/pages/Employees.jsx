@@ -81,6 +81,7 @@ const CustomGeofenceTooltip = ({ active, payload }) => {
 const STATUS_STYLE = {
   'On Site':    { background: '#D1FAE5', color: '#065F46', dot: '#10B981' },
   'On Duty':    { background: '#DBEAFE', color: '#1E40AF', dot: '#3B82F6' },
+  'Online':     { background: '#E0F2FE', color: '#0369A1', dot: '#0284C7' },
   'In Transit': { background: '#FEF3C7', color: '#92400E', dot: '#F59E0B' },
   'Offline':    { background: '#F3F4F6', color: '#374151', dot: '#9CA3AF' },
 };
@@ -115,7 +116,7 @@ export function isEmployeeOnline(emp) {
 
 export function getEmployeeStatus(emp) {
   if (!isEmployeeOnline(emp)) return 'Offline';
-  return (emp.status && emp.status !== 'Offline') ? emp.status : 'On Duty';
+  return (emp.status && emp.status !== 'Offline') ? emp.status : 'Online';
 }
 
 const WORK_TYPE_STYLE = {
@@ -229,8 +230,8 @@ export default function Employees() {
 
   // Chart 2: Status Breakdown Bar Data
   const statusChartData = [
-    { name: 'On Site', count: employees.filter(e => getEmployeeStatus(e) === 'On Site').length, fill: '#10B981' },
-    { name: 'On Duty', count: employees.filter(e => getEmployeeStatus(e) === 'On Duty').length, fill: '#3B82F6' },
+    { name: 'On Duty', count: employees.filter(e => getEmployeeStatus(e) === 'On Duty' || getEmployeeStatus(e) === 'On Site').length, fill: '#3B82F6' },
+    { name: 'Online', count: employees.filter(e => getEmployeeStatus(e) === 'Online').length, fill: '#0284C7' },
     { name: 'In Transit', count: employees.filter(e => getEmployeeStatus(e) === 'In Transit').length, fill: '#F59E0B' },
     { name: 'Offline', count: employees.filter(e => getEmployeeStatus(e) === 'Offline').length, fill: '#94A3B8' },
   ];
