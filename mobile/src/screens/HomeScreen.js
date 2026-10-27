@@ -969,23 +969,54 @@ export default function HomeScreen({ navigation, route, user: propUser }) {
             </View>
           </View>
 
-          {/* Location / Site Info */}
-          <TouchableOpacity
-            style={styles.siteInfoContainer}
-            onPress={() => navigation.navigate('Map', { assignment, site })}
-            activeOpacity={0.8}
-          >
-            <Ionicons name="location-sharp" size={18} color={assignment ? "#4F46E5" : "#9CA3AF"} />
-            <View style={{ flex: 1, marginLeft: 8 }}>
-              <Text style={styles.siteName}>
-                {assignment ? (site?.name || assignment?.site || assignment?.siteName || 'Assigned Site') : 'No Active Site Assignment'}
-              </Text>
-              <Text style={styles.siteAddress}>
-                {assignment ? (site?.address || assignment?.siteAddress || assignment?.address || 'GPS Live Monitoring Active • Tap to Navigate') : 'No active site assigned by administrator'}
-              </Text>
+          {/* Location / Site Info Rows (Supports Multiple Assigned Locations) */}
+          {assignedSitesList && assignedSitesList.length > 0 ? (
+            <View style={{ marginBottom: 14, gap: 8 }}>
+              {assignedSitesList.map((siteItem, idx) => (
+                <TouchableOpacity
+                  key={siteItem.id || `home_site_${idx}`}
+                  style={[
+                    styles.siteInfoContainer,
+                    { marginBottom: 0 },
+                    assignedSitesList.length > 1 && { borderLeftWidth: 3.5, borderLeftColor: '#4F46E5' }
+                  ]}
+                  onPress={() => navigation.navigate('Map', { assignment: siteItem.assignment, site: siteItem.site })}
+                  activeOpacity={0.8}
+                >
+                  <Ionicons name="location-sharp" size={18} color="#4F46E5" />
+                  <View style={{ flex: 1, marginLeft: 8 }}>
+                    <View style={{ flexDirection: 'row', alignItems: 'center', gap: 6 }}>
+                      <Text style={styles.siteName}>
+                        {siteItem.siteName}
+                      </Text>
+                      {assignedSitesList.length > 1 && (
+                        <View style={{ backgroundColor: '#EEF2FF', paddingHorizontal: 6, paddingVertical: 1, borderRadius: 6 }}>
+                          <Text style={{ fontSize: 9, fontWeight: '700', color: '#4F46E5' }}>Site {idx + 1}</Text>
+                        </View>
+                      )}
+                    </View>
+                    <Text style={styles.siteAddress} numberOfLines={2}>
+                      {siteItem.address || 'GPS Live Monitoring Active • Tap to Navigate'}
+                    </Text>
+                  </View>
+                  <Ionicons name="chevron-forward" size={16} color="#9CA3AF" />
+                </TouchableOpacity>
+              ))}
             </View>
-            <Ionicons name="chevron-forward" size={16} color="#9CA3AF" />
-          </TouchableOpacity>
+          ) : (
+            <TouchableOpacity
+              style={styles.siteInfoContainer}
+              onPress={() => assignment && navigation.navigate('Map', { assignment, site })}
+              activeOpacity={0.8}
+            >
+              <Ionicons name="location-sharp" size={18} color="#9CA3AF" />
+              <View style={{ flex: 1, marginLeft: 8 }}>
+                <Text style={styles.siteName}>No Active Site Assignment</Text>
+                <Text style={styles.siteAddress}>No active site assigned by administrator</Text>
+              </View>
+              <Ionicons name="chevron-forward" size={16} color="#9CA3AF" />
+            </TouchableOpacity>
+          )}
 
           {/* Warning Banner if Mobile Field Employee has no assigned site */}
           {isMobileFieldWithoutSite(employee, assignment, site) && (
