@@ -1198,41 +1198,25 @@ export default function Employees() {
 
               {modalTab === 'assignment' && (
                 <div style={{ display: 'flex', flexDirection: 'column', gap: 16 }}>
-                  <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 16 }}>
-                    <div>
-                      <label style={{ fontSize: 11, fontWeight: 700, color: '#475569', display: 'block', marginBottom: 6 }}>Duty Status</label>
-                      <div style={{ position: 'relative' }}>
-                        <Activity size={15} color="#94A3B8" style={{ position: 'absolute', left: 12, top: 12 }} />
-                        <select
-                          value={form.status || 'Offline'}
-                          onChange={e => setForm(p => ({ ...p, status: e.target.value }))}
-                          style={{ width: '100%', padding: '10px 14px 10px 38px', borderRadius: 12, border: '1.5px solid #E2E8F0', fontSize: 13, outline: 'none', background: '#FFFFFF', fontFamily: 'Inter, sans-serif', boxSizing: 'border-box', color: '#0F172A', fontWeight: 500 }}
-                        >
-                          {['On Site', 'On Duty', 'In Transit', 'Offline'].map(s => <option key={s}>{s}</option>)}
-                        </select>
-                      </div>
-                    </div>
-
-                    <div>
-                      <label style={{ fontSize: 11, fontWeight: 700, color: '#475569', display: 'block', marginBottom: 6 }}>Employee Work Type</label>
-                      <div style={{ position: 'relative' }}>
-                        <Building2 size={15} color="#94A3B8" style={{ position: 'absolute', left: 12, top: 12 }} />
-                        <select
-                          value={form.workType || 'Fixed Site Employee'}
-                          onChange={e => {
-                            const wt = e.target.value;
-                            setForm(p => ({
-                              ...p,
-                              workType: wt,
-                              geofenceRadius: wt === 'Fixed Site Employee' ? (p.geofenceRadius || 20) : 100
-                            }));
-                          }}
-                          style={{ width: '100%', padding: '10px 14px 10px 38px', borderRadius: 12, border: '1.5px solid #E2E8F0', fontSize: 13, outline: 'none', background: '#FFFFFF', fontFamily: 'Inter, sans-serif', boxSizing: 'border-box', color: '#0F172A', fontWeight: 500 }}
-                        >
-                          <option value="Fixed Site Employee">Fixed Site Employee</option>
-                          <option value="Mobile Field Employee">Mobile Field Employee</option>
-                        </select>
-                      </div>
+                  <div>
+                    <label style={{ fontSize: 11, fontWeight: 700, color: '#475569', display: 'block', marginBottom: 6 }}>Employee Work Type</label>
+                    <div style={{ position: 'relative' }}>
+                      <Building2 size={15} color="#94A3B8" style={{ position: 'absolute', left: 12, top: 12 }} />
+                      <select
+                        value={form.workType || 'Fixed Site Employee'}
+                        onChange={e => {
+                          const wt = e.target.value;
+                          setForm(p => ({
+                            ...p,
+                            workType: wt,
+                            geofenceRadius: wt === 'Fixed Site Employee' ? (p.geofenceRadius || 20) : 100
+                          }));
+                        }}
+                        style={{ width: '100%', padding: '10px 14px 10px 38px', borderRadius: 12, border: '1.5px solid #E2E8F0', fontSize: 13, outline: 'none', background: '#FFFFFF', fontFamily: 'Inter, sans-serif', boxSizing: 'border-box', color: '#0F172A', fontWeight: 500 }}
+                      >
+                        <option value="Fixed Site Employee">Fixed Site Employee</option>
+                        <option value="Mobile Field Employee">Mobile Field Employee</option>
+                      </select>
                     </div>
                   </div>
 
