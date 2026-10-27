@@ -295,14 +295,15 @@ export default function UsersRoles() {
         // Edit existing admin user
         const existingAcc = getRegisteredAdminAccounts().find(a => a.id === editId || (a.email || '').toLowerCase() === cleanEmail);
         const assignedPass = form.password?.trim() || existingAcc?.password || 'password123';
+        const roleCfg = getRoleConfig(form.role || 'Super Admin');
         
         const updatedUser = {
           id: editId,
           name: form.name.trim(),
           email: cleanEmail,
           password: assignedPass,
-          role: form.role,
-          access: form.access,
+          role: roleCfg.role,
+          access: roleCfg.access,
           status: form.status || 'Active',
           lastLogin: existingAcc?.lastLogin || 'Never'
         };
@@ -324,12 +325,13 @@ export default function UsersRoles() {
       } else {
         // Create new admin user
         const assignedPass = form.password?.trim() || 'password123';
+        const roleCfg = getRoleConfig(form.role || 'Manager');
         const newUserDoc = {
           name: form.name.trim(),
           email: cleanEmail,
           password: assignedPass,
-          role: form.role || 'Manager',
-          access: form.access || 'Operations & Fleet Management',
+          role: roleCfg.role,
+          access: roleCfg.access,
           status: form.status || 'Active',
           lastLogin: 'Never',
           createdAt: new Date().toISOString()
@@ -1011,13 +1013,38 @@ export default function UsersRoles() {
               </div>
 
               <div>
-                <label style={{ fontSize: 12, fontWeight: 700, color: '#374151', display: 'block', marginBottom: 5 }}>Access Level</label>
-                <input 
-                  value={form.access} 
-                  onChange={e => setForm({...form, access: e.target.value})} 
-                  placeholder="e.g. Full System Access, Sites & Attendance" 
-                  style={{ width: '100%', padding: '10px 12px', borderRadius: 8, border: '1px solid #E5E7EB', fontSize: 13, outline: 'none' }} 
-                />
+                <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 5 }}>
+                  <label style={{ fontSize: 12, fontWeight: 700, color: '#374151' }}>Access Level</label>
+                  <span style={{ fontSize: 11, color: '#64748B', display: 'flex', alignItems: 'center', gap: 4 }}>
+                    <Lock size={11} color="#94A3B8" /> Auto-assigned (Read-only)
+                  </span>
+                </div>
+                <div style={{ position: 'relative' }}>
+                  <input 
+                    readOnly
+                    disabled
+                    tabIndex={-1}
+                    value={getRoleConfig(form.role).access} 
+                    onKeyDown={e => e.preventDefault()}
+                    onFocus={e => e.target.blur()}
+                    title="Access level is automatically configured based on the selected Administrator Role"
+                    style={{ 
+                      width: '100%', 
+                      padding: '10px 12px 10px 34px', 
+                      borderRadius: 8, 
+                      border: '1px solid #E2E8F0', 
+                      fontSize: 13, 
+                      fontWeight: 600,
+                      color: '#475569',
+                      outline: 'none', 
+                      background: '#F1F5F9',
+                      cursor: 'not-allowed',
+                      userSelect: 'none',
+                      boxSizing: 'border-box'
+                    }} 
+                  />
+                  <Lock size={14} color="#94A3B8" style={{ position: 'absolute', left: 11, top: '50%', transform: 'translateY(-50%)', pointerEvents: 'none' }} />
+                </div>
               </div>
 
               <div>
