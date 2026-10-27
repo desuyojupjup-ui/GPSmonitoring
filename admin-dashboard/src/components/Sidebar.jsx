@@ -1,8 +1,8 @@
-import React, { useState, useEffect } from 'react';
-import { NavLink, useNavigate } from 'react-router-dom';
+import React from 'react';
+import { NavLink } from 'react-router-dom';
 import {
   LayoutDashboard, Map, Users, MapPin, ClipboardList,
-  CalendarCheck, FileBarChart2, Bell, Settings, ShieldCheck, ScrollText, ChevronRight,
+  CalendarCheck, FileBarChart2, Bell, Settings, ShieldCheck, ScrollText,
   ScanLine, ShieldAlert, ShieldX, Clock, ChevronsLeft, ChevronsRight
 } from 'lucide-react';
 
@@ -27,25 +27,6 @@ const navItems = [
 ];
 
 export default function Sidebar({ collapsed, setCollapsed, mobileOpen, setMobileOpen }) {
-  const navigate = useNavigate();
-  const [profile, setProfile] = useState(() => {
-    try {
-      const saved = localStorage.getItem('subai_admin_user');
-      return saved ? JSON.parse(saved) : null;
-    } catch {
-      return null;
-    }
-  });
-
-  useEffect(() => {
-    const handleProfileUpdated = (e) => {
-      if (e.detail) {
-        setProfile(e.detail);
-      }
-    };
-    window.addEventListener('subai_admin_profile_updated', handleProfileUpdated);
-    return () => window.removeEventListener('subai_admin_profile_updated', handleProfileUpdated);
-  }, []);
   return (
     <aside className={`sidebar ${collapsed ? 'collapsed' : ''} ${mobileOpen ? 'mobile-open' : ''}`}>
       {/* Logo & Collapse Button Header */}
@@ -98,48 +79,6 @@ export default function Sidebar({ collapsed, setCollapsed, mobileOpen, setMobile
           </NavLink>
         ))}
       </nav>
-
-      {/* Footer */}
-      <div
-        className="sidebar-footer"
-        onClick={() => navigate('/settings')}
-        style={{ cursor: 'pointer' }}
-        title={collapsed ? `${profile?.name || 'Admin User'} (${profile?.role || 'Super Admin'})` : 'Account Settings'}
-      >
-        <div
-          className="footer-avatar"
-          style={{
-            background: profile?.avatarPhoto ? 'transparent' : (profile?.avatarColor || '#1E5ADB'),
-            overflow: 'hidden',
-            display: 'flex',
-            alignItems: 'center',
-            justifyContent: 'center',
-            color: 'white',
-            fontWeight: '700'
-          }}
-        >
-          {profile?.avatarPhoto ? (
-            <img
-              src={profile.avatarPhoto}
-              alt="Avatar"
-              style={{ width: '100%', height: '100%', objectFit: 'cover' }}
-            />
-          ) : (
-            (profile?.name?.charAt(0) || 'A').toUpperCase()
-          )}
-        </div>
-        {!collapsed && (
-          <>
-            <div style={{ flex: 1, minWidth: 0 }}>
-              <div className="footer-name" style={{ whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>
-                {profile?.name || 'Admin User'}
-              </div>
-              <div className="footer-role">{profile?.role || 'Super Admin'}</div>
-            </div>
-            <ChevronRight size={14} color="#8A9BB0" />
-          </>
-        )}
-      </div>
     </aside>
   );
 }
