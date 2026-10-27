@@ -4,40 +4,7 @@ import { MessageSquare, X, Bot, Send, User, Minimize2 } from 'lucide-react';
 import chatbotIcon from '../assets/chatbot.png';
 import { db, collection, onSnapshot, query } from '../firebase';
 import { resolveAssignmentStatus } from '../pages/Assignments';
-
-export function isEmployeeOnline(emp) {
-  if (!emp) return false;
-  if (emp.isOnline === false) return false;
-
-  const rawTime = emp.lastActive || emp.lastHeartbeat || emp.lastSeen;
-  if (rawTime) {
-    const ts = typeof rawTime === 'number'
-      ? rawTime
-      : (rawTime?.toDate ? rawTime.toDate().getTime() : new Date(rawTime).getTime());
-    if (ts && !isNaN(ts)) {
-      return (Date.now() - ts) <= 120000; // 2 minutes active window
-    }
-  }
-
-  if (emp.isOnline === true) {
-    if (emp.lastLogin) {
-      const loginTs = new Date(emp.lastLogin).getTime();
-      if (loginTs && !isNaN(loginTs)) {
-        return (Date.now() - loginTs) <= 120000;
-      }
-    }
-    return true;
-  }
-
-  return false;
-}
-
-export function resolveEmployeeStatus(emp) {
-  if (!isEmployeeOnline(emp)) return 'Offline';
-  if (emp.status === 'On Site' || emp.geofenceStatus === 'Inside Assigned Site') return 'On Site';
-  if (emp.status === 'In Transit') return 'In Transit';
-  return (emp.status && emp.status !== 'Offline') ? emp.status : 'On Duty';
-}
+import { isEmployeeOnline, resolveEmployeeStatus } from './Dashboard';
 
 const QUICK_PROMPTS = [
   'Who is on site?',

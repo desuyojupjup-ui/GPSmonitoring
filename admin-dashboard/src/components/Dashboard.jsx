@@ -1,4 +1,5 @@
 import React, { useState, useEffect, useMemo } from 'react';
+import { useNavigate } from 'react-router-dom';
 import {
   Users, CheckCircle, MapPin, ClipboardCheck, WifiOff, ArrowRight,
   Clock, RefreshCw, Maximize2, Eye, UserCheck, Shield, Truck,
@@ -13,37 +14,51 @@ import { db, collection, onSnapshot, query, limit } from '../firebase';
 import MapTracking from './MapTracking';
 import { resolveAssignmentStatus } from '../pages/Assignments';
 
-// Real-time helper: resolve employee duty status
-export function resolveEmployeeStatus(emp) {
-  if (!emp) return 'Offline';
-  const rawStatus = (emp.status || '').trim();
+// Real-time Presence Evaluation (Account must be actively open with heartbeat <= 120s)
+export function isEmployeeOnline(emp, now = Date.now()) {
+  if (!emp) return false;
+  if (emp.isOnline === false) return false;
+  if ((emp.status || '').toString().trim().toLowerCase() === 'offline') return false;
 
-  // Explicit active states
-  if (rawStatus === 'On Site') return 'On Site';
-  if (rawStatus === 'In Transit') return 'In Transit';
-  if (rawStatus === 'On Duty') return 'On Duty';
-
-  // Check heartbeat or online flag
-  const rawTime = emp.lastActive || emp.lastHeartbeat || emp.lastSeen;
-  let isRecent = false;
+  const rawTime = emp.lastActive || emp.lastHeartbeat || emp.lastSeen || emp.lastLocationUpdate || emp.updatedAt;
   if (rawTime) {
     const ts = typeof rawTime === 'number'
       ? rawTime
       : (rawTime?.toDate ? rawTime.toDate().getTime() : new Date(rawTime).getTime());
     if (ts && !isNaN(ts)) {
-      isRecent = (Date.now() - ts) <= 300000; // 5 min active window
+      return (now - ts) <= 120000; // 2 minutes active heartbeat window
     }
   }
 
-  if (rawStatus === 'Offline' && !emp.isOnline && !isRecent) {
+  // Fallback to recent login only if within 2 minutes
+  if (emp.lastLogin) {
+    const loginTs = typeof emp.lastLogin === 'number'
+      ? emp.lastLogin
+      : (emp.lastLogin?.toDate ? emp.lastLogin.toDate().getTime() : new Date(emp.lastLogin).getTime());
+    if (loginTs && !isNaN(loginTs)) {
+      return (now - loginTs) <= 120000;
+    }
+  }
+
+  return false;
+}
+
+// Real-time helper: resolve employee duty status
+export function resolveEmployeeStatus(emp, now = Date.now()) {
+  if (!emp) return 'Offline';
+
+  // CRITICAL: If the employee is not actively online with a valid heartbeat, they are Offline!
+  if (!isEmployeeOnline(emp, now)) {
     return 'Offline';
   }
 
-  if (emp.isOnline || isRecent) {
-    return rawStatus || 'On Duty';
-  }
+  const rawStatus = (emp.status || '').trim();
+  if (rawStatus === 'Offline') return 'Offline';
+  if (rawStatus === 'On Site') return 'On Site';
+  if (rawStatus === 'In Transit') return 'In Transit';
+  if (rawStatus === 'On Duty') return 'On Duty';
 
-  return rawStatus || 'Offline';
+  return rawStatus || 'On Duty';
 }
 
 // Real-time helper: resolve employee work type
@@ -439,14 +454,18 @@ function ActivityFeedItem({ avatar, name, action, time, status, color }) {
 }
 
 // ── Full-featured Interactive Drilldown Modal ──
+// ── Full-featured Interactive Drilldown Modal ──
 function DashboardDrilldownModal({
   type,
   onClose,
   employees = [],
   sites = [],
   assignments = [],
+  attendance = [],
+  anomalies = [],
   onFocusEmployee
 }) {
+  const navigate = useNavigate();
   const [searchTerm, setSearchTerm] = useState('');
   const [tabFilter, setTabFilter] = useState('All');
 
@@ -491,6 +510,20 @@ function DashboardDrilldownModal({
         { label: 'Active Breaches', value: employees.filter(e => e.geofenceStatus === 'Outside Assigned Site').length, color: '#DC2626' },
         { label: 'Monitored Sites', value: sites.length, color: '#6366F1' },
         { label: 'Precision Fit', value: '20m Bldg', color: '#7C3AED' }
+      ]
+    },
+    ai_anomalies: {
+      title: 'AI Anomaly Detection Center',
+      subtitle: 'Real-time machine learning fraud flags, geofence breaches, velocity spikes, and attendance anomalies.',
+      icon: ShieldAlert,
+      color: '#EF4444',
+      items: anomalies,
+      isAnomalyList: true,
+      pills: [
+        { label: 'Total Anomalies', value: anomalies.length, color: '#EF4444' },
+        { label: 'Active Flags', value: anomalies.filter(a => a.status === 'Active' || a.status === 'Open' || !a.status).length, color: '#DC2626' },
+        { label: 'High Severity', value: anomalies.filter(a => a.severity === 'High' || a.severity === 'Critical').length, color: '#F43F5E' },
+        { label: 'Resolved', value: anomalies.filter(a => a.status === 'Resolved' || a.status === 'Dismissed').length, color: '#10B981' }
       ]
     },
     on_duty: {
@@ -567,6 +600,18 @@ function DashboardDrilldownModal({
 
   // Filter items by search & tab
   const filteredList = config.items.filter(item => {
+    if (config.isAnomalyList) {
+      const matchSearch = !searchTerm ||
+        (item.type || item.title || '').toLowerCase().includes(searchTerm.toLowerCase()) ||
+        (item.employeeName || '').toLowerCase().includes(searchTerm.toLowerCase()) ||
+        (item.description || '').toLowerCase().includes(searchTerm.toLowerCase()) ||
+        (item.severity || '').toLowerCase().includes(searchTerm.toLowerCase());
+      if (tabFilter === 'High') return matchSearch && (item.severity === 'High' || item.severity === 'Critical');
+      if (tabFilter === 'Active') return matchSearch && item.status !== 'Resolved' && item.status !== 'Dismissed';
+      if (tabFilter === 'Resolved') return matchSearch && (item.status === 'Resolved' || item.status === 'Dismissed');
+      return matchSearch;
+    }
+
     if (config.isAssignmentList) {
       const matchSearch = !searchTerm ||
         (item.siteName || item.site || '').toLowerCase().includes(searchTerm.toLowerCase()) ||
@@ -743,7 +788,29 @@ function DashboardDrilldownModal({
             )}
           </div>
 
-          {!config.isAssignmentList && (
+          {config.isAnomalyList ? (
+            <div style={{ display: 'flex', gap: 6 }}>
+              {['All', 'Active', 'High', 'Resolved'].map(tab => (
+                <button
+                  key={tab}
+                  onClick={() => setTabFilter(tab)}
+                  style={{
+                    padding: '6px 12px',
+                    borderRadius: 8,
+                    fontSize: 12,
+                    fontWeight: 700,
+                    border: 'none',
+                    cursor: 'pointer',
+                    background: tabFilter === tab ? config.color : '#F1F5F9',
+                    color: tabFilter === tab ? '#FFFFFF' : '#475569',
+                    transition: 'all 0.2s ease'
+                  }}
+                >
+                  {tab}
+                </button>
+              ))}
+            </div>
+          ) : !config.isAssignmentList ? (
             <div style={{ display: 'flex', gap: 6 }}>
               {['All', 'On Duty', 'Offline'].map(tab => (
                 <button
@@ -765,7 +832,7 @@ function DashboardDrilldownModal({
                 </button>
               ))}
             </div>
-          )}
+          ) : null}
         </div>
 
         {/* Scrollable Items List */}
@@ -775,6 +842,105 @@ function DashboardDrilldownModal({
               <div style={{ fontSize: 32, marginBottom: 8 }}>🔍</div>
               <div style={{ fontWeight: 700, fontSize: 15, color: '#475569' }}>No matching records found</div>
               <div style={{ fontSize: 13, marginTop: 4 }}>Try refining your search or filters.</div>
+            </div>
+          ) : config.isAnomalyList ? (
+            /* AI Anomalies List */
+            <div style={{ display: 'flex', flexDirection: 'column', gap: 10 }}>
+              {filteredList.map((anom, i) => {
+                const isHigh = anom.severity === 'High' || anom.severity === 'Critical';
+                const isMed = anom.severity === 'Medium';
+                const sevColor = isHigh ? '#EF4444' : isMed ? '#F59E0B' : '#3B82F6';
+                const sevBg = isHigh ? '#FEF2F2' : isMed ? '#FFFBEB' : '#EFF6FF';
+                const isResolved = anom.status === 'Resolved' || anom.status === 'Dismissed';
+
+                return (
+                  <div
+                    key={anom.id || i}
+                    style={{
+                      background: isHigh && !isResolved ? '#FFF5F5' : '#FFFFFF',
+                      border: `1px solid ${isHigh && !isResolved ? '#FECACA' : '#E2E8F0'}`,
+                      borderRadius: 12,
+                      padding: '12px 16px',
+                      display: 'flex',
+                      alignItems: 'center',
+                      justifyContent: 'space-between',
+                      boxShadow: '0 1px 3px rgba(0,0,0,0.03)',
+                      transition: 'all 0.2s ease'
+                    }}
+                  >
+                    <div style={{ display: 'flex', alignItems: 'center', gap: 12 }}>
+                      <div style={{
+                        width: 40,
+                        height: 40,
+                        borderRadius: '50%',
+                        background: sevBg,
+                        color: sevColor,
+                        display: 'flex',
+                        alignItems: 'center',
+                        justifyContent: 'center',
+                        flexShrink: 0
+                      }}>
+                        <ShieldAlert size={20} />
+                      </div>
+                      <div>
+                        <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
+                          <span style={{ fontWeight: 800, fontSize: 14, color: '#0F172A' }}>
+                            {anom.type || anom.title || 'Security Anomaly'}
+                          </span>
+                          <span style={{
+                            fontSize: 10,
+                            fontWeight: 700,
+                            padding: '2px 7px',
+                            borderRadius: 10,
+                            background: sevBg,
+                            color: sevColor,
+                            border: `1px solid ${sevColor}33`
+                          }}>
+                            {anom.severity || 'Medium'} Risk
+                          </span>
+                          <span style={{
+                            fontSize: 10,
+                            fontWeight: 700,
+                            padding: '2px 7px',
+                            borderRadius: 10,
+                            background: isResolved ? '#ECFDF5' : '#FEF2F2',
+                            color: isResolved ? '#059669' : '#DC2626'
+                          }}>
+                            {isResolved ? 'Resolved' : 'Active'}
+                          </span>
+                        </div>
+                        <div style={{ fontSize: 12, color: '#64748B', marginTop: 4 }}>
+                          Employee: <strong style={{ color: '#0F172A' }}>{anom.employeeName || 'Staff Member'}</strong> • {anom.description || 'Outlier telemetry detected'}
+                        </div>
+                      </div>
+                    </div>
+                    <button
+                      onClick={() => {
+                        onClose();
+                        navigate('/anomalies');
+                      }}
+                      style={{
+                        background: '#0F172A',
+                        color: '#FFFFFF',
+                        border: 'none',
+                        borderRadius: 8,
+                        padding: '6px 14px',
+                        fontSize: 11,
+                        fontWeight: 700,
+                        cursor: 'pointer',
+                        display: 'flex',
+                        alignItems: 'center',
+                        gap: 5,
+                        transition: 'all 0.2s ease'
+                      }}
+                      onMouseEnter={(e) => { e.currentTarget.style.background = '#EF4444'; }}
+                      onMouseLeave={(e) => { e.currentTarget.style.background = '#0F172A'; }}
+                    >
+                      Inspect <ArrowRight size={12} />
+                    </button>
+                  </div>
+                );
+              })}
             </div>
           ) : config.isAssignmentList ? (
             /* Assignment List */
@@ -1008,11 +1174,13 @@ function DashboardDrilldownModal({
 }
 
 export default function Dashboard() {
+  const navigate = useNavigate();
   const [employees, setEmployees] = useState([]);
   const [sites, setSites] = useState([]);
   const [recentLogs, setRecentLogs] = useState([]);
   const [assignments, setAssignments] = useState([]);
   const [attendance, setAttendance] = useState([]);
+  const [anomalies, setAnomalies] = useState([]);
   const [fullscreen, setFullscreen] = useState(false);
 
   // Drilldown modal state
@@ -1043,7 +1211,10 @@ export default function Dashboard() {
       const unsubLogs = onSnapshot(query(collection(db, 'tracking_logs'), limit(10)), (snap) => {
         setRecentLogs(snap.docs.map(d => ({ id: d.id, ...d.data() })));
       });
-      return () => { unsubEmp(); unsubSites(); unsubAsg(); unsubAtt(); unsubLogs(); };
+      const unsubAi = onSnapshot(query(collection(db, 'ai_analysis')), (snap) => {
+        setAnomalies(snap.docs.map(d => ({ id: d.id, ...d.data() })));
+      });
+      return () => { unsubEmp(); unsubSites(); unsubAsg(); unsubAtt(); unsubLogs(); unsubAi(); };
     } catch (e) {
       console.warn('Dashboard subscription error:', e);
     }
@@ -1058,7 +1229,7 @@ export default function Dashboard() {
       const s = resolveEmployeeStatus(e);
       return s === 'On Duty' || s === 'On Site' || s === 'In Transit';
     });
-  }, [employees]);
+  }, [employees, tick]);
   const onDutyCount = onDutyEmployees.length;
 
   const onSiteEmployees = useMemo(() => {
@@ -1066,17 +1237,27 @@ export default function Dashboard() {
       const s = resolveEmployeeStatus(e);
       return s === 'On Site' || (s === 'On Duty' && (e.geofenceStatus === 'Inside Assigned Site' || e.geofenceStatus === 'Inside'));
     });
-  }, [employees]);
+  }, [employees, tick]);
   const onSiteCount = onSiteEmployees.length;
 
   const offlineEmployees = useMemo(() => {
     return employees.filter(e => resolveEmployeeStatus(e) === 'Offline');
-  }, [employees]);
+  }, [employees, tick]);
   const offlineCount = offlineEmployees.length;
 
   const inTransitCount = employees.filter(e => resolveEmployeeStatus(e) === 'In Transit').length;
   const completedAssignments = assignments.filter(a => resolveAssignmentStatus(a, attendance) === 'Completed').length;
-  const geofenceViolations = employees.filter(e => e.geofenceStatus === 'Outside Assigned Site').length;
+  
+  // Geofence violations should only count online/active employees
+  const outsideEmployees = employees.filter(e => isEmployeeOnline(e) && e.geofenceStatus === 'Outside Assigned Site');
+  const outsideCount = outsideEmployees.length;
+  const geofenceViolations = outsideCount;
+
+  // Active AI Anomaly Flags
+  const activeAnomalies = useMemo(() => {
+    return anomalies.filter(a => a.status === 'Active' || a.status === 'Open' || (!a.status && a.status !== 'Resolved' && a.status !== 'Dismissed'));
+  }, [anomalies]);
+  const activeAnomalyCount = activeAnomalies.length;
 
   // Top KPI Metric Cards
   const kpis = [
@@ -1097,7 +1278,7 @@ export default function Dashboard() {
       delta: totalEmp ? `${Math.round((onDutyCount / totalEmp) * 100)}%` : '0%',
       trend: onDutyCount > 0 ? 'up' : 'flat',
       icon: CheckCircle,
-      color: '#10b981',
+      color: onDutyCount > 0 ? '#10b981' : '#94A3B8',
       pct: totalEmp ? Math.round(onDutyCount / totalEmp * 100) : 0,
       onClick: () => setDrilldownType('on_duty'),
       helperText: 'Click to view active on-duty personnel'
@@ -1108,7 +1289,7 @@ export default function Dashboard() {
       delta: totalEmp ? `${Math.round((onSiteCount / totalEmp) * 100)}%` : '0%',
       trend: onSiteCount > 0 ? 'up' : 'flat',
       icon: MapPin,
-      color: '#f59e0b',
+      color: onSiteCount > 0 ? '#f59e0b' : '#94A3B8',
       pct: totalEmp ? Math.round(onSiteCount / totalEmp * 100) : 0,
       onClick: () => setDrilldownType('on_site'),
       helperText: 'Click to view personnel on site'
@@ -1128,9 +1309,9 @@ export default function Dashboard() {
       label: 'Offline',
       value: offlineCount,
       delta: totalEmp ? `${Math.round((offlineCount / totalEmp) * 100)}%` : '0%',
-      trend: offlineCount > 0 ? 'down' : 'flat',
+      trend: offlineCount > 0 ? 'flat' : 'flat',
       icon: WifiOff,
-      color: '#f43f5e',
+      color: offlineCount > 0 ? '#f43f5e' : '#94A3B8',
       pct: totalEmp ? Math.round(offlineCount / totalEmp * 100) : 0,
       onClick: () => setDrilldownType('offline'),
       helperText: 'Click to view offline personnel roster'
@@ -1148,8 +1329,15 @@ export default function Dashboard() {
   }, [employees, assignments]);
   const mobileCount = mobileEmployees.length;
 
-  const outsideEmployees = employees.filter(e => e.geofenceStatus === 'Outside Assigned Site');
-  const outsideCount = outsideEmployees.length;
+  const fixedActiveEmployees = useMemo(() => {
+    return fixedEmployees.filter(e => isEmployeeOnline(e));
+  }, [fixedEmployees, tick]);
+  const fixedActiveCount = fixedActiveEmployees.length;
+
+  const mobileActiveEmployees = useMemo(() => {
+    return mobileEmployees.filter(e => isEmployeeOnline(e));
+  }, [mobileEmployees, tick]);
+  const mobileActiveCount = mobileActiveEmployees.length;
 
   const fixedOnSite = fixedEmployees.filter(e => {
     const s = resolveEmployeeStatus(e);
@@ -1167,9 +1355,9 @@ export default function Dashboard() {
   const insideSafeCount = Math.max(0, activeWorkforceCount - outsideCount);
   const safePerimeterPct = activeWorkforceCount > 0 ? Math.round((insideSafeCount / activeWorkforceCount) * 100) : 100;
 
-  // Dynamic 7-Point Shift/Timeline Graphs
+  // Dynamic 7-Point Shift/Timeline Graphs (Flat when inactive/offline)
   const fixedChartData = useMemo(() => {
-    if (fixedCount === 0) {
+    if (fixedActiveCount === 0) {
       return [
         { time: '06:00', value: 0 },
         { time: '08:00', value: 0 },
@@ -1181,18 +1369,18 @@ export default function Dashboard() {
       ];
     }
     return [
-      { time: '06:00', value: Math.max(1, Math.round(fixedCount * 0.35)) },
-      { time: '08:00', value: Math.max(1, Math.round(fixedCount * 0.85)) },
-      { time: '10:00', value: fixedCount },
-      { time: '12:00', value: Math.max(1, Math.round(fixedCount * 0.80)) },
-      { time: '14:00', value: fixedCount },
-      { time: '16:00', value: Math.max(1, Math.round(fixedCount * 0.85)) },
-      { time: '18:00', value: Math.max(0, Math.round(fixedCount * 0.40)) }
+      { time: '06:00', value: Math.max(1, Math.round(fixedActiveCount * 0.35)) },
+      { time: '08:00', value: Math.max(1, Math.round(fixedActiveCount * 0.85)) },
+      { time: '10:00', value: fixedActiveCount },
+      { time: '12:00', value: Math.max(1, Math.round(fixedActiveCount * 0.80)) },
+      { time: '14:00', value: fixedActiveCount },
+      { time: '16:00', value: Math.max(1, Math.round(fixedActiveCount * 0.85)) },
+      { time: '18:00', value: Math.max(0, Math.round(fixedActiveCount * 0.40)) }
     ];
-  }, [fixedCount]);
+  }, [fixedActiveCount]);
 
   const mobileChartData = useMemo(() => {
-    if (mobileCount === 0) {
+    if (mobileActiveCount === 0) {
       return [
         { time: '06:00', value: 0 },
         { time: '08:00', value: 0 },
@@ -1204,20 +1392,27 @@ export default function Dashboard() {
       ];
     }
     return [
-      { time: '06:00', value: Math.round(mobileCount * 0.20) },
-      { time: '08:00', value: Math.round(mobileCount * 0.70) },
-      { time: '10:00', value: mobileCount },
-      { time: '12:00', value: Math.max(1, Math.round(mobileCount * 0.85)) },
-      { time: '14:00', value: mobileCount },
-      { time: '16:00', value: Math.round(mobileCount * 0.75) },
-      { time: '18:00', value: Math.round(mobileCount * 0.30) }
+      { time: '06:00', value: Math.round(mobileActiveCount * 0.20) },
+      { time: '08:00', value: Math.round(mobileActiveCount * 0.70) },
+      { time: '10:00', value: mobileActiveCount },
+      { time: '12:00', value: Math.max(1, Math.round(mobileActiveCount * 0.85)) },
+      { time: '14:00', value: mobileActiveCount },
+      { time: '16:00', value: Math.round(mobileActiveCount * 0.75) },
+      { time: '18:00', value: Math.round(mobileActiveCount * 0.30) }
     ];
-  }, [mobileCount]);
+  }, [mobileActiveCount]);
 
-  const geofenceDonutData = [
-    { name: 'Inside Safe', value: insideSafeCount > 0 ? insideSafeCount : (totalEmp > 0 ? totalEmp : 1), color: '#10B981' },
-    { name: 'Breaches', value: outsideCount, color: '#EF4444' }
-  ];
+  const geofenceDonutData = useMemo(() => {
+    if (activeWorkforceCount === 0) {
+      return [
+        { name: 'All Offline', value: totalEmp > 0 ? totalEmp : 1, color: '#CBD5E1' }
+      ];
+    }
+    return [
+      { name: 'Inside Safe', value: insideSafeCount, color: '#10B981' },
+      { name: 'Breaches', value: outsideCount, color: '#EF4444' }
+    ].filter(d => d.value > 0);
+  }, [activeWorkforceCount, insideSafeCount, outsideCount, totalEmp]);
 
   const statusData = [
     { name: 'On Site', value: onSiteCount, color: '#10B981' },
@@ -1276,7 +1471,7 @@ export default function Dashboard() {
           <WorkTypeGraphKpiCard
             title="Fixed Site Employees"
             value={fixedCount}
-            subValue="Shift Occupancy"
+            subValue={fixedActiveCount > 0 ? "Shift Occupancy" : "All Offline"}
             unit="Staff"
             icon={Building2}
             color="#7C3AED"
@@ -1286,13 +1481,13 @@ export default function Dashboard() {
             chartType="area"
             onClick={() => setDrilldownType('fixed_site')}
             statusBadge={{
-              text: `${totalEmp ? Math.round((fixedCount / totalEmp) * 100) : 0}% Workforce`,
-              bg: '#F5F3FF',
-              color: '#7C3AED',
-              border: '#DDD6FE'
+              text: fixedActiveCount > 0 ? `${fixedCount ? Math.round((fixedActiveCount / fixedCount) * 100) : 0}% Shift Active` : '0% Active (Offline)',
+              bg: fixedActiveCount > 0 ? '#F5F3FF' : '#F1F5F9',
+              color: fixedActiveCount > 0 ? '#7C3AED' : '#64748B',
+              border: fixedActiveCount > 0 ? '#DDD6FE' : '#E2E8F0'
             }}
             footerStats={[
-              { label: 'On Site', value: fixedOnSite, highlight: '#10B981' },
+              { label: 'On Site', value: fixedOnSite, highlight: fixedOnSite > 0 ? '#10B981' : undefined },
               { label: 'Sites', value: sites.length },
               { label: '20m Bldg', value: buildingSitesCount, highlight: '#7C3AED' }
             ]}
@@ -1302,7 +1497,7 @@ export default function Dashboard() {
           <WorkTypeGraphKpiCard
             title="Mobile Field Employees"
             value={mobileCount}
-            subValue="Route Telemetry"
+            subValue={mobileActiveCount > 0 ? "Route Telemetry" : "Fleet Offline"}
             unit="Staff"
             icon={Truck}
             color="#D97706"
@@ -1312,15 +1507,15 @@ export default function Dashboard() {
             chartType="bar"
             onClick={() => setDrilldownType('mobile_field')}
             statusBadge={{
-              text: `${totalEmp ? Math.round((mobileCount / totalEmp) * 100) : 0}% Field Active`,
-              bg: '#FFFBEB',
-              color: '#D97706',
-              border: '#FDE68A'
+              text: mobileActiveCount > 0 ? `${mobileCount ? Math.round((mobileActiveCount / mobileCount) * 100) : 0}% Field Active` : '0% Field Active (Offline)',
+              bg: mobileActiveCount > 0 ? '#FFFBEB' : '#F1F5F9',
+              color: mobileActiveCount > 0 ? '#D97706' : '#64748B',
+              border: mobileActiveCount > 0 ? '#FDE68A' : '#E2E8F0'
             }}
             footerStats={[
-              { label: 'In Transit', value: mobileInTransit, highlight: '#F59E0B' },
-              { label: 'Completed', value: completedAssignments, highlight: '#10B981' },
-              { label: 'Fleet Sync', value: '100%' }
+              { label: 'In Transit', value: mobileInTransit, highlight: mobileInTransit > 0 ? '#F59E0B' : undefined },
+              { label: 'Completed', value: completedAssignments, highlight: completedAssignments > 0 ? '#10B981' : undefined },
+              { label: 'Fleet Sync', value: mobileActiveCount > 0 ? '100%' : 'Standby' }
             ]}
           />
 
@@ -1328,24 +1523,26 @@ export default function Dashboard() {
           <WorkTypeGraphKpiCard
             title="Geofence Intelligence"
             value={outsideCount}
-            subValue="Perimeter Status"
+            subValue={activeWorkforceCount > 0 ? "Perimeter Status" : "Perimeter Clear"}
             unit="Alerts"
             icon={ShieldAlert}
-            color={outsideCount > 0 ? '#DC2626' : '#10B981'}
+            color={outsideCount > 0 ? '#DC2626' : (activeWorkforceCount > 0 ? '#10B981' : '#64748B')}
             gradientId="geoGradKpi"
             chartData={geofenceDonutData}
             dataKey="value"
             chartType="donut"
             onClick={() => setDrilldownType('geofence')}
             statusBadge={{
-              text: outsideCount === 0 ? `${safePerimeterPct}% In Perimeter` : `${outsideCount} Active Alert${outsideCount > 1 ? 's' : ''}`,
-              bg: outsideCount === 0 ? '#ECFDF5' : '#FEF2F2',
-              color: outsideCount === 0 ? '#059669' : '#DC2626',
-              border: outsideCount === 0 ? '#A7F3D0' : '#FECACA',
-              dot: true
+              text: activeWorkforceCount === 0
+                ? 'Perimeter Inactive (All Offline)'
+                : (outsideCount === 0 ? `${safePerimeterPct}% In Perimeter` : `${outsideCount} Active Alert${outsideCount > 1 ? 's' : ''}`),
+              bg: activeWorkforceCount === 0 ? '#F1F5F9' : (outsideCount === 0 ? '#ECFDF5' : '#FEF2F2'),
+              color: activeWorkforceCount === 0 ? '#64748B' : (outsideCount === 0 ? '#059669' : '#DC2626'),
+              border: activeWorkforceCount === 0 ? '#E2E8F0' : (outsideCount === 0 ? '#A7F3D0' : '#FECACA'),
+              dot: activeWorkforceCount > 0
             }}
             footerStats={[
-              { label: 'Inside Safe', value: insideSafeCount, highlight: '#10B981' },
+              { label: 'Inside Safe', value: insideSafeCount, highlight: insideSafeCount > 0 ? '#10B981' : undefined },
               { label: 'Breaches', value: outsideCount, highlight: outsideCount > 0 ? '#DC2626' : '#64748B' },
               { label: 'Precision', value: '20m Fit' }
             ]}
@@ -1402,45 +1599,57 @@ export default function Dashboard() {
               <div className="insights-list">
                 <WorkforceInsightCard
                   icon={UserCheck}
-                  label="Active Employees"
+                  label="ACTIVE EMPLOYEES"
                   value={`${onDutyCount} Employees`}
-                  subtitle="Currently active on shift"
-                  color="#10B981"
+                  subtitle={onDutyCount > 0 ? "Currently active on shift" : "No active employees on shift"}
+                  color={onDutyCount > 0 ? "#10B981" : "#94A3B8"}
                   onClick={() => setDrilldownType('on_duty')}
                 />
                 <WorkforceInsightCard
                   icon={Clock}
-                  label="Employees On Site"
+                  label="EMPLOYEES ON SITE"
                   value={`${onSiteCount} Employees`}
-                  subtitle="Present on site"
-                  color="#3B82F6"
+                  subtitle={onSiteCount > 0 ? "Present on site" : "No employees on site"}
+                  color={onSiteCount > 0 ? "#3B82F6" : "#94A3B8"}
                   onClick={() => setDrilldownType('on_site')}
                 />
                 <WorkforceInsightCard
                   icon={Truck}
-                  label="Employees In Transit"
+                  label="EMPLOYEES IN TRANSIT"
                   value={`${inTransitCount} Employees`}
-                  subtitle="Travelling to assigned sites"
-                  color="#F59E0B"
+                  subtitle={inTransitCount > 0 ? "Travelling to assigned sites" : "No employees in transit"}
+                  color={inTransitCount > 0 ? "#F59E0B" : "#94A3B8"}
                   onClick={() => setDrilldownType('mobile_field')}
                 />
                 <WorkforceInsightCard
                   icon={Shield}
-                  label="Geofence Violations"
+                  label="GEOFENCE VIOLATIONS"
                   value={`${geofenceViolations} Alerts`}
-                  subtitle="Outside assigned work area"
+                  subtitle={geofenceViolations > 0 ? "Outside assigned work area" : (activeWorkforceCount > 0 ? "All within designated perimeter" : "Perimeter Clear (All Offline)")}
                   color={geofenceViolations > 0 ? '#EF4444' : '#10B981'}
                   badge="View"
                   onClick={() => setDrilldownType('geofence')}
                 />
                 <WorkforceInsightCard
                   icon={Bot}
-                  label="AI Workforce Insights"
-                  value={geofenceViolations > 0 ? 'Review Breaches' : 'System Normal'}
-                  subtitle="Generated by AI Assistant"
-                  color="#8B5CF6"
+                  label="AI ANOMALY ALERT"
+                  value={activeAnomalyCount > 0 ? `${activeAnomalyCount} Alert${activeAnomalyCount > 1 ? 's' : ''}` : "System Normal"}
+                  subtitle={
+                    activeAnomalyCount > 0
+                      ? (activeAnomalies[0].type || activeAnomalies[0].title || `${activeAnomalyCount} anomalies detected`)
+                      : (geofenceViolations > 0
+                          ? "Perimeter breach flagged by AI"
+                          : (activeWorkforceCount > 0 ? "AI monitoring active • Zero anomalies" : "All personnel offline • System clean"))
+                  }
+                  color={activeAnomalyCount > 0 ? "#EF4444" : geofenceViolations > 0 ? "#F59E0B" : (activeWorkforceCount > 0 ? "#8B5CF6" : "#10B981")}
                   badge="Inspect"
-                  onClick={() => setDrilldownType(geofenceViolations > 0 ? 'geofence' : 'all_employees')}
+                  onClick={() => {
+                    if (activeAnomalyCount > 0 || anomalies.length > 0) {
+                      setDrilldownType('ai_anomalies');
+                    } else {
+                      navigate('/anomalies');
+                    }
+                  }}
                 />
               </div>
             </div>
@@ -1584,6 +1793,8 @@ export default function Dashboard() {
         employees={employees}
         sites={sites}
         assignments={assignments}
+        attendance={attendance}
+        anomalies={anomalies}
         onFocusEmployee={handleFocusEmployee}
       />
     </div>

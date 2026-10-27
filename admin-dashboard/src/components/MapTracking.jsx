@@ -2,6 +2,7 @@ import React, { useState, useEffect } from 'react';
 import { MapContainer, TileLayer, Marker, Popup, Circle, useMap } from 'react-leaflet';
 import L from 'leaflet';
 import 'leaflet/dist/leaflet.css';
+import { resolveEmployeeStatus } from './Dashboard';
 
 // Fix Leaflet default marker icons
 delete L.Icon.Default.prototype._getIconUrl;
@@ -110,12 +111,12 @@ export default function MapTracking({ employees = [], sites = [], locations = {}
         {mappableEmployees.map(emp => {
           const lat = emp.lat || locations[emp.id]?.lat;
           const lng = emp.lng || locations[emp.id]?.lng;
-          const status = emp.status || 'Offline';
+          const status = resolveEmployeeStatus(emp);
           return (
             <Marker key={emp.id} position={[lat, lng]} icon={createEmojiIcon(getInitials(emp.name), STATUS_COLORS[status] || '#9CA3AF', emp.profilePic)}>
               <Popup>
                 <div style={{ fontWeight: 600, fontSize: 13 }}>{emp.name}</div>
-                <div style={{ fontSize: 11, color: '#6B7280' }}>{emp.status || 'Offline'} • {emp.department || ''}</div>
+                <div style={{ fontSize: 11, color: '#6B7280' }}>{status} • {emp.department || ''}</div>
               </Popup>
             </Marker>
           );

@@ -2,40 +2,7 @@ import React, { useState, useRef, useEffect } from 'react';
 import { Bot, Send, User, BarChart2, Users, MapPin, Clock, AlertCircle } from 'lucide-react';
 import { db, collection, onSnapshot, query } from '../firebase';
 import { resolveAssignmentStatus } from './Assignments';
-
-function isEmployeeOnline(emp) {
-  if (!emp) return false;
-  if (emp.isOnline === false) return false;
-
-  const rawTime = emp.lastActive || emp.lastHeartbeat || emp.lastSeen;
-  if (rawTime) {
-    const ts = typeof rawTime === 'number'
-      ? rawTime
-      : (rawTime?.toDate ? rawTime.toDate().getTime() : new Date(rawTime).getTime());
-    if (ts && !isNaN(ts)) {
-      return (Date.now() - ts) <= 120000;
-    }
-  }
-
-  if (emp.isOnline === true) {
-    if (emp.lastLogin) {
-      const loginTs = new Date(emp.lastLogin).getTime();
-      if (loginTs && !isNaN(loginTs)) {
-        return (Date.now() - loginTs) <= 120000;
-      }
-    }
-    return true;
-  }
-
-  return false;
-}
-
-function resolveEmployeeStatus(emp) {
-  if (!isEmployeeOnline(emp)) return 'Offline';
-  if (emp.status === 'On Site' || emp.geofenceStatus === 'Inside Assigned Site') return 'On Site';
-  if (emp.status === 'In Transit') return 'In Transit';
-  return (emp.status && emp.status !== 'Offline') ? emp.status : 'On Duty';
-}
+import { isEmployeeOnline, resolveEmployeeStatus } from '../components/Dashboard';
 
 const QUICK_PROMPTS = [
   { label: '🔴 Offline employees', query: 'who is offline' },

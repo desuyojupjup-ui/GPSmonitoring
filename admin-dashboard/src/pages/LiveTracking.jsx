@@ -22,35 +22,35 @@ const STATUS_BG = {
 };
 
 // Real-time Presence Evaluation (Account must be actively open with heartbeat <= 120s)
-export function isEmployeeOnline(emp) {
+export function isEmployeeOnline(emp, now = Date.now()) {
   if (!emp) return false;
   if (emp.isOnline === false) return false;
+  if ((emp.status || '').toString().trim().toLowerCase() === 'offline') return false;
 
-  const rawTime = emp.lastActive || emp.lastHeartbeat || emp.lastSeen;
+  const rawTime = emp.lastActive || emp.lastHeartbeat || emp.lastSeen || emp.lastLocationUpdate || emp.updatedAt;
   if (rawTime) {
     const ts = typeof rawTime === 'number'
       ? rawTime
       : (rawTime?.toDate ? rawTime.toDate().getTime() : new Date(rawTime).getTime());
     if (ts && !isNaN(ts)) {
-      return (Date.now() - ts) <= 120000; // 2 minutes active window
+      return (now - ts) <= 120000; // 2 minutes active window
     }
   }
 
-  if (emp.isOnline === true) {
-    if (emp.lastLogin) {
-      const loginTs = new Date(emp.lastLogin).getTime();
-      if (loginTs && !isNaN(loginTs)) {
-        return (Date.now() - loginTs) <= 120000;
-      }
+  if (emp.lastLogin) {
+    const loginTs = typeof emp.lastLogin === 'number'
+      ? emp.lastLogin
+      : (emp.lastLogin?.toDate ? emp.lastLogin.toDate().getTime() : new Date(emp.lastLogin).getTime());
+    if (loginTs && !isNaN(loginTs)) {
+      return (now - loginTs) <= 120000;
     }
-    return true;
   }
 
   return false;
 }
 
-export function getEmployeeStatus(emp) {
-  if (!isEmployeeOnline(emp)) return 'Offline';
+export function getEmployeeStatus(emp, now = Date.now()) {
+  if (!isEmployeeOnline(emp, now)) return 'Offline';
   return (emp.status && emp.status !== 'Offline') ? emp.status : 'On Duty';
 }
 
