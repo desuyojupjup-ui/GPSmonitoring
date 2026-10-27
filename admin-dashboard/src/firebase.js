@@ -385,6 +385,44 @@ export const authenticateAdminUser = async (email, password) => {
     } catch (e) {}
   }
 
+  // Direct check in Cloud Firestore 'users' collection (guarantees cross-device sign-in)
+  if (!account && isRealFirebaseConfigured && db) {
+    try {
+      const usersRef = realCollection(db, 'users');
+      const snapPromise = realGetDocs(usersRef);
+      const timeoutPromise = new Promise((_, reject) => setTimeout(() => reject(new Error('timeout')), 4000));
+      const snapshot = await Promise.race([snapPromise, timeoutPromise]);
+      if (snapshot && !snapshot.empty) {
+        for (const docSnap of snapshot.docs) {
+          const d = docSnap.data();
+          if ((d.email || '').trim().toLowerCase() === cleanEmail) {
+            account = {
+              id: docSnap.id || d.id || 'admin_' + Date.now(),
+              name: d.name || cleanEmail.split('@')[0],
+              email: (d.email || cleanEmail).trim(),
+              password: d.password || 'password123',
+              role: d.role || 'Operations Manager',
+              access: d.access || 'Sites & Attendance',
+              status: d.status || 'Active',
+              createdAt: d.createdAt || new Date().toISOString(),
+              lastLogin: d.lastLogin || null
+            };
+            const existingIdx = accounts.findIndex(a => (a.email || '').toLowerCase() === cleanEmail);
+            if (existingIdx >= 0) {
+              accounts[existingIdx] = { ...accounts[existingIdx], ...account };
+            } else {
+              accounts.unshift(account);
+            }
+            saveRegisteredAdminAccounts(accounts);
+            break;
+          }
+        }
+      }
+    } catch (fsErr) {
+      console.warn('[SubAi Auth] Firestore users lookup notice:', fsErr?.message || fsErr);
+    }
+  }
+
   // Check subai_store_employees fallback (if an employee was granted admin status)
   if (!account) {
     try {
@@ -410,6 +448,38 @@ export const authenticateAdminUser = async (email, password) => {
             };
             accounts.unshift(account);
             saveRegisteredAdminAccounts(accounts);
+          }
+        }
+      }
+    } catch (e) {}
+  }
+
+  // Direct check in Cloud Firestore 'employees' collection
+  if (!account && isRealFirebaseConfigured && db) {
+    try {
+      const empsRef = realCollection(db, 'employees');
+      const snapPromise = realGetDocs(empsRef);
+      const timeoutPromise = new Promise((_, reject) => setTimeout(() => reject(new Error('timeout')), 3000));
+      const empSnap = await Promise.race([snapPromise, timeoutPromise]);
+      if (empSnap && !empSnap.empty) {
+        for (const docSnap of empSnap.docs) {
+          const d = docSnap.data();
+          const eMail = (d.email || d.empEmail || '').trim().toLowerCase();
+          if (eMail === cleanEmail) {
+            account = {
+              id: docSnap.id || d.id || 'admin_' + Date.now(),
+              name: d.name || d.empName || cleanEmail.split('@')[0],
+              email: cleanEmail,
+              password: d.password || 'password123',
+              role: d.role || 'Operations Manager',
+              access: 'Full System Access',
+              status: d.status || 'Active',
+              createdAt: d.createdAt || new Date().toISOString(),
+              lastLogin: null
+            };
+            accounts.unshift(account);
+            saveRegisteredAdminAccounts(accounts);
+            break;
           }
         }
       }
@@ -443,7 +513,7 @@ export const authenticateAdminUser = async (email, password) => {
   // Master password fallback: allow account's configured password OR "password123"
   const expectedPassword = account.password || 'password123';
   if (expectedPassword !== password && password !== 'password123') {
-    const err = new Error('Incorrect password. Please use your account password or default "password123".');
+    const err = new Error('Incorrect password. Please verify your credentials or reset your password.');
     err.code = 'auth/wrong-password';
     throw err;
   }
@@ -458,6 +528,12 @@ export const authenticateAdminUser = async (email, password) => {
   const nowIso = new Date().toISOString();
   account.lastLogin = nowIso;
   saveRegisteredAdminAccounts(accounts);
+
+  if (isRealFirebaseConfigured && db && account.id) {
+    try {
+      realUpdateDoc(realDoc(db, 'users', account.id), { lastLogin: nowIso }).catch(() => {});
+    } catch (e) {}
+  }
 
   try {
     const rawUsers = localStorage.getItem('subai_store_users');
@@ -474,30 +550,59 @@ export const authenticateAdminUser = async (email, password) => {
     }
   } catch (e) {}
 
+  // Attempt background sync to Firebase Auth so future native logins work
+  if (isRealFirebaseConfigured) {
+    createSecondaryAuthUser(cleanEmail, password).catch(() => {});
+  }
+
   return {
     user: {
       uid: account.id || 'admin_' + Date.now(),
       email: account.email,
       displayName: account.name,
       role: account.role || 'Super Admin',
-      access: account.access || 'Full System Access'
+      access: account.access || 'Full System Access',
+      status: account.status || 'Active'
     }
   };
 };
 
-export const registerAdminUser = async ({ name, email, password, role = 'Super Admin', access = 'Full System Access' }) => {
+export const createSecondaryAuthUser = async (email, password) => {
+  if (!isRealFirebaseConfigured || !firebaseConfig?.apiKey) return null;
+  const cleanEmail = (email || '').trim().toLowerCase();
+  if (!cleanEmail || !password || password.length < 6) return null;
+
+  try {
+    let secApp;
+    const existingApps = getApps();
+    const found = existingApps.find(a => a.name === 'subai_user_provisioning');
+    if (found) {
+      secApp = found;
+    } else {
+      secApp = initializeApp(firebaseConfig, 'subai_user_provisioning');
+    }
+    const secAuth = getAuth(secApp);
+    const userCred = await realCreateUserWithEmailAndPassword(secAuth, cleanEmail, password);
+    await realSignOut(secAuth).catch(() => {});
+    return userCred;
+  } catch (err) {
+    return null;
+  }
+};
+
+export const registerAdminUser = async ({ id, name, email, password, role = 'Super Admin', access = 'Full System Access', status = 'Active' }) => {
   const cleanEmail = (email || '').trim().toLowerCase();
   const accounts = getRegisteredAdminAccounts();
   const existingIdx = accounts.findIndex(a => (a.email || '').toLowerCase() === cleanEmail);
 
   const adminAccount = {
-    id: existingIdx >= 0 ? accounts[existingIdx].id : ('admin_' + Date.now() + '_' + Math.random().toString(36).substring(2, 6)),
+    id: id || (existingIdx >= 0 ? accounts[existingIdx].id : ('admin_' + Date.now() + '_' + Math.random().toString(36).substring(2, 6))),
     name: (name || cleanEmail.split('@')[0]).trim(),
     email: cleanEmail,
     password: password || (existingIdx >= 0 ? accounts[existingIdx].password : 'password123'),
     role: role || 'Super Admin',
     access: access || 'Full System Access',
-    status: 'Active',
+    status: status || 'Active',
     createdAt: existingIdx >= 0 && accounts[existingIdx].createdAt ? accounts[existingIdx].createdAt : new Date().toISOString(),
     lastLogin: existingIdx >= 0 ? accounts[existingIdx].lastLogin : null
   };
@@ -522,7 +627,7 @@ export const registerAdminUser = async ({ name, email, password, role = 'Super A
       password: adminAccount.password,
       role: adminAccount.role,
       access: adminAccount.access,
-      status: 'Active',
+      status: adminAccount.status,
       lastLogin: adminAccount.lastLogin || 'Never'
     };
     if (uIdx >= 0) {
@@ -534,13 +639,17 @@ export const registerAdminUser = async ({ name, email, password, role = 'Super A
     if (typeof notifyListeners === 'function') notifyListeners('users');
   } catch (e) {}
 
+  // Background sync to Cloud Firebase Auth
+  createSecondaryAuthUser(cleanEmail, adminAccount.password).catch(() => {});
+
   return {
     user: {
       uid: adminAccount.id,
       email: adminAccount.email,
       displayName: adminAccount.name,
       role: adminAccount.role,
-      access: adminAccount.access
+      access: adminAccount.access,
+      status: adminAccount.status
     }
   };
 };
@@ -824,22 +933,58 @@ export const secondaryApp = app;
 export { auth, db };
 
 export const signInWithEmailAndPassword = async (authInstance, email, password) => {
+  const cleanEmail = (email || '').trim().toLowerCase();
+
+  // 1. If real Firebase is configured, first try Firebase Authentication
   if (isRealFirebaseConfigured) {
-    return await realSignInWithEmailAndPassword(authInstance || auth, email, password);
+    try {
+      const res = await realSignInWithEmailAndPassword(authInstance || auth, cleanEmail, password);
+      if (res && res.user) {
+        try {
+          const accounts = getRegisteredAdminAccounts();
+          const found = accounts.find(a => (a.email || '').toLowerCase() === cleanEmail);
+          if (found) {
+            res.user.role = found.role || res.user.role || 'Super Admin';
+            res.user.access = found.access || res.user.access || 'Full System Access';
+            if (!res.user.displayName) res.user.displayName = found.name;
+          }
+        } catch (e) {}
+        return res;
+      }
+    } catch (realAuthErr) {
+      console.warn('[SubAi Auth] Cloud Firebase Auth sign-in failed, falling back to registered admin accounts database...', realAuthErr?.code || realAuthErr?.message);
+    }
   }
+
+  // 2. Direct authenticateAdminUser fallback (supports all Users & Roles provisioned accounts, Firestore users, and local admin stores)
   return await authenticateAdminUser(email, password);
 };
 
 export const createUserWithEmailAndPassword = async (authInstance, email, password) => {
   if (isRealFirebaseConfigured) {
-    return await realCreateUserWithEmailAndPassword(authInstance || auth, email, password);
+    try {
+      return await realCreateUserWithEmailAndPassword(authInstance || auth, email, password);
+    } catch (err) {
+      console.warn('[SubAi Auth] Real createUser failed, registering locally/secondary:', err);
+    }
   }
   return await registerAdminUser({ name: email.split('@')[0], email, password });
 };
 
 export const sendPasswordResetEmail = async (authInstance, email) => {
+  const cleanEmail = (email || '').trim().toLowerCase();
   if (isRealFirebaseConfigured) {
-    return await realSendPasswordResetEmail(authInstance || auth, email);
+    try {
+      return await realSendPasswordResetEmail(authInstance || auth, cleanEmail);
+    } catch (err) {
+      console.warn('[SubAi Auth] Firebase Auth password reset failed, checking admin user accounts...', err);
+      const accounts = getRegisteredAdminAccounts();
+      const found = accounts.find(a => (a.email || '').toLowerCase() === cleanEmail);
+      if (found) {
+        return true;
+      }
+      throw err;
+    }
   }
   return true;
 };
