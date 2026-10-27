@@ -4,9 +4,44 @@ import { MessageSquare, X, Bot, Send, User, Minimize2 } from 'lucide-react';
 import chatbotIcon from '../assets/chatbot.png';
 import { db, collection, onSnapshot, query } from '../firebase';
 
+export function isEmployeeOnline(emp) {
+  if (!emp) return false;
+  if (emp.isOnline === false) return false;
+
+  const rawTime = emp.lastActive || emp.lastHeartbeat || emp.lastSeen;
+  if (rawTime) {
+    const ts = typeof rawTime === 'number'
+      ? rawTime
+      : (rawTime?.toDate ? rawTime.toDate().getTime() : new Date(rawTime).getTime());
+    if (ts && !isNaN(ts)) {
+      return (Date.now() - ts) <= 120000; // 2 minutes active window
+    }
+  }
+
+  if (emp.isOnline === true) {
+    if (emp.lastLogin) {
+      const loginTs = new Date(emp.lastLogin).getTime();
+      if (loginTs && !isNaN(loginTs)) {
+        return (Date.now() - loginTs) <= 120000;
+      }
+    }
+    return true;
+  }
+
+  return false;
+}
+
+export function resolveEmployeeStatus(emp) {
+  if (!isEmployeeOnline(emp)) return 'Offline';
+  if (emp.status === 'On Site' || emp.geofenceStatus === 'Inside Assigned Site') return 'On Site';
+  if (emp.status === 'In Transit') return 'In Transit';
+  return (emp.status && emp.status !== 'Offline') ? emp.status : 'On Duty';
+}
+
 const QUICK_PROMPTS = [
   'Who is on site?',
   'Who is offline?',
+  'Who is online?',
   'Active assignments',
   'Attendance today',
   'Recent activity logs',
@@ -17,6 +52,9 @@ export default function FloatingChatButton() {
   const [employees, setEmployees] = useState([]);
   const [assignments, setAssignments] = useState([]);
   const [attendance, setAttendance] = useState([]);
+  const [sites, setSites] = useState([]);
+  const [logs, setLogs] = useState([]);
+  const [delays, setDelays] = useState([]);
   const [messages, setMessages] = useState([
     {
       id: '1',
@@ -34,10 +72,13 @@ export default function FloatingChatButton() {
 
   useEffect(() => {
     try {
-      const unsubE = onSnapshot(query(collection(db, 'employees')), (s) => setEmployees(s.docs.map(d => d.data())));
-      const unsubA = onSnapshot(query(collection(db, 'Assignments')), (s) => setAssignments(s.docs.map(d => d.data())));
-      const unsubAtt = onSnapshot(query(collection(db, 'attendance')), (s) => setAttendance(s.docs.map(d => d.data())));
-      return () => { unsubE(); unsubA(); unsubAtt(); };
+      const unsubE = onSnapshot(query(collection(db, 'employees')), (s) => setEmployees(s.docs.map(d => ({ id: d.id, ...d.data() }))));
+      const unsubA = onSnapshot(query(collection(db, 'Assignments')), (s) => setAssignments(s.docs.map(d => ({ id: d.id, ...d.data() }))));
+      const unsubAtt = onSnapshot(query(collection(db, 'attendance')), (s) => setAttendance(s.docs.map(d => ({ id: d.id, ...d.data() }))));
+      const unsubS = onSnapshot(query(collection(db, 'Sites')), (s) => setSites(s.docs.map(d => ({ id: d.id, ...d.data() }))), () => {});
+      const unsubL = onSnapshot(query(collection(db, 'ActivityLogs')), (s) => setLogs(s.docs.map(d => ({ id: d.id, ...d.data() }))), () => {});
+      const unsubD = onSnapshot(query(collection(db, 'delay_reports')), (s) => setDelays(s.docs.map(d => ({ id: d.id, ...d.data() }))), () => {});
+      return () => { unsubE(); unsubA(); unsubAtt(); unsubS(); unsubL(); unsubD(); };
     } catch (e) {}
   }, []);
 
@@ -63,35 +104,137 @@ export default function FloatingChatButton() {
     setIsTyping(true);
 
     setTimeout(() => {
-      const response = processAdminQuery(text.toLowerCase());
+      const response = processAdminQuery(text);
       setMessages(prev => [...prev, { id: (Date.now() + 1).toString(), text: response, sender: 'bot', time: new Date() }]);
       setIsTyping(false);
-    }, 800);
+    }, 600);
   };
 
-  const processAdminQuery = (text) => {
+  const processAdminQuery = (rawText) => {
     try {
-      if (text.includes('on site') || text.includes('how many')) {
-        const onSite = employees.filter(e => e.status === 'On Site');
-        if (onSite.length === 0) return '📍 No employees are currently on site.';
-        return `📍 **${onSite.length} employee(s) On Site:**\n${onSite.map(e => `• ${e.name}`).join('\n')}`;
+      const text = rawText.toLowerCase().trim();
+
+      // 1. Offline / Absent inquiry
+      if (
+        text.includes('offline') ||
+        text.includes('absent') ||
+        text.includes('not active') ||
+        text.includes('inactive') ||
+        text.includes('who is not here')
+      ) {
+        if (employees.length === 0) return '👥 No employee records found in the database.';
+        const offline = employees.filter(e => !isEmployeeOnline(e));
+        if (offline.length === 0) {
+          return `✅ **All ${employees.length} employee(s) are currently active & online!**`;
+        }
+        return (
+          `🔴 **${offline.length} of ${employees.length} Employee(s) Offline/Inactive:**\n\n` +
+          offline
+            .map(e => `• **${e.name || 'Unnamed'}** — Offline (${e.workType === 'Mobile Field Employee' ? 'Mobile Field' : 'Fixed Site'})`)
+            .join('\n')
+        );
       }
-      if (text.includes('absent') || text.includes('offline')) {
-        const offline = employees.filter(e => e.status === 'Offline' || !e.status);
-        if (offline.length === 0) return '✅ All employees are currently active!';
-        return `🔴 **${offline.length} Offline/Absent:**\n${offline.map(e => `• ${e.name}`).join('\n')}`;
+
+      // 2. Online / Active / On Duty inquiry
+      if (
+        text.includes('online') ||
+        text.includes('on duty') ||
+        text.includes('who is active') ||
+        text.includes('active employee') ||
+        text.includes('active workforce') ||
+        text === 'active' ||
+        text.includes('who is working')
+      ) {
+        if (employees.length === 0) return '👥 No employee records found in the database.';
+        const online = employees.filter(isEmployeeOnline);
+        if (online.length === 0) {
+          return `⚠️ **0 employees currently online.**\nAll ${employees.length} registered employee(s) are currently offline/inactive.`;
+        }
+        return (
+          `🟢 **${online.length} of ${employees.length} Employee(s) Currently Online:**\n\n` +
+          online
+            .map(e => {
+              const status = resolveEmployeeStatus(e);
+              const type = e.workType === 'Mobile Field Employee' ? 'Mobile Field' : 'Fixed Site';
+              const siteStr = e.assignedSite ? ` · ${e.assignedSite}` : '';
+              return `• **${e.name || 'Unnamed'}** — ${status} (${type}${siteStr})`;
+            })
+            .join('\n')
+        );
       }
-      if (text.includes('assignment') || text.includes('active')) {
+
+      // 3. On Site inquiry
+      if (text.includes('on site') || text.includes('onsite')) {
+        if (employees.length === 0) return '👥 No employee records found in the database.';
+        const onSite = employees.filter(
+          e => isEmployeeOnline(e) && (e.status === 'On Site' || e.geofenceStatus === 'Inside Assigned Site')
+        );
+        if (onSite.length === 0) return '📍 **No employees are currently verified On Site.**';
+        return (
+          `📍 **${onSite.length} employee(s) currently On Site:**\n\n` +
+          onSite.map(e => `• **${e.name || 'Unnamed'}** ${e.assignedSite ? `(@ ${e.assignedSite})` : ''}`).join('\n')
+        );
+      }
+
+      // 4. Assignments inquiry
+      if (text.includes('assignment') || text.includes('task') || text.includes('schedule')) {
+        if (assignments.length === 0) return '📋 No assignments recorded in the database.';
         const active = assignments.filter(a => a.status === 'Active');
         if (active.length === 0) return '📋 No active assignments right now.';
-        return `📋 **${active.length} active assignment(s):**\n${active.map(a => `• ${a.empName || a.employeeName} → ${a.site || a.siteName}`).join('\n')}`;
+        return (
+          `📋 **${active.length} active assignment(s):**\n\n` +
+          active.map(a => `• **${a.empName || a.employeeName || 'Staff'}** → ${a.site || a.siteName || a.assignedSite || 'Assigned Site'}`).join('\n')
+        );
       }
-      if (text.includes('attendance')) {
+
+      // 5. Attendance inquiry
+      if (text.includes('attendance') || text.includes('present') || text.includes('check in') || text.includes('time in')) {
         if (attendance.length === 0) return '📊 No attendance recorded yet today.';
-        return `📊 **Today's Attendance (${attendance.length}):**\n${attendance.slice(0, 8).map(a => `• ${a.employee_name || a.employeeName} — In: ${a.check_in || a.checkIn || '—'}`).join('\n')}`;
+        return (
+          `📊 **Today's Attendance (${attendance.length} record${attendance.length > 1 ? 's' : ''}):**\n\n` +
+          attendance.slice(0, 8).map(a => `• **${a.employee_name || a.employeeName || 'Staff'}** — In: ${a.check_in || a.checkIn || '—'}${a.site || a.site_name ? ` (@ ${a.site || a.site_name})` : ''}`).join('\n')
+        );
       }
-      return "I can help with:\n• 'Who is on site?'\n• 'Who is offline?'\n• 'Active assignments'\n• 'Attendance today'";
+
+      // 6. Registered Sites inquiry
+      if (text.includes('site') || text.includes('geofence')) {
+        if (sites.length === 0) return '🗺️ No registered sites found in the database.';
+        return (
+          `🗺️ **${sites.length} Registered Site(s):**\n\n` +
+          sites.map(s => `• **${s.name || 'Site'}** — Radius: ${s.radius || 100}m (${s.address || 'Geo-boundary active'})`).join('\n')
+        );
+      }
+
+      // 7. Recent activity logs inquiry
+      if (text.includes('log') || text.includes('recent') || text.includes('activity')) {
+        if (logs.length === 0) return '📝 No activity logs recorded yet.';
+        return (
+          `📝 **Recent Activity Logs:**\n\n` +
+          logs.slice(0, 5).map(l => `• **${l.action || l.type || 'Activity'}** — ${l.user || l.userName || l.employeeName || 'System'}${l.details ? ` (${l.details})` : ''}`).join('\n')
+        );
+      }
+
+      // 8. Delays / Incidents inquiry
+      if (text.includes('delay') || text.includes('incident') || text.includes('roadblock')) {
+        if (delays.length === 0) return '✅ No delay or roadblock incident reports pending.';
+        return (
+          `⚠️ **${delays.length} Delay/Incident Report(s):**\n\n` +
+          delays.slice(0, 5).map(d => `• **${d.type || d.reason || 'Incident'}** by ${d.employeeName || d.empName || 'Staff'} — ${d.status || 'Pending'}`).join('\n')
+        );
+      }
+
+      return (
+        "I can help with:\n" +
+        "• 'Who is offline?'\n" +
+        "• 'Who is online?'\n" +
+        "• 'Who is on site?'\n" +
+        "• 'Active assignments'\n" +
+        "• 'Attendance today'\n" +
+        "• 'Recent activity logs'\n" +
+        "• 'Registered sites'"
+      );
     } catch (e) {
+      console.error(e);
       return '⚠️ Error processing request.';
     }
   };

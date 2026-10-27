@@ -844,10 +844,10 @@ export default function Employees() {
 
                 <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 6, marginTop: 8 }}>
                   {[
-                    { label: 'On Site', count: employees.filter(e => e.status === 'On Site').length, color: '#10B981' },
-                    { label: 'On Duty', count: employees.filter(e => e.status === 'On Duty').length, color: '#3B82F6' },
-                    { label: 'In Transit', count: employees.filter(e => e.status === 'In Transit').length, color: '#F59E0B' },
-                    { label: 'Offline', count: employees.filter(e => e.status === 'Offline').length, color: '#6B7280' },
+                    { label: 'On Site', count: employees.filter(e => getEmployeeStatus(e) === 'On Site').length, color: '#10B981' },
+                    { label: 'On Duty', count: employees.filter(e => ['On Duty', 'Online'].includes(getEmployeeStatus(e))).length, color: '#3B82F6' },
+                    { label: 'In Transit', count: employees.filter(e => getEmployeeStatus(e) === 'In Transit').length, color: '#F59E0B' },
+                    { label: 'Offline', count: employees.filter(e => getEmployeeStatus(e) === 'Offline').length, color: '#6B7280' },
                   ].map(s => (
                     <div key={s.label} style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', background: '#F8FAFC', padding: '5px 8px', borderRadius: 6 }}>
                       <div style={{ display: 'flex', alignItems: 'center', gap: 5, fontSize: 10, color: '#475569', fontWeight: 600 }}>

@@ -2,7 +2,43 @@ import React, { useState, useRef, useEffect } from 'react';
 import { Bot, Send, User, BarChart2, Users, MapPin, Clock, AlertCircle } from 'lucide-react';
 import { db, collection, onSnapshot, query } from '../firebase';
 
+function isEmployeeOnline(emp) {
+  if (!emp) return false;
+  if (emp.isOnline === false) return false;
+
+  const rawTime = emp.lastActive || emp.lastHeartbeat || emp.lastSeen;
+  if (rawTime) {
+    const ts = typeof rawTime === 'number'
+      ? rawTime
+      : (rawTime?.toDate ? rawTime.toDate().getTime() : new Date(rawTime).getTime());
+    if (ts && !isNaN(ts)) {
+      return (Date.now() - ts) <= 120000;
+    }
+  }
+
+  if (emp.isOnline === true) {
+    if (emp.lastLogin) {
+      const loginTs = new Date(emp.lastLogin).getTime();
+      if (loginTs && !isNaN(loginTs)) {
+        return (Date.now() - loginTs) <= 120000;
+      }
+    }
+    return true;
+  }
+
+  return false;
+}
+
+function resolveEmployeeStatus(emp) {
+  if (!isEmployeeOnline(emp)) return 'Offline';
+  if (emp.status === 'On Site' || emp.geofenceStatus === 'Inside Assigned Site') return 'On Site';
+  if (emp.status === 'In Transit') return 'In Transit';
+  return (emp.status && emp.status !== 'Offline') ? emp.status : 'On Duty';
+}
+
 const QUICK_PROMPTS = [
+  { label: '🔴 Offline employees', query: 'who is offline' },
+  { label: '🟢 Online workforce', query: 'who is online' },
   { label: '👥 Employees on site', query: 'how many employees are on site' },
   { label: '📋 Active assignments', query: 'show active assignments' },
   { label: '📊 Attendance today', query: 'show attendance today' },
@@ -20,7 +56,7 @@ export default function AIAssistant() {
   const [messages, setMessages] = useState([
     {
       id: '1',
-      text: '👋 Hello, Admin! I\'m your **SubAi Assistant**. I have full access to your live database. Ask me anything!\n\n**Try:**\n• "Who is offline today?"\n• "How many employees are on site?"\n• "Show active assignments"\n• "Which sites are registered?"',
+      text: '👋 Hello, Admin! I\'m your **SubAi Assistant**. I have full access to your live database. Ask me anything!\n\n**Try:**\n• "Who is offline today?"\n• "Who is online?"\n• "How many employees are on site?"\n• "Show active assignments"\n• "Which sites are registered?"',
       sender: 'bot',
       time: new Date()
     }
@@ -31,11 +67,11 @@ export default function AIAssistant() {
 
   useEffect(() => {
     try {
-      const unsubE = onSnapshot(query(collection(db, 'employees')), s => setEmployees(s.docs.map(d => d.data())));
-      const unsubA = onSnapshot(query(collection(db, 'Assignments')), s => setAssignments(s.docs.map(d => d.data())));
-      const unsubAtt = onSnapshot(query(collection(db, 'attendance')), s => setAttendance(s.docs.map(d => d.data())));
-      const unsubS = onSnapshot(query(collection(db, 'Sites')), s => setSites(s.docs.map(d => d.data())));
-      const unsubL = onSnapshot(query(collection(db, 'tracking_logs')), s => setLogs(s.docs.map(d => d.data())));
+      const unsubE = onSnapshot(query(collection(db, 'employees')), s => setEmployees(s.docs.map(d => ({ id: d.id, ...d.data() }))));
+      const unsubA = onSnapshot(query(collection(db, 'Assignments')), s => setAssignments(s.docs.map(d => ({ id: d.id, ...d.data() }))));
+      const unsubAtt = onSnapshot(query(collection(db, 'attendance')), s => setAttendance(s.docs.map(d => ({ id: d.id, ...d.data() }))));
+      const unsubS = onSnapshot(query(collection(db, 'Sites')), s => setSites(s.docs.map(d => ({ id: d.id, ...d.data() }))));
+      const unsubL = onSnapshot(query(collection(db, 'ActivityLogs')), s => setLogs(s.docs.map(d => ({ id: d.id, ...d.data() }))));
       return () => { unsubE(); unsubA(); unsubAtt(); unsubS(); unsubL(); };
     } catch (e) {}
   }, []);
@@ -54,48 +90,117 @@ export default function AIAssistant() {
     setIsTyping(true);
 
     setTimeout(() => {
-      const response = processAdminQuery(text.toLowerCase());
+      const response = processAdminQuery(text);
       setMessages(prev => [...prev, { id: (Date.now() + 1).toString(), text: response, sender: 'bot', time: new Date() }]);
       setIsTyping(false);
-    }, 900);
+    }, 700);
   };
 
-  const processAdminQuery = (text) => {
+  const processAdminQuery = (rawText) => {
     try {
-      if (text.includes('on site') || text.includes('how many')) {
-        const onSite = employees.filter(e => e.status === 'On Site');
-        if (onSite.length === 0) return '📍 No employees are currently on site.';
-        return `📍 **${onSite.length} employee(s)** currently On Site:\n\n${onSite.map(e => `• ${e.name}`).join('\n')}`;
+      const text = rawText.toLowerCase().trim();
+
+      // 1. Offline / Absent
+      if (
+        text.includes('offline') ||
+        text.includes('absent') ||
+        text.includes('not active') ||
+        text.includes('inactive') ||
+        text.includes('who is not here')
+      ) {
+        if (employees.length === 0) return '👥 No employee records found in the database.';
+        const offline = employees.filter(e => !isEmployeeOnline(e));
+        if (offline.length === 0) return `✅ **All ${employees.length} employees are currently active & online!**`;
+        return (
+          `🔴 **${offline.length} of ${employees.length} Employee(s) Offline/Inactive:**\n\n` +
+          offline.map(e => `• **${e.name || 'Unnamed'}** — Offline (${e.workType === 'Mobile Field Employee' ? 'Mobile Field' : 'Fixed Site'})`).join('\n')
+        );
       }
 
-      if (text.includes('absent') || text.includes('offline')) {
-        const offline = employees.filter(e => e.status === 'Offline' || !e.status);
-        if (offline.length === 0) return '✅ All employees are currently active!';
-        return `🔴 **${offline.length} offline/absent employee(s):**\n\n${offline.map(e => `• ${e.name}`).join('\n')}`;
+      // 2. Online / Active / Working
+      if (
+        text.includes('online') ||
+        text.includes('on duty') ||
+        text.includes('who is active') ||
+        text.includes('active employee') ||
+        text.includes('active workforce') ||
+        text === 'active' ||
+        text.includes('who is working')
+      ) {
+        if (employees.length === 0) return '👥 No employee records found in the database.';
+        const online = employees.filter(isEmployeeOnline);
+        if (online.length === 0) {
+          return `⚠️ **0 employees currently online.**\nAll ${employees.length} registered employee(s) are currently offline/inactive.`;
+        }
+        return (
+          `🟢 **${online.length} of ${employees.length} Employee(s) Currently Online:**\n\n` +
+          online.map(e => {
+            const status = resolveEmployeeStatus(e);
+            const type = e.workType === 'Mobile Field Employee' ? 'Mobile Field' : 'Fixed Site';
+            const siteStr = e.assignedSite ? ` · ${e.assignedSite}` : '';
+            return `• **${e.name || 'Unnamed'}** — ${status} (${type}${siteStr})`;
+          }).join('\n')
+        );
       }
 
-      if (text.includes('assignment') || text.includes('active')) {
+      // 3. On Site
+      if (text.includes('on site') || text.includes('onsite')) {
+        if (employees.length === 0) return '👥 No employee records found in the database.';
+        const onSite = employees.filter(e => isEmployeeOnline(e) && (e.status === 'On Site' || e.geofenceStatus === 'Inside Assigned Site'));
+        if (onSite.length === 0) return '📍 **No employees are currently verified On Site.**';
+        return (
+          `📍 **${onSite.length} employee(s)** currently On Site:\n\n` +
+          onSite.map(e => `• **${e.name || 'Unnamed'}** ${e.assignedSite ? `(@ ${e.assignedSite})` : ''}`).join('\n')
+        );
+      }
+
+      // 4. Assignments
+      if (text.includes('assignment') || text.includes('task') || text.includes('schedule')) {
+        if (assignments.length === 0) return '📋 No assignments recorded in the database.';
         const active = assignments.filter(a => a.status === 'Active');
         if (active.length === 0) return '📋 No active assignments right now.';
-        return `📋 **${active.length} active assignment(s):**\n\n${active.map(a => `• **${a.empName || a.employeeName}** → ${a.site || a.siteName}`).join('\n')}`;
+        return (
+          `📋 **${active.length} active assignment(s):**\n\n` +
+          active.map(a => `• **${a.empName || a.employeeName || 'Staff'}** → ${a.site || a.siteName || a.assignedSite || 'Assigned Site'}`).join('\n')
+        );
       }
 
-      if (text.includes('attendance')) {
+      // 5. Attendance
+      if (text.includes('attendance') || text.includes('present') || text.includes('check in') || text.includes('time in')) {
         if (attendance.length === 0) return '📊 No attendance recorded yet today.';
-        return `📊 **Today's Attendance (${attendance.length} records):**\n\n${attendance.slice(0, 10).map(a => `• **${a.employee_name || a.employeeName}** — In: ${a.check_in || a.checkIn || '—'}`).join('\n')}`;
+        return (
+          `📊 **Today's Attendance (${attendance.length} records):**\n\n` +
+          attendance.slice(0, 10).map(a => `• **${a.employee_name || a.employeeName || 'Staff'}** — In: ${a.check_in || a.checkIn || '—'}${a.site || a.site_name ? ` (@ ${a.site || a.site_name})` : ''}`).join('\n')
+        );
       }
 
-      if (text.includes('site')) {
-        if (sites.length === 0) return '🗺️ No sites registered yet.';
-        return `🗺️ **${sites.length} registered site(s):**\n\n${sites.map(s => `• **${s.name}** — ${s.address || 'No address'}`).join('\n')}`;
+      // 6. Registered Sites
+      if (text.includes('site') || text.includes('geofence')) {
+        if (sites.length === 0) return '🗺️ No registered sites found in the database.';
+        return (
+          `🗺️ **${sites.length} registered site(s):**\n\n` +
+          sites.map(s => `• **${s.name || 'Site'}** — Radius: ${s.radius || 100}m (${s.address || 'Geo-boundary active'})`).join('\n')
+        );
       }
 
+      // 7. Recent logs
       if (text.includes('log') || text.includes('recent') || text.includes('activity')) {
         if (logs.length === 0) return '📝 No activity logs recorded yet.';
-        return `📝 **5 Most Recent Activity Logs:**\n\n${logs.slice(0, 5).map(l => `• **${l.action || l.type || 'Activity'}** by ${l.user || l.employeeName || 'System'}`).join('\n')}`;
+        return (
+          `📝 **Recent Activity Logs:**\n\n` +
+          logs.slice(0, 5).map(l => `• **${l.action || l.type || 'Activity'}** by ${l.user || l.userName || l.employeeName || 'System'}${l.details ? ` (${l.details})` : ''}`).join('\n')
+        );
       }
 
-      return "🤔 I didn't quite understand that. Try asking:\n\n• \"Who is on site?\"\n• \"Show absent employees\"\n• \"How many active assignments?\"\n• \"Show attendance today\"\n• \"Show registered sites\"";
+      return (
+        "🤔 I didn't quite understand that. Try asking:\n\n" +
+        "• \"Who is offline?\"\n" +
+        "• \"Who is online?\"\n" +
+        "• \"Who is on site?\"\n" +
+        "• \"Show active assignments\"\n" +
+        "• \"Show attendance today\"\n" +
+        "• \"Show registered sites\""
+      );
     } catch (e) {
       console.error(e);
       return '⚠️ An error occurred while processing your request.';
