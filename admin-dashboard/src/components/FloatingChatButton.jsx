@@ -1,13 +1,12 @@
 import React, { useState, useRef, useEffect } from 'react';
 import { useLocation } from 'react-router-dom';
 import { MessageSquare, X, Bot, Send, User, Minimize2 } from 'lucide-react';
-import { MOCK_EMPLOYEES, MOCK_ATTENDANCE, MOCK_ASSIGNMENTS, MOCK_SITES, MOCK_ACTIVITY_LOGS } from '../mockData';
 import chatbotIcon from '../assets/chatbot.png';
+import { db, collection, onSnapshot, query } from '../firebase';
 
 const QUICK_PROMPTS = [
   'Who is on site?',
-  'Who is absent?',
-  'Who is late today?',
+  'Who is offline?',
   'Active assignments',
   'Attendance today',
   'Recent activity logs',
@@ -15,6 +14,9 @@ const QUICK_PROMPTS = [
 
 export default function FloatingChatButton() {
   const [open, setOpen] = useState(false);
+  const [employees, setEmployees] = useState([]);
+  const [assignments, setAssignments] = useState([]);
+  const [attendance, setAttendance] = useState([]);
   const [messages, setMessages] = useState([
     {
       id: '1',
@@ -31,12 +33,27 @@ export default function FloatingChatButton() {
   const location = useLocation();
 
   useEffect(() => {
+    try {
+      const unsubE = onSnapshot(query(collection(db, 'employees')), (s) => setEmployees(s.docs.map(d => d.data())));
+      const unsubA = onSnapshot(query(collection(db, 'Assignments')), (s) => setAssignments(s.docs.map(d => d.data())));
+      const unsubAtt = onSnapshot(query(collection(db, 'attendance')), (s) => setAttendance(s.docs.map(d => d.data())));
+      return () => { unsubE(); unsubA(); unsubAtt(); };
+    } catch (e) {}
+  }, []);
+
+  useEffect(() => {
     if (scrollRef.current) {
       scrollRef.current.scrollTop = scrollRef.current.scrollHeight;
     }
   }, [messages]);
 
   useEffect(() => { setOpen(false); }, [location.pathname]);
+
+  useEffect(() => {
+    const handleOpenChat = () => setOpen(true);
+    window.addEventListener('subai_open_chat', handleOpenChat);
+    return () => window.removeEventListener('subai_open_chat', handleOpenChat);
+  }, []);
 
   const sendMessage = async (text = inputText) => {
     if (!text.trim()) return;
@@ -49,39 +66,31 @@ export default function FloatingChatButton() {
       const response = processAdminQuery(text.toLowerCase());
       setMessages(prev => [...prev, { id: (Date.now() + 1).toString(), text: response, sender: 'bot', time: new Date() }]);
       setIsTyping(false);
-    }, 1100);
+    }, 800);
   };
 
   const processAdminQuery = (text) => {
     try {
       if (text.includes('on site') || text.includes('how many')) {
-        const onSite = MOCK_EMPLOYEES.filter(e => e.status === 'On Site');
+        const onSite = employees.filter(e => e.status === 'On Site');
         if (onSite.length === 0) return '📍 No employees are currently on site.';
         return `📍 **${onSite.length} employee(s) On Site:**\n${onSite.map(e => `• ${e.name}`).join('\n')}`;
       }
       if (text.includes('absent') || text.includes('offline')) {
-        const offline = MOCK_EMPLOYEES.filter(e => e.status === 'Offline');
+        const offline = employees.filter(e => e.status === 'Offline' || !e.status);
         if (offline.length === 0) return '✅ All employees are currently active!';
         return `🔴 **${offline.length} Offline/Absent:**\n${offline.map(e => `• ${e.name}`).join('\n')}`;
       }
-      if (text.includes('late')) {
-        return '⏰ **2 late today:**\n• Roberto Diaz (08:45 AM)\n• Carlos Tan (09:15 AM)';
-      }
       if (text.includes('assignment') || text.includes('active')) {
-        const active = MOCK_ASSIGNMENTS.filter(a => a.status === 'Active');
+        const active = assignments.filter(a => a.status === 'Active');
         if (active.length === 0) return '📋 No active assignments right now.';
-        return `📋 **${active.length} active assignment(s):**\n${active.map(a => `• ${a.empName} → ${a.site}`).join('\n')}`;
+        return `📋 **${active.length} active assignment(s):**\n${active.map(a => `• ${a.empName || a.employeeName} → ${a.site || a.siteName}`).join('\n')}`;
       }
       if (text.includes('attendance')) {
-        return `📊 **Today's Attendance (${MOCK_ATTENDANCE.length}):**\n${MOCK_ATTENDANCE.slice(0, 8).map(a => `• ${a.employee_name} — In: ${a.check_in}`).join('\n')}`;
+        if (attendance.length === 0) return '📊 No attendance recorded yet today.';
+        return `📊 **Today's Attendance (${attendance.length}):**\n${attendance.slice(0, 8).map(a => `• ${a.employee_name || a.employeeName} — In: ${a.check_in || a.checkIn || '—'}`).join('\n')}`;
       }
-      if (text.includes('log') || text.includes('recent') || text.includes('activity')) {
-        return `📝 **Recent Logs:**\n${MOCK_ACTIVITY_LOGS.slice(0, 5).map(l => `• ${l.action} at ${l.time}`).join('\n')}`;
-      }
-      if (text.includes('site')) {
-        return `🗺️ **${MOCK_SITES.length} Site(s):**\n${MOCK_SITES.map(s => `• ${s.name}`).join('\n')}`;
-      }
-      return "I can help with:\n• 'Who is on site?'\n• 'Who is absent?'\n• 'Who is late today?'\n• 'Active assignments'\n• 'Attendance today'\n• 'Recent logs'";
+      return "I can help with:\n• 'Who is on site?'\n• 'Who is offline?'\n• 'Active assignments'\n• 'Attendance today'";
     } catch (e) {
       return '⚠️ Error processing request.';
     }
@@ -112,7 +121,7 @@ export default function FloatingChatButton() {
               <div style={{ color: 'white', fontWeight: 700, fontSize: 14 }}>GeoStride AI</div>
               <div style={{ color: 'rgba(255,255,255,0.7)', fontSize: 11, display: 'flex', alignItems: 'center', gap: 4 }}>
                 <span style={{ width: 5, height: 5, borderRadius: '50%', background: '#4ADE80', display: 'inline-block' }} />
-                Online · Demo Mode
+                Online · Live Database
               </div>
             </div>
             <button onClick={() => setOpen(false)} style={{ border: 'none', background: 'rgba(255,255,255,0.15)', borderRadius: 8, padding: 6, cursor: 'pointer', display: 'flex' }}>
@@ -161,7 +170,7 @@ export default function FloatingChatButton() {
           </div>
 
           <div style={{ padding: '8px 14px 4px', display: 'flex', gap: 6, flexWrap: 'nowrap', overflowX: 'auto' }}>
-            {QUICK_PROMPTS.slice(0,4).map((p, i) => (
+            {QUICK_PROMPTS.map((p, i) => (
               <button key={i} onClick={() => sendMessage(p)} style={{ whiteSpace: 'nowrap', fontSize: 11, fontWeight: 600, color: '#4F46E5', background: '#EEF2FF', border: '1px solid #C7D2FE', borderRadius: 20, padding: '4px 10px', cursor: 'pointer' }}>
                 {p}
               </button>
@@ -211,25 +220,6 @@ export default function FloatingChatButton() {
           <img src={chatbotIcon} alt="Chatbot" style={{ width: '100%', height: '100%', objectFit: 'contain' }} />
         </button>
       </div>
-
-      <style>{`
-        @keyframes slideUp {
-          from { opacity: 0; transform: translateY(20px) scale(0.96); }
-          to   { opacity: 1; transform: translateY(0) scale(1); }
-        }
-        @keyframes floatIcon {
-          0%, 100% { transform: translateY(0); }
-          50% { transform: translateY(-8px); }
-        }
-        @keyframes fadeIn {
-          from { opacity: 0; transform: translateY(4px); }
-          to   { opacity: 1; transform: translateY(0); }
-        }
-        @keyframes bounce {
-          0%, 80%, 100% { transform: translateY(0); }
-          40% { transform: translateY(-5px); }
-        }
-      `}</style>
     </>
   );
 }

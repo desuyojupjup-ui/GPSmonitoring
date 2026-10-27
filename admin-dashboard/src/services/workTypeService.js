@@ -54,7 +54,7 @@ export async function updateEmployeeWorkType(employeeId, workType, config = {}) 
 
   if (workType === 'Fixed Site Employee') {
     patch.assignedSite         = config.assignedSite    ?? null;
-    patch.geofenceRadius       = config.geofenceRadius  ?? 100;
+    patch.geofenceRadius       = config.geofenceRadius  ?? 20;
     patch.assignedRoute        = null;
     patch.assignedDestinations = [];
   } else {
@@ -399,7 +399,7 @@ export function applySmartGeofence(employee, site, currentLat, currentLng) {
 
   // Fixed Site
   if (!site) return { monitoring: 'none' };
-  const radius = employee.geofenceRadius ?? 100;
+  const radius = employee.geofenceRadius ?? (typeof site.radius === 'number' ? site.radius : (parseInt(site.radius) || 20));
   const inside = isInsideGeofence(currentLat, currentLng, site.lat, site.lng, radius);
 
   return {

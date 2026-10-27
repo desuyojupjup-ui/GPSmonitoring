@@ -1,21 +1,26 @@
 import React, { useState, useRef, useEffect } from 'react';
-import { Bot, Send, User, Mic, Paperclip, BarChart2, Users, MapPin, Clock, AlertCircle } from 'lucide-react';
-import { AI_RESPONSES, MOCK_EMPLOYEES, MOCK_ATTENDANCE, MOCK_ASSIGNMENTS, MOCK_SITES, MOCK_ACTIVITY_LOGS } from '../mockData';
+import { Bot, Send, User, BarChart2, Users, MapPin, Clock, AlertCircle } from 'lucide-react';
+import { db, collection, onSnapshot, query } from '../firebase';
 
 const QUICK_PROMPTS = [
   { label: '👥 Employees on site', query: 'how many employees are on site' },
   { label: '📋 Active assignments', query: 'show active assignments' },
-  { label: '⏰ Late today', query: 'who is late today' },
   { label: '📊 Attendance today', query: 'show attendance today' },
-  { label: '🗺️ Site activity', query: 'show site activity' },
+  { label: '🗺️ Registered sites', query: 'show registered sites' },
   { label: '📝 Recent logs', query: 'show recent activity logs' },
 ];
 
 export default function AIAssistant() {
+  const [employees, setEmployees] = useState([]);
+  const [assignments, setAssignments] = useState([]);
+  const [attendance, setAttendance] = useState([]);
+  const [sites, setSites] = useState([]);
+  const [logs, setLogs] = useState([]);
+
   const [messages, setMessages] = useState([
     {
       id: '1',
-      text: '👋 Hello, Admin! I\'m your **GeoStride AI Assistant**. I have full access to your workforce data. Ask me anything!\n\n**Try:**\n• "Who is absent today?"\n• "How many employees are on site?"\n• "Show late employees"\n• "Which site has the most activity?"',
+      text: '👋 Hello, Admin! I\'m your **GeoStride AI Assistant**. I have full access to your live database. Ask me anything!\n\n**Try:**\n• "Who is offline today?"\n• "How many employees are on site?"\n• "Show active assignments"\n• "Which sites are registered?"',
       sender: 'bot',
       time: new Date()
     }
@@ -23,6 +28,17 @@ export default function AIAssistant() {
   const [inputText, setInputText] = useState('');
   const [isTyping, setIsTyping] = useState(false);
   const scrollRef = useRef();
+
+  useEffect(() => {
+    try {
+      const unsubE = onSnapshot(query(collection(db, 'employees')), s => setEmployees(s.docs.map(d => d.data())));
+      const unsubA = onSnapshot(query(collection(db, 'Assignments')), s => setAssignments(s.docs.map(d => d.data())));
+      const unsubAtt = onSnapshot(query(collection(db, 'attendance')), s => setAttendance(s.docs.map(d => d.data())));
+      const unsubS = onSnapshot(query(collection(db, 'Sites')), s => setSites(s.docs.map(d => d.data())));
+      const unsubL = onSnapshot(query(collection(db, 'tracking_logs')), s => setLogs(s.docs.map(d => d.data())));
+      return () => { unsubE(); unsubA(); unsubAtt(); unsubS(); unsubL(); };
+    } catch (e) {}
+  }, []);
 
   useEffect(() => {
     if (scrollRef.current) {
@@ -41,51 +57,45 @@ export default function AIAssistant() {
       const response = processAdminQuery(text.toLowerCase());
       setMessages(prev => [...prev, { id: (Date.now() + 1).toString(), text: response, sender: 'bot', time: new Date() }]);
       setIsTyping(false);
-    }, 1200);
+    }, 900);
   };
 
   const processAdminQuery = (text) => {
     try {
       if (text.includes('on site') || text.includes('how many')) {
-        const onSite = MOCK_EMPLOYEES.filter(e => e.status === 'On Site');
+        const onSite = employees.filter(e => e.status === 'On Site');
         if (onSite.length === 0) return '📍 No employees are currently on site.';
         return `📍 **${onSite.length} employee(s)** currently On Site:\n\n${onSite.map(e => `• ${e.name}`).join('\n')}`;
       }
 
       if (text.includes('absent') || text.includes('offline')) {
-        const offline = MOCK_EMPLOYEES.filter(e => e.status === 'Offline');
+        const offline = employees.filter(e => e.status === 'Offline' || !e.status);
         if (offline.length === 0) return '✅ All employees are currently active!';
         return `🔴 **${offline.length} offline/absent employee(s):**\n\n${offline.map(e => `• ${e.name}`).join('\n')}`;
       }
 
       if (text.includes('assignment') || text.includes('active')) {
-        const active = MOCK_ASSIGNMENTS.filter(a => a.status === 'Active');
+        const active = assignments.filter(a => a.status === 'Active');
         if (active.length === 0) return '📋 No active assignments right now.';
-        return `📋 **${active.length} active assignment(s):**\n\n${active.map(a => `• **${a.empName}** → ${a.site} (${a.shift || 'N/A'})`).join('\n')}`;
-      }
-
-      if (text.includes('late')) {
-        return '⏰ **2 late employee(s) today:**\n\n• **Roberto Diaz** – arrived at 08:45 AM\n• **Carlos Tan** – arrived at 09:15 AM';
+        return `📋 **${active.length} active assignment(s):**\n\n${active.map(a => `• **${a.empName || a.employeeName}** → ${a.site || a.siteName}`).join('\n')}`;
       }
 
       if (text.includes('attendance')) {
-        return `📊 **Today's Attendance (${MOCK_ATTENDANCE.length} records):**\n\n${MOCK_ATTENDANCE.slice(0, 10).map(a => `• **${a.employee_name}** — In: ${a.check_in}, Out: ${a.check_out}`).join('\n')}`;
+        if (attendance.length === 0) return '📊 No attendance recorded yet today.';
+        return `📊 **Today's Attendance (${attendance.length} records):**\n\n${attendance.slice(0, 10).map(a => `• **${a.employee_name || a.employeeName}** — In: ${a.check_in || a.checkIn || '—'}`).join('\n')}`;
       }
 
       if (text.includes('site')) {
-        return `🗺️ **${MOCK_SITES.length} registered site(s):**\n\n${MOCK_SITES.map(s => `• **${s.name}** — ${s.address || 'No address'}`).join('\n')}`;
+        if (sites.length === 0) return '🗺️ No sites registered yet.';
+        return `🗺️ **${sites.length} registered site(s):**\n\n${sites.map(s => `• **${s.name}** — ${s.address || 'No address'}`).join('\n')}`;
       }
 
       if (text.includes('log') || text.includes('recent') || text.includes('activity')) {
-        return `📝 **5 Most Recent Activity Logs:**\n\n${MOCK_ACTIVITY_LOGS.slice(0, 5).map(l => `• **${l.action}** by ${l.user} at ${l.time}`).join('\n')}`;
+        if (logs.length === 0) return '📝 No activity logs recorded yet.';
+        return `📝 **5 Most Recent Activity Logs:**\n\n${logs.slice(0, 5).map(l => `• **${l.action || l.type || 'Activity'}** by ${l.user || l.employeeName || 'System'}`).join('\n')}`;
       }
 
-      if (text.includes('where') || text.includes('location') || text.includes('gps')) {
-        const activeLoc = MOCK_EMPLOYEES.filter(e => e.status !== 'Offline');
-        return `📡 **Latest GPS Activity:**\n\n${activeLoc.map(e => `• **${e.name}** — Last seen at just now`).join('\n')}`;
-      }
-
-      return "🤔 I didn't quite understand that. Try asking:\n\n• \"Who is on site?\"\n• \"Show absent employees\"\n• \"How many active assignments?\"\n• \"Who is late today?\"\n• \"Show attendance today\"\n• \"Show recent activity logs\"";
+      return "🤔 I didn't quite understand that. Try asking:\n\n• \"Who is on site?\"\n• \"Show absent employees\"\n• \"How many active assignments?\"\n• \"Show attendance today\"\n• \"Show registered sites\"";
     } catch (e) {
       console.error(e);
       return '⚠️ An error occurred while processing your request.';
@@ -116,7 +126,7 @@ export default function AIAssistant() {
               <div style={{ color: 'white', fontWeight: 700, fontSize: 16 }}>GeoStride AI Assistant</div>
               <div style={{ color: 'rgba(255,255,255,0.75)', fontSize: 12, display: 'flex', alignItems: 'center', gap: 4 }}>
                 <span style={{ width: 6, height: 6, borderRadius: '50%', background: '#4ADE80', display: 'inline-block' }} />
-                Online · Demo Mode
+                Online · Live Database Connected
               </div>
             </div>
           </div>
@@ -192,41 +202,14 @@ export default function AIAssistant() {
               {QUICK_PROMPTS.map((p, i) => (
                 <button key={i} onClick={() => sendMessage(p.query)} style={{ textAlign: 'left', padding: '10px 14px', border: '1px solid #E5E7EB', borderRadius: 10, background: '#FAFAFA', cursor: 'pointer', fontSize: 13, color: '#374151', fontWeight: 500, transition: 'all 0.15s' }}
                   onMouseEnter={e => { e.currentTarget.style.background = '#EEF2FF'; e.currentTarget.style.borderColor = '#C7D2FE'; }}
-                  onMouseLeave={e => { e.currentTarget.style.background = '#FAFAFA'; e.currentTarget.style.borderColor = '#E5E7EB'; }}>
+                  onMouseLeave={e => { e.currentTarget.style.background = '#FAFAFA'; e.currentTarget.style.borderColor = '#E5E5E5'; }}>
                   {p.label}
                 </button>
               ))}
             </div>
           </div>
-
-          <div className="widget" style={{ padding: 20 }}>
-            <div style={{ fontSize: 13, fontWeight: 700, color: '#111827', marginBottom: 14 }}>🤖 Capabilities</div>
-            <div style={{ display: 'flex', flexDirection: 'column', gap: 12 }}>
-              {[
-                { icon: <Users size={14} />, label: 'Employee Status', color: '#4F46E5', bg: '#EEF2FF' },
-                { icon: <Clock size={14} />, label: 'Attendance Queries', color: '#10B981', bg: '#ECFDF5' },
-                { icon: <MapPin size={14} />, label: 'Site & GPS Info', color: '#F59E0B', bg: '#FEF3C7' },
-                { icon: <BarChart2 size={14} />, label: 'Assignment Reports', color: '#3B82F6', bg: '#DBEAFE' },
-                { icon: <AlertCircle size={14} />, label: 'Activity Logs', color: '#EF4444', bg: '#FEE2E2' },
-              ].map((cap, i) => (
-                <div key={i} style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
-                  <div style={{ width: 28, height: 28, borderRadius: 8, background: cap.bg, color: cap.color, display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
-                    {cap.icon}
-                  </div>
-                  <span style={{ fontSize: 13, color: '#4B5563', fontWeight: 500 }}>{cap.label}</span>
-                </div>
-              ))}
-            </div>
-          </div>
         </div>
       </div>
-
-      <style>{`
-        @keyframes bounce {
-          0%, 80%, 100% { transform: translateY(0); }
-          40% { transform: translateY(-6px); }
-        }
-      `}</style>
     </div>
   );
 }

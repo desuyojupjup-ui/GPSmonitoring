@@ -1,9 +1,82 @@
-import React, { useState } from 'react';
-import { Search, Plus, Edit2, Trash2, X, Maximize, Download, UserCheck, Clock, AlertTriangle, UserX, MapPin, Navigation, Building2, Truck, ShieldAlert } from 'lucide-react';
+import React, { useState, useEffect } from 'react';
+import { useLocation } from 'react-router-dom';
+import { Search, Plus, Edit2, Trash2, X, Maximize, Download, UserCheck, Clock, AlertTriangle, UserX, MapPin, Navigation, Building2, Truck, ShieldAlert, Database, RefreshCw, Users, PieChart as PieIcon, BarChart3, Activity, UserPlus, User, Mail, Lock, IdCard, Briefcase, Shield, Sliders, Check, ChevronRight, ChevronLeft } from 'lucide-react';
 import Swal from 'sweetalert2';
-import { MOCK_EMPLOYEES, MOCK_SITES, generateId } from '../mockData';
+import { db, collection, onSnapshot, addDoc, updateDoc, deleteDoc, doc, query } from '../firebase';
+import { showToast, showConfirmDelete } from '../utils/toast';
+import { ResponsiveContainer, PieChart, Pie, Cell, BarChart, Bar, XAxis, YAxis, Tooltip, CartesianGrid } from 'recharts';
 
-const INIT_EMPLOYEES = MOCK_EMPLOYEES;
+const CustomPieTooltip = ({ active, payload }) => {
+  if (active && payload && payload.length) {
+    const data = payload[0];
+    return (
+      <div style={{
+        background: '#FFFFFF',
+        border: '1px solid #E2E8F0',
+        borderRadius: '10px',
+        padding: '8px 12px',
+        boxShadow: '0 10px 25px -5px rgba(0, 0, 0, 0.1)',
+        fontSize: '12px',
+        fontWeight: '600',
+        zIndex: 99
+      }}>
+        <div style={{ color: data.payload.color || '#0F172A', display: 'flex', alignItems: 'center', gap: '6px' }}>
+          <span style={{ width: 8, height: 8, borderRadius: '50%', background: data.payload.color }}></span>
+          {data.name}: <strong style={{ color: '#0F172A' }}>{data.value}</strong> ({data.payload.pct}%)
+        </div>
+      </div>
+    );
+  }
+  return null;
+};
+
+const CustomBarTooltip = ({ active, payload }) => {
+  if (active && payload && payload.length) {
+    const data = payload[0];
+    return (
+      <div style={{
+        background: '#FFFFFF',
+        border: '1px solid #E2E8F0',
+        borderRadius: '10px',
+        padding: '8px 12px',
+        boxShadow: '0 10px 25px -5px rgba(0, 0, 0, 0.1)',
+        fontSize: '12px',
+        fontWeight: '600',
+        zIndex: 99
+      }}>
+        <div style={{ color: data.payload.fill || '#0F172A', display: 'flex', alignItems: 'center', gap: '6px' }}>
+          <span style={{ width: 8, height: 8, borderRadius: '50%', background: data.payload.fill }}></span>
+          {data.payload.name}: <strong style={{ color: '#0F172A' }}>{data.value}</strong>
+        </div>
+      </div>
+    );
+  }
+  return null;
+};
+
+const CustomGeofenceTooltip = ({ active, payload }) => {
+  if (active && payload && payload.length) {
+    const data = payload[0];
+    return (
+      <div style={{
+        background: '#FFFFFF',
+        border: '1px solid #E2E8F0',
+        borderRadius: '10px',
+        padding: '8px 12px',
+        boxShadow: '0 10px 25px -5px rgba(0, 0, 0, 0.1)',
+        fontSize: '12px',
+        fontWeight: '600',
+        zIndex: 99
+      }}>
+        <div style={{ color: data.payload.color || '#0F172A', display: 'flex', alignItems: 'center', gap: '6px' }}>
+          <span style={{ width: 8, height: 8, borderRadius: '50%', background: data.payload.color }}></span>
+          {data.name}: <strong style={{ color: '#0F172A' }}>{data.value}</strong> ({data.payload.pct}%)
+        </div>
+      </div>
+    );
+  }
+  return null;
+};
 
 const STATUS_STYLE = {
   'On Site':    { background: '#D1FAE5', color: '#065F46', dot: '#10B981' },
@@ -11,6 +84,39 @@ const STATUS_STYLE = {
   'In Transit': { background: '#FEF3C7', color: '#92400E', dot: '#F59E0B' },
   'Offline':    { background: '#F3F4F6', color: '#374151', dot: '#9CA3AF' },
 };
+
+// Real-time Presence Evaluation (Active when heartbeat or online flag is fresh within 120s)
+export function isEmployeeOnline(emp) {
+  if (!emp) return false;
+  if (emp.isOnline === false) return false;
+
+  const rawTime = emp.lastActive || emp.lastHeartbeat || emp.lastSeen;
+  if (rawTime) {
+    const ts = typeof rawTime === 'number'
+      ? rawTime
+      : (rawTime?.toDate ? rawTime.toDate().getTime() : new Date(rawTime).getTime());
+    if (ts && !isNaN(ts)) {
+      return (Date.now() - ts) <= 120000; // 2 minutes active window
+    }
+  }
+
+  if (emp.isOnline === true) {
+    if (emp.lastLogin) {
+      const loginTs = new Date(emp.lastLogin).getTime();
+      if (loginTs && !isNaN(loginTs)) {
+        return (Date.now() - loginTs) <= 120000;
+      }
+    }
+    return true;
+  }
+
+  return false;
+}
+
+export function getEmployeeStatus(emp) {
+  if (!isEmployeeOnline(emp)) return 'Offline';
+  return (emp.status && emp.status !== 'Offline') ? emp.status : 'On Duty';
+}
 
 const WORK_TYPE_STYLE = {
   'Fixed Site Employee':   { bg: '#EDE9FE', color: '#5B21B6', icon: Building2 },
@@ -32,60 +138,224 @@ const EMPTY = {
 };
 
 export default function Employees() {
-  const [employees, setEmployees] = useState(INIT_EMPLOYEES);
-  const [search, setSearch]     = useState('');
-  const [wtFilter, setWtFilter] = useState('All');
-  const [modal, setModal]       = useState(false);
-  const [form, setForm]         = useState(EMPTY);
-  const [editId, setEditId]     = useState(null);
-  const [isSaving, setIsSaving] = useState(false);
+  // Start with empty array - NO hardcoded sample data pre-filled!
+  const [employees, setEmployees] = useState([]);
+  const [sites, setSites]         = useState([]);
+  const [loading, setLoading]     = useState(true);
+  const [search, setSearch]       = useState('');
+  const [wtFilter, setWtFilter]   = useState('All');
+  const [modal, setModal]         = useState(false);
+  const [form, setForm]           = useState(EMPTY);
+  const [editId, setEditId]       = useState(null);
+  const [isSaving, setIsSaving]   = useState(false);
+
+  // Pagination state
+  const [page, setPage]           = useState(1);
+  const [pageSize, setPageSize]   = useState(10);
+
+  // Bulk Selection state
+  const [selectedIds, setSelectedIds] = useState([]);
+
+  // Real-time Firestore query listener
+  useEffect(() => {
+    setLoading(true);
+    try {
+      const qEmp = query(collection(db, 'employees'));
+      const unsubEmp = onSnapshot(qEmp, (snapshot) => {
+        const liveData = snapshot.docs.map(d => ({ id: d.id, ...d.data() }));
+        const empByEmail = new Map();
+        liveData.forEach(item => {
+          if (!item) return;
+          const email = (item.email || item.empEmail || '').trim().toLowerCase();
+          const key = email || item.id;
+          if (!empByEmail.has(key)) {
+            empByEmail.set(key, item);
+          } else {
+            const existing = empByEmail.get(key);
+            // Always retain the canonical record with idNum / complete details
+            if (!existing.idNum && item.idNum) {
+              empByEmail.set(key, { ...existing, ...item, id: item.id });
+            } else {
+              empByEmail.set(key, { ...item, ...existing, id: existing.id });
+            }
+          }
+        });
+        const uniqueEmps = Array.from(empByEmail.values());
+        setEmployees(uniqueEmps);
+        setLoading(false);
+      }, (err) => {
+        console.warn('Firestore subscription error:', err);
+        setLoading(false);
+      });
+
+      const qSites = query(collection(db, 'Sites'));
+      const unsubSites = onSnapshot(qSites, (snapshot) => {
+        const liveSites = snapshot.docs.map(d => ({ id: d.id, ...d.data() }));
+        setSites(liveSites);
+      });
+
+      return () => {
+        unsubEmp();
+        unsubSites();
+      };
+    } catch (e) {
+      console.warn('Firestore subscription caught error:', e);
+      setLoading(false);
+    }
+  }, []);
 
   const fixedCount  = employees.filter(e => e.workType === 'Fixed Site Employee').length;
   const mobileCount = employees.filter(e => e.workType === 'Mobile Field Employee').length;
+  const unassignedCount = employees.filter(e => !e.workType).length;
   const outsideCount= employees.filter(e => e.geofenceStatus === 'Outside Assigned Site').length;
   const inTransitCount = employees.filter(e => e.status === 'In Transit' && e.workType === 'Mobile Field Employee').length;
 
-  const filtered = employees.filter(e => {
-    const matchSearch = e.name.toLowerCase().includes(search.toLowerCase()) || e.idNum.includes(search);
-    const matchWt = wtFilter === 'All' || e.workType === wtFilter;
-    return matchSearch && matchWt;
+  const totalEmployees = employees.length || 1;
+
+  // Auto-tick every 10s to re-evaluate presence in real time as heartbeats arrive/expire
+  const [, setTick] = useState(0);
+  useEffect(() => {
+    const timer = setInterval(() => setTick(t => t + 1), 10000);
+    return () => clearInterval(timer);
+  }, []);
+
+  // Chart 1: Workforce Type Donut Data
+  const workforceChartData = [
+    { name: 'Fixed Site', value: fixedCount, color: '#6366F1', pct: ((fixedCount / totalEmployees) * 100).toFixed(0) },
+    { name: 'Mobile Field', value: mobileCount, color: '#F59E0B', pct: ((mobileCount / totalEmployees) * 100).toFixed(0) },
+    ...(unassignedCount > 0 ? [{ name: 'Unassigned', value: unassignedCount, color: '#94A3B8', pct: ((unassignedCount / totalEmployees) * 100).toFixed(0) }] : [])
+  ];
+
+  // Chart 2: Status Breakdown Bar Data
+  const statusChartData = [
+    { name: 'On Site', count: employees.filter(e => getEmployeeStatus(e) === 'On Site').length, fill: '#10B981' },
+    { name: 'On Duty', count: employees.filter(e => getEmployeeStatus(e) === 'On Duty').length, fill: '#3B82F6' },
+    { name: 'In Transit', count: employees.filter(e => getEmployeeStatus(e) === 'In Transit').length, fill: '#F59E0B' },
+    { name: 'Offline', count: employees.filter(e => getEmployeeStatus(e) === 'Offline').length, fill: '#94A3B8' },
+  ];
+
+  // Chart 3: Geofence Compliance Data
+  const insideGeofenceCount = employees.filter(e => e.geofenceStatus === 'Inside Assigned Site' || e.geofenceStatus === 'Inside Site' || !e.geofenceStatus).length;
+  const outsideGeofenceCount = employees.filter(e => e.geofenceStatus === 'Outside Assigned Site' || e.geofenceStatus === 'Outside Site').length;
+
+  const geofenceChartData = [
+    { name: 'Inside Site', value: insideGeofenceCount, color: '#10B981', pct: ((insideGeofenceCount / totalEmployees) * 100).toFixed(0) },
+    { name: 'Outside Site', value: outsideGeofenceCount, color: '#EF4444', pct: ((outsideGeofenceCount / totalEmployees) * 100).toFixed(0) },
+  ];
+
+  const filtered = employees.filter(emp => {
+    const matchSearch = (emp.name || '').toLowerCase().includes(search.toLowerCase()) ||
+                        (emp.idNum || '').toLowerCase().includes(search.toLowerCase());
+    const matchType = wtFilter === 'All' || emp.workType === wtFilter;
+    return matchSearch && matchType;
   });
 
-  const openAdd  = () => { setForm(EMPTY); setEditId(null); setModal(true); };
-  const openEdit = (emp) => { setForm({ ...EMPTY, ...emp }); setEditId(emp.id); setModal(true); };
+  // Pagination metrics
+  const totalItems = filtered.length;
+  const totalPages = Math.ceil(totalItems / pageSize) || 1;
+  const safePage = Math.min(page, totalPages);
+  const startIndex = (safePage - 1) * pageSize;
+  const currentPageItems = filtered.slice(startIndex, startIndex + pageSize);
+  const emptyRowsCount = loading ? 0 : Math.max(0, Math.min(pageSize, 8) - currentPageItems.length);
+
+  // Bulk Selection Logic
+  const isAllSelected = currentPageItems.length > 0 && currentPageItems.every(emp => selectedIds.includes(emp.id));
+
+  const toggleSelectAll = () => {
+    if (isAllSelected) {
+      const currentItemIds = new Set(currentPageItems.map(item => item.id));
+      setSelectedIds(prev => prev.filter(id => !currentItemIds.has(id)));
+    } else {
+      const currentItemIds = currentPageItems.map(item => item.id);
+      setSelectedIds(prev => Array.from(new Set([...prev, ...currentItemIds])));
+    }
+  };
+
+  const toggleSelectOne = (id) => {
+    setSelectedIds(prev => 
+      prev.includes(id) ? prev.filter(i => i !== id) : [...prev, id]
+    );
+  };
+
+  const handleBulkDelete = async () => {
+    if (selectedIds.length === 0) return;
+    const confirmed = await showConfirmDelete(
+      `Delete ${selectedIds.length} Selected Employees?`,
+      `Are you sure you want to delete ${selectedIds.length} employee record(s)? This action cannot be undone.`
+    );
+    if (confirmed) {
+      try {
+        await Promise.all(selectedIds.map(id => deleteDoc(doc(db, 'employees', id))));
+        showToast('Bulk Delete Successful', `${selectedIds.length} employee(s) removed from backend.`, 'success');
+        setSelectedIds([]);
+      } catch (err) {
+        console.error('Bulk delete error:', err);
+        showToast('Bulk Delete Failed', err.message || 'Error deleting selected employees.', 'error');
+      }
+    }
+  };
+
+  // Modal Tab state ('info' | 'assignment' | 'all')
+  const [modalTab, setModalTab]   = useState('info');
+
+  const location = useLocation();
+
+  const openAdd  = () => { setForm(EMPTY); setEditId(null); setModalTab('info'); setModal(true); };
+  const openEdit = (emp) => { setForm({ ...EMPTY, ...emp }); setEditId(emp.id); setModalTab('info'); setModal(true); };
+
+  useEffect(() => {
+    const params = new URLSearchParams(location.search);
+    const q = params.get('search');
+    if (q !== null) {
+      setSearch(q);
+    }
+    if (params.get('action') === 'add') {
+      openAdd();
+    }
+  }, [location.search]);
+
+  useEffect(() => {
+    const handleOpenAdd = () => openAdd();
+    window.addEventListener('subai_open_add_employee', handleOpenAdd);
+    return () => window.removeEventListener('subai_open_add_employee', handleOpenAdd);
+  }, []);
 
   const handleDelete = async (id) => {
-    const result = await Swal.fire({
-      title: 'Delete Employee?',
-      text: "Are you sure you want to remove this employee? Their login access will be revoked.",
-      icon: 'warning', showCancelButton: true,
-      confirmButtonColor: '#DC2626', cancelButtonColor: '#E5E7EB',
-      confirmButtonText: 'Yes, delete', cancelButtonText: 'Cancel',
-      customClass: { cancelButton: 'swal-cancel-btn' }, reverseButtons: true
-    });
-    if (result.isConfirmed) {
-      setEmployees(prev => prev.filter(e => e.id !== id));
-      Swal.fire({ title: 'Deleted!', text: 'Employee has been removed.', icon: 'success', timer: 1500, showConfirmButton: false });
+    const confirmed = await showConfirmDelete(
+      'Delete Employee?',
+      'Are you sure you want to remove this employee from your workforce records?'
+    );
+    if (confirmed) {
+      try {
+        await deleteDoc(doc(db, 'employees', id));
+        showToast('Employee Removed', 'The employee record has been deleted.', 'success');
+      } catch (e) {
+        console.warn('Firestore delete error:', e);
+        showToast('Delete Failed', e.message || 'Could not delete employee', 'error');
+      }
     }
   };
 
   const handleSave = async () => {
-    if (!form.name || !form.email) return Swal.fire('Error', 'Name and Email are required.', 'error');
-    if (form.workType === 'Fixed Site Employee' && form.geofenceRadius < 50) return Swal.fire('Error', 'Minimum geofence radius is 50m.', 'error');
+    if (!form.name || !form.email) return showToast('Validation Error', 'Name and Email are required.', 'error');
     setIsSaving(true);
-    setTimeout(() => {
+    try {
       if (editId) {
-        setEmployees(prev => prev.map(e => e.id === editId ? { ...form, id: editId } : e));
-        Swal.fire({ title: 'Updated!', icon: 'success', timer: 1500, showConfirmButton: false });
+        await updateDoc(doc(db, 'employees', editId), form);
+        showToast('Employee Updated', 'Record saved successfully.', 'success');
       } else {
         const nowStr = new Date().toLocaleString('en-US', { month: 'short', day: 'numeric', year: 'numeric', hour: 'numeric', minute: 'numeric', hour12: true });
-        const newEmp = { ...form, id: generateId('emp'), joined: nowStr.replace(', ', '\n'), profilePic: null };
-        setEmployees(prev => [newEmp, ...prev]);
-        Swal.fire({ title: 'Added!', text: 'Employee account created.', icon: 'success', timer: 1500, showConfirmButton: false });
+        const newEmp = { ...form, joined: nowStr.replace(', ', '\n'), profilePic: null };
+        await addDoc(collection(db, 'employees'), newEmp);
+        showToast('Employee Created', 'New employee added to database.', 'success');
       }
       setModal(false);
+    } catch (e) {
+      console.warn('Save error:', e);
+      showToast('Save Failed', e.message || 'Failed to save employee', 'error');
+    } finally {
       setIsSaving(false);
-    }, 500);
+    }
   };
 
   const inputStyle = { width:'100%', padding:'9px 12px', borderRadius:8, border:'1px solid #E5E7EB', fontSize:13, outline:'none', fontFamily:'Inter,sans-serif', boxSizing:'border-box' };
@@ -94,6 +364,7 @@ export default function Employees() {
   return (
     <>
       <div className="page-body">
+
 
         {/* ── Work Type KPI Cards ── */}
         <div style={{ display:'grid', gridTemplateColumns:'repeat(4,1fr)', gap:14, marginBottom:20 }}>
@@ -133,11 +404,32 @@ export default function Employees() {
                 <option value="Fixed Site Employee">Fixed Site</option>
                 <option value="Mobile Field Employee">Mobile Field</option>
               </select>
+
+              {selectedIds.length > 0 && (
+                <button
+                  onClick={handleBulkDelete}
+                  style={{
+                    display: 'flex',
+                    alignItems: 'center',
+                    gap: 6,
+                    background: '#DC2626',
+                    color: 'white',
+                    border: 'none',
+                    borderRadius: 6,
+                    padding: '9px 14px',
+                    fontWeight: 600,
+                    fontSize: 13,
+                    cursor: 'pointer',
+                    boxShadow: '0 2px 8px rgba(220, 38, 38, 0.25)',
+                    transition: 'all 0.15s ease'
+                  }}
+                >
+                  <Trash2 size={14} /> Delete Selected ({selectedIds.length})
+                </button>
+              )}
+
               <button onClick={openAdd} style={{ display:'flex', alignItems:'center', gap:6, background:'#1E5ADB', color:'white', border:'none', borderRadius:6, padding:'9px 16px', fontWeight:600, fontSize:13, cursor:'pointer' }}>
                 <Plus size={14} /> Add Employee
-              </button>
-              <button style={{ display:'flex', alignItems:'center', gap:6, background:'white', color:'#1E5ADB', border:'1px solid #1E5ADB', borderRadius:6, padding:'9px 16px', fontWeight:600, fontSize:13, cursor:'pointer' }}>
-                <Download size={14} /> Export
               </button>
             </div>
 
@@ -146,23 +438,39 @@ export default function Employees() {
               <table style={{ width:'100%', borderCollapse:'collapse', fontSize:13 }}>
                 <thead style={{ background:'#F9FAFB' }}>
                   <tr>
+                    <th style={{ width:40, padding:'12px 14px', textAlign:'center' }}>
+                      <input
+                        type="checkbox"
+                        checked={isAllSelected}
+                        onChange={toggleSelectAll}
+                        style={{ cursor:'pointer', accentColor:'#1E5ADB', width:15, height:15 }}
+                      />
+                    </th>
                     {['USER','ID NUMBER','DEPT / TYPE','WORK TYPE','GEOFENCE STATUS','STATUS','DATE REG.','ACTIONS'].map(h => (
                       <th key={h} style={{ padding:'12px 14px', textAlign:'left', color:'#6B7280', fontWeight:700, fontSize:10, letterSpacing:'0.05em', whiteSpace:'nowrap' }}>{h}</th>
                     ))}
                   </tr>
                 </thead>
                 <tbody>
-                  {filtered.map(emp => {
+                  {currentPageItems.map(emp => {
                     const wtStyle = WORK_TYPE_STYLE[emp.workType] || WORK_TYPE_STYLE['Fixed Site Employee'];
                     const WTIcon  = wtStyle.icon;
                     const gfStyle = emp.geofenceStatus ? (GEOFENCE_STATUS_STYLE[emp.geofenceStatus] || {}) : null;
+                    const isSelected = selectedIds.includes(emp.id);
                     return (
-                      <tr key={emp.id} style={{ borderBottom:'1px solid #F3F4F6' }}>
-                        {/* Avatar + name */}
+                      <tr key={emp.id} style={{ borderBottom:'1px solid #F3F4F6', background: isSelected ? '#EFF6FF' : 'transparent' }}>
+                        <td style={{ padding:'12px 14px', textAlign:'center' }}>
+                          <input
+                            type="checkbox"
+                            checked={isSelected}
+                            onChange={() => toggleSelectOne(emp.id)}
+                            style={{ cursor:'pointer', accentColor:'#1E5ADB', width:15, height:15 }}
+                          />
+                        </td>
                         <td style={{ padding:'12px 14px' }}>
                           <div style={{ display:'flex', alignItems:'center', gap:10 }}>
                             <div style={{ width:34, height:34, borderRadius:'50%', background:'#EFF6FF', display:'flex', alignItems:'center', justifyContent:'center', color:'#1E5ADB', fontWeight:700, fontSize:12, flexShrink:0, overflow:'hidden' }}>
-                              {emp.profilePic ? <img src={emp.profilePic} alt={emp.name} style={{ width:'100%', height:'100%', objectFit:'cover' }} /> : emp.name.split(' ').map(n=>n[0]).join('').substring(0,2)}
+                              {emp.profilePic ? <img src={emp.profilePic} alt={emp.name} style={{ width:'100%', height:'100%', objectFit:'cover' }} /> : (emp.name || 'Emp').split(' ').map(n=>n[0]).join('').substring(0,2)}
                             </div>
                             <div>
                               <div style={{ fontWeight:600, color:'#111827' }}>{emp.name}</div>
@@ -170,22 +478,20 @@ export default function Employees() {
                             </div>
                           </div>
                         </td>
-                        <td style={{ padding:'12px 14px', color:'#374151', fontWeight:500 }}>{emp.idNum}</td>
+                        <td style={{ padding:'12px 14px', color:'#374151', fontWeight:500 }}>{emp.idNum || 'N/A'}</td>
                         <td style={{ padding:'12px 14px', color:'#374151' }}>
-                          <div>{emp.org}</div>
-                          <div style={{ fontSize:11, color:'#6B7280' }}>{emp.type}</div>
+                          <div>{emp.org || 'Operations'}</div>
+                          <div style={{ fontSize:11, color:'#6B7280' }}>{emp.type || 'Field Staff'}</div>
                         </td>
-                        {/* Work Type Badge */}
                         <td style={{ padding:'12px 14px' }}>
                           <div style={{ display:'inline-flex', alignItems:'center', gap:5, background:wtStyle.bg, color:wtStyle.color, padding:'4px 8px', borderRadius:6, fontWeight:600, fontSize:10, whiteSpace:'nowrap' }}>
                             <WTIcon size={11} />
                             {emp.workType === 'Fixed Site Employee' ? 'Fixed Site' : 'Mobile Field'}
                           </div>
                         </td>
-                        {/* Geofence Status */}
                         <td style={{ padding:'12px 14px' }}>
                           {emp.workType === 'Fixed Site Employee' && emp.geofenceStatus ? (
-                            <div style={{ display:'inline-flex', alignItems:'center', gap:5, background:gfStyle.bg, color:gfStyle.color, padding:'4px 8px', borderRadius:6, fontWeight:600, fontSize:10, whiteSpace:'nowrap' }}>
+                            <div style={{ display:'inline-flex', alignItems:'center', gap:5, background:gfStyle?.bg || '#F3F4F6', color:gfStyle?.color || '#374151', padding:'4px 8px', borderRadius:6, fontWeight:600, fontSize:10, whiteSpace:'nowrap' }}>
                               {emp.geofenceStatus === 'Outside Assigned Site' && <ShieldAlert size={11} />}
                               {emp.geofenceStatus}
                             </div>
@@ -197,202 +503,923 @@ export default function Employees() {
                             <span style={{ color:'#D1D5DB', fontSize:12 }}>—</span>
                           )}
                         </td>
-                        {/* Status */}
                         <td style={{ padding:'12px 14px' }}>
-                          <div style={{ display:'inline-flex', alignItems:'center', gap:5, background:STATUS_STYLE[emp.status]?.background || STATUS_STYLE.Offline.background, color:STATUS_STYLE[emp.status]?.color || STATUS_STYLE.Offline.color, padding:'4px 9px', borderRadius:20, fontWeight:600, fontSize:11 }}>
-                            <div style={{ width:5, height:5, borderRadius:'50%', background:STATUS_STYLE[emp.status]?.dot || STATUS_STYLE.Offline.dot }} />
-                            {emp.status}
-                          </div>
+                          {(() => {
+                            const effStatus = getEmployeeStatus(emp);
+                            const style = STATUS_STYLE[effStatus] || STATUS_STYLE.Offline;
+                            return (
+                              <div style={{ display:'inline-flex', alignItems:'center', gap:5, background:style.background, color:style.color, padding:'4px 9px', borderRadius:20, fontWeight:600, fontSize:11 }}>
+                                <div style={{ width:5, height:5, borderRadius:'50%', background:style.dot }} />
+                                {effStatus}
+                              </div>
+                            );
+                          })()}
                         </td>
                         <td style={{ padding:'12px 14px', color:'#6B7280', fontSize:11, whiteSpace:'pre-line' }}>{emp.joined}</td>
-                        <td style={{ padding:'12px 14px' }}>
-                          <div style={{ display:'flex', gap:10 }}>
-                            <button onClick={() => openEdit(emp)} style={{ border:'none', background:'none', color:'#9CA3AF', cursor:'pointer' }}><Edit2 size={15} /></button>
-                            <button onClick={() => handleDelete(emp.id)} style={{ border:'none', background:'none', color:'#9CA3AF', cursor:'pointer' }}><Trash2 size={15} /></button>
+                        <td style={{ padding:'10px 14px', whiteSpace: 'nowrap' }}>
+                          <div style={{ display: 'flex', gap: '6px', alignItems: 'center' }}>
+                            <button
+                              onClick={() => openEdit(emp)}
+                              style={{
+                                display: 'inline-flex',
+                                alignItems: 'center',
+                                gap: '4px',
+                                padding: '4px 10px',
+                                height: '28px',
+                                borderRadius: '6px',
+                                border: '1px solid #DBEAFE',
+                                backgroundColor: '#FFFFFF',
+                                color: '#1E5ADB',
+                                fontWeight: '700',
+                                fontSize: '11px',
+                                cursor: 'pointer',
+                                boxShadow: '0 1px 2px rgba(0, 0, 0, 0.04)',
+                                transition: 'all 0.15s ease'
+                              }}
+                            >
+                              <Edit2 size={13} color="#1E5ADB" /> Edit
+                            </button>
+                            <button
+                              onClick={() => handleDelete(emp.id)}
+                              style={{
+                                display: 'inline-flex',
+                                alignItems: 'center',
+                                justifyContent: 'center',
+                                width: '28px',
+                                height: '28px',
+                                borderRadius: '6px',
+                                border: '1px solid #FCA5A5',
+                                backgroundColor: '#FEF2F2',
+                                color: '#DC2626',
+                                cursor: 'pointer',
+                                boxShadow: '0 1px 2px rgba(0, 0, 0, 0.04)',
+                                transition: 'all 0.15s ease'
+                              }}
+                            >
+                              <Trash2 size={13} color="#DC2626" />
+                            </button>
                           </div>
                         </td>
                       </tr>
                     );
                   })}
+
+                  {/* Empty Filler Rows if page has fewer items than pageSize */}
+                  {emptyRowsCount > 0 && Array.from({ length: emptyRowsCount }).map((_, idx) => (
+                    <tr key={`empty-row-${idx}`} style={{ height: 38, borderBottom: '1px dashed #F8FAFC' }}>
+                      <td style={{ padding: '8px 14px', color: '#E2E8F0', fontSize: 11, textAlign: 'center' }}>—</td>
+                      <td style={{ padding: '8px 14px', color: '#E2E8F0', fontSize: 11 }}>—</td>
+                      <td style={{ padding: '8px 14px', color: '#E2E8F0', fontSize: 11 }}>—</td>
+                      <td style={{ padding: '8px 14px', color: '#E2E8F0', fontSize: 11 }}>—</td>
+                      <td style={{ padding: '8px 14px', color: '#E2E8F0', fontSize: 11 }}>—</td>
+                      <td style={{ padding: '8px 14px', color: '#E2E8F0', fontSize: 11 }}>—</td>
+                      <td style={{ padding: '8px 14px', color: '#E2E8F0', fontSize: 11 }}>—</td>
+                      <td style={{ padding: '8px 14px', color: '#E2E8F0', fontSize: 11 }}>—</td>
+                      <td style={{ padding: '8px 14px', color: '#E2E8F0', fontSize: 11 }}>—</td>
+                    </tr>
+                  ))}
                 </tbody>
               </table>
             </div>
 
-            {filtered.length === 0 && (
-              <div style={{ padding:40, textAlign:'center', color:'#6B7280', fontSize:14, fontWeight:500 }}>No employees match your search.</div>
-            )}
+            {loading ? (
+              <div style={{ padding: 40, textAlign: 'center', color: '#6B7280' }}>Loading employee database from backend...</div>
+            ) : filtered.length === 0 ? (
+              <div style={{ padding: 50, textAlign: 'center', color: '#6B7280' }}>
+                <Users size={36} color="#94A3B8" style={{ marginBottom: 12 }} />
+                <div style={{ fontSize: 16, fontWeight: 700, color: '#1E293B' }}>No Employees Found</div>
+                <p style={{ fontSize: 13, color: '#64748B', marginTop: 4 }}>Click <strong>Add Employee</strong> to create real records in your database.</p>
+                <button onClick={openAdd} style={{ marginTop: 12, padding: '9px 18px', backgroundColor: '#1E5ADB', color: 'white', border: 'none', borderRadius: 8, fontWeight: 600, cursor: 'pointer' }}>
+                  + Add First Employee
+                </button>
+              </div>
+            ) : null}
 
-            {/* Pagination stub */}
-            <div style={{ display:'flex', justifyContent:'space-between', alignItems:'center', padding:'14px 16px', borderTop:'1px solid #F3F4F6' }}>
-              <div style={{ fontSize:13, color:'#6B7280' }}>Showing {filtered.length} of {employees.length} employees</div>
-              <div style={{ display:'flex', gap:6, alignItems:'center' }}>
-                <button style={{ border:'none', background:'none', color:'#9CA3AF', cursor:'pointer' }}>«</button>
-                <button style={{ border:'none', background:'none', color:'#9CA3AF', cursor:'pointer' }}>‹</button>
-                <button style={{ border:'none', background:'#1E5ADB', color:'white', borderRadius:4, width:28, height:28, display:'flex', alignItems:'center', justifyContent:'center', fontWeight:600, fontSize:13 }}>1</button>
-                <button style={{ border:'none', background:'none', color:'#9CA3AF', cursor:'pointer' }}>›</button>
-                <button style={{ border:'none', background:'none', color:'#9CA3AF', cursor:'pointer' }}>»</button>
+            {/* Premium Datatable Pagination Header/Footer */}
+            <div style={{
+              display: 'flex',
+              justifyContent: 'space-between',
+              alignItems: 'center',
+              padding: '14px 18px',
+              borderTop: '1px solid #F1F5F9',
+              background: '#FFFFFF',
+              flexWrap: 'wrap',
+              gap: 12
+            }}>
+              {/* Left: Info & Rows per page selector */}
+              <div style={{ display: 'flex', alignItems: 'center', gap: 16 }}>
+                <div style={{ fontSize: 13, color: '#64748B', fontWeight: 500 }}>
+                  Showing <strong style={{ color: '#0F172A' }}>{totalItems === 0 ? 0 : startIndex + 1}</strong> to <strong style={{ color: '#0F172A' }}>{Math.min(startIndex + pageSize, totalItems)}</strong> of <strong style={{ color: '#0F172A' }}>{totalItems}</strong> entries
+                </div>
+
+                <div style={{ display: 'flex', alignItems: 'center', gap: 8, fontSize: 13, color: '#64748B', fontWeight: 500 }}>
+                  <span>Show</span>
+                  <select
+                    value={pageSize}
+                    onChange={e => { setPageSize(Number(e.target.value)); setPage(1); }}
+                    style={{
+                      padding: '5px 10px',
+                      border: '1px solid #E2E8F0',
+                      borderRadius: 8,
+                      fontSize: 12,
+                      fontWeight: 600,
+                      color: '#0F172A',
+                      background: '#F8FAFC',
+                      outline: 'none',
+                      cursor: 'pointer'
+                    }}
+                  >
+                    <option value={10}>10</option>
+                    <option value={20}>20</option>
+                    <option value={30}>30</option>
+                    <option value={50}>50</option>
+                  </select>
+                  <span>per page</span>
+                </div>
+              </div>
+
+              {/* Right: Page Buttons */}
+              <div style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
+                <button
+                  disabled={safePage <= 1}
+                  onClick={() => setPage(p => Math.max(p - 1, 1))}
+                  style={{
+                    padding: '6px 12px',
+                    borderRadius: 8,
+                    border: '1px solid #E2E8F0',
+                    background: safePage <= 1 ? '#F8FAFC' : '#FFFFFF',
+                    color: safePage <= 1 ? '#94A3B8' : '#334155',
+                    fontSize: 12,
+                    fontWeight: 600,
+                    cursor: safePage <= 1 ? 'not-allowed' : 'pointer',
+                    transition: 'all 0.15s ease'
+                  }}
+                >
+                  Previous
+                </button>
+
+                {Array.from({ length: totalPages }, (_, i) => i + 1).map(pNum => (
+                  <button
+                    key={pNum}
+                    onClick={() => setPage(pNum)}
+                    style={{
+                      width: 32,
+                      height: 32,
+                      borderRadius: 8,
+                      border: pNum === safePage ? 'none' : '1px solid #E2E8F0',
+                      background: pNum === safePage ? '#1E5ADB' : '#FFFFFF',
+                      color: pNum === safePage ? '#FFFFFF' : '#334155',
+                      fontSize: 12,
+                      fontWeight: 700,
+                      cursor: 'pointer',
+                      transition: 'all 0.15s ease',
+                      boxShadow: pNum === safePage ? '0 2px 6px rgba(30, 90, 219, 0.3)' : 'none'
+                    }}
+                  >
+                    {pNum}
+                  </button>
+                ))}
+
+                <button
+                  disabled={safePage >= totalPages}
+                  onClick={() => setPage(p => Math.min(p + 1, totalPages))}
+                  style={{
+                    padding: '6px 12px',
+                    borderRadius: 8,
+                    border: '1px solid #E2E8F0',
+                    background: safePage >= totalPages ? '#F8FAFC' : '#FFFFFF',
+                    color: safePage >= totalPages ? '#94A3B8' : '#334155',
+                    fontSize: 12,
+                    fontWeight: 600,
+                    cursor: safePage >= totalPages ? 'not-allowed' : 'pointer',
+                    transition: 'all 0.15s ease'
+                  }}
+                >
+                  Next
+                </button>
               </div>
             </div>
           </div>
 
-          {/* Right: Side Panels */}
-          <div style={{ display:'flex', flexDirection:'column', gap:18 }}>
-
-            {/* Status Overview */}
-            <div className="widget" style={{ padding:20 }}>
-              <div style={{ fontSize:14, fontWeight:700, color:'#111827', marginBottom:14 }}>Employee Status Overview</div>
-              <div style={{ display:'flex', flexDirection:'column', gap:12 }}>
-                {[
-                  { label:'On Site',    count:employees.filter(e=>e.status==='On Site').length,    color:'#10B981', bg:'#D1FAE5', icon:<UserCheck size={14}/> },
-                  { label:'On Duty',    count:employees.filter(e=>e.status==='On Duty').length,    color:'#F59E0B', bg:'#FEF3C7', icon:<Clock size={14}/> },
-                  { label:'In Transit', count:employees.filter(e=>e.status==='In Transit').length, color:'#EF4444', bg:'#FEE2E2', icon:<AlertTriangle size={14}/> },
-                  { label:'Offline',    count:employees.filter(e=>e.status==='Offline').length,    color:'#6B7280', bg:'#F3F4F6', icon:<UserX size={14}/> },
-                ].map(s => (
-                  <div key={s.label} style={{ display:'flex', alignItems:'center', justifyContent:'space-between' }}>
-                    <div style={{ display:'flex', alignItems:'center', gap:8 }}>
-                      <div style={{ width:28, height:28, borderRadius:6, background:s.bg, color:s.color, display:'flex', alignItems:'center', justifyContent:'center' }}>{s.icon}</div>
-                      <span style={{ fontSize:12, color:'#4B5563', fontWeight:500 }}>{s.label}</span>
-                    </div>
-                    <span style={{ fontSize:14, fontWeight:700, color:'#111827' }}>{s.count}</span>
+          {/* Right: Single Unified Widget Card containing 3 Charts */}
+          <div style={{ display: 'flex', flexDirection: 'column', gap: 18 }}>
+            <div className="widget" style={{ padding: 20 }}>
+              
+              {/* Main Card Header */}
+              <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 16, borderBottom: '1px solid #F1F5F9', paddingBottom: 12 }}>
+                <div>
+                  <div style={{ fontSize: 15, fontWeight: 800, color: '#0F172A', display: 'flex', alignItems: 'center', gap: 8 }}>
+                    <Activity size={18} color="#1E5ADB" /> Workforce Analytics
                   </div>
-                ))}
-              </div>
-            </div>
-
-            {/* Geofence Alerts */}
-            {outsideCount > 0 && (
-              <div className="widget" style={{ padding:18, border:'1.5px solid #FEE2E2' }}>
-                <div style={{ display:'flex', alignItems:'center', gap:7, marginBottom:12 }}>
-                  <ShieldAlert size={15} color="#EF4444" />
-                  <div style={{ fontSize:13, fontWeight:700, color:'#991B1B' }}>Geofence Alerts</div>
+                  <div style={{ fontSize: 11, color: '#64748B', marginTop: 2 }}>Real-time telemetry & presence insights</div>
                 </div>
-                {employees.filter(e => e.geofenceStatus === 'Outside Assigned Site').map(emp => (
-                  <div key={emp.id} style={{ fontSize:12, color:'#374151', marginBottom:8, padding:'8px 10px', background:'#FEF2F2', borderRadius:6 }}>
-                    <div style={{ fontWeight:600 }}>{emp.name}</div>
-                    <div style={{ fontSize:11, color:'#6B7280', marginTop:2 }}>Outside {MOCK_SITES.find(s=>s.id===emp.assignedSite)?.name || 'assigned site'}</div>
-                  </div>
-                ))}
+                <span style={{ fontSize: 11, fontWeight: 700, background: '#EFF6FF', color: '#1E5ADB', padding: '4px 10px', borderRadius: 12 }}>
+                  3 Charts
+                </span>
               </div>
-            )}
 
-            {/* Management Tools */}
-            <div className="widget" style={{ padding:20 }}>
-              <div style={{ fontSize:14, fontWeight:700, color:'#111827', marginBottom:14 }}>Employee Management Tools</div>
-              <button style={{ width:'100%', display:'flex', alignItems:'center', justifyContent:'center', gap:8, background:'white', color:'#1E5ADB', border:'1px solid #1E5ADB', borderRadius:8, padding:'10px', fontWeight:600, fontSize:13, cursor:'pointer' }}>
-                <Download size={16} /> Export Employee List
-              </button>
+              {/* CHART 1: Workforce Distribution (Donut Chart) */}
+              <div style={{ marginBottom: 16 }}>
+                <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 8 }}>
+                  <div style={{ fontSize: 12, fontWeight: 700, color: '#334155', display: 'flex', alignItems: 'center', gap: 6 }}>
+                    <PieIcon size={14} color="#6366F1" /> 1. Workforce Distribution
+                  </div>
+                  <span style={{ fontSize: 10, fontWeight: 600, color: '#64748B' }}>Fixed vs Mobile</span>
+                </div>
+
+                <div style={{ position: 'relative', width: '100%', height: 135 }}>
+                  <ResponsiveContainer width="100%" height="100%">
+                    <PieChart>
+                      <Pie
+                        data={workforceChartData}
+                        cx="50%"
+                        cy="50%"
+                        innerRadius={36}
+                        outerRadius={54}
+                        paddingAngle={4}
+                        dataKey="value"
+                        stroke="none"
+                      >
+                        {workforceChartData.map((entry, index) => (
+                          <Cell key={`cell-wf-${index}`} fill={entry.color} />
+                        ))}
+                      </Pie>
+                      <Tooltip content={<CustomPieTooltip />} />
+                    </PieChart>
+                  </ResponsiveContainer>
+
+                  <div style={{
+                    position: 'absolute',
+                    top: '50%',
+                    left: '50%',
+                    transform: 'translate(-50%, -50%)',
+                    textAlign: 'center',
+                    pointerEvents: 'none'
+                  }}>
+                    <div style={{ fontSize: 16, fontWeight: 800, color: '#0F172A', lineHeight: 1 }}>{employees.length}</div>
+                    <div style={{ fontSize: 9, fontWeight: 700, color: '#64748B', textTransform: 'uppercase', marginTop: 2 }}>Staff</div>
+                  </div>
+                </div>
+
+                <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 8, marginTop: 4 }}>
+                  <div style={{ background: '#F8FAFC', borderRadius: 8, padding: '7px 10px', border: '1px solid #F1F5F9' }}>
+                    <div style={{ display: 'flex', alignItems: 'center', gap: 5, fontSize: 10, color: '#64748B', fontWeight: 600 }}>
+                      <span style={{ width: 6, height: 6, borderRadius: '50%', background: '#6366F1' }}></span> Fixed Site
+                    </div>
+                    <div style={{ fontSize: 13, fontWeight: 800, color: '#0F172A', marginTop: 2 }}>
+                      {fixedCount} <span style={{ fontSize: 10, fontWeight: 600, color: '#6366F1' }}>({((fixedCount / totalEmployees) * 100).toFixed(0)}%)</span>
+                    </div>
+                  </div>
+
+                  <div style={{ background: '#F8FAFC', borderRadius: 8, padding: '7px 10px', border: '1px solid #F1F5F9' }}>
+                    <div style={{ display: 'flex', alignItems: 'center', gap: 5, fontSize: 10, color: '#64748B', fontWeight: 600 }}>
+                      <span style={{ width: 6, height: 6, borderRadius: '50%', background: '#F59E0B' }}></span> Mobile Field
+                    </div>
+                    <div style={{ fontSize: 13, fontWeight: 800, color: '#0F172A', marginTop: 2 }}>
+                      {mobileCount} <span style={{ fontSize: 10, fontWeight: 600, color: '#F59E0B' }}>({((mobileCount / totalEmployees) * 100).toFixed(0)}%)</span>
+                    </div>
+                  </div>
+                </div>
+              </div>
+
+              <div style={{ height: 1, background: '#F1F5F9', margin: '14px 0' }} />
+
+              {/* CHART 2: Real-time Status Breakdown (Bar Chart) */}
+              <div style={{ marginBottom: 16 }}>
+                <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 8 }}>
+                  <div style={{ fontSize: 12, fontWeight: 700, color: '#334155', display: 'flex', alignItems: 'center', gap: 6 }}>
+                    <BarChart3 size={14} color="#1E5ADB" /> 2. Real-time Status Breakdown
+                  </div>
+                  <span style={{ fontSize: 10, fontWeight: 600, color: '#10B981', display: 'flex', alignItems: 'center', gap: 3 }}>
+                    <span style={{ width: 6, height: 6, borderRadius: '50%', background: '#10B981' }}></span> Live
+                  </span>
+                </div>
+
+                <div style={{ width: '100%', height: 135 }}>
+                  <ResponsiveContainer width="100%" height="100%">
+                    <BarChart data={statusChartData} margin={{ top: 10, right: 10, left: -25, bottom: 0 }}>
+                      <CartesianGrid strokeDasharray="3 3" vertical={false} stroke="#F1F5F9" />
+                      <XAxis dataKey="name" axisLine={false} tickLine={false} tick={{ fontSize: 9, fill: '#64748B', fontWeight: 600 }} />
+                      <YAxis allowDecimals={false} axisLine={false} tickLine={false} tick={{ fontSize: 9, fill: '#94A3B8' }} />
+                      <Tooltip content={<CustomBarTooltip />} cursor={{ fill: '#F8FAFC' }} />
+                      <Bar dataKey="count" radius={[5, 5, 0, 0]} barSize={22}>
+                        {statusChartData.map((entry, index) => (
+                          <Cell key={`bar-cell-unified-${index}`} fill={entry.fill} />
+                        ))}
+                      </Bar>
+                    </BarChart>
+                  </ResponsiveContainer>
+                </div>
+
+                <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 6, marginTop: 8 }}>
+                  {[
+                    { label: 'On Site', count: employees.filter(e => e.status === 'On Site').length, color: '#10B981' },
+                    { label: 'On Duty', count: employees.filter(e => e.status === 'On Duty').length, color: '#3B82F6' },
+                    { label: 'In Transit', count: employees.filter(e => e.status === 'In Transit').length, color: '#F59E0B' },
+                    { label: 'Offline', count: employees.filter(e => e.status === 'Offline').length, color: '#6B7280' },
+                  ].map(s => (
+                    <div key={s.label} style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', background: '#F8FAFC', padding: '5px 8px', borderRadius: 6 }}>
+                      <div style={{ display: 'flex', alignItems: 'center', gap: 5, fontSize: 10, color: '#475569', fontWeight: 600 }}>
+                        <span style={{ width: 6, height: 6, borderRadius: '50%', background: s.color }}></span> {s.label}
+                      </div>
+                      <span style={{ fontSize: 11, fontWeight: 800, color: '#0F172A' }}>{s.count}</span>
+                    </div>
+                  ))}
+                </div>
+              </div>
+
+              <div style={{ height: 1, background: '#F1F5F9', margin: '14px 0' }} />
+
+              {/* CHART 3: Geofence Security & Compliance (Pie / Donut Chart) */}
+              <div>
+                <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 8 }}>
+                  <div style={{ fontSize: 12, fontWeight: 700, color: '#334155', display: 'flex', alignItems: 'center', gap: 6 }}>
+                    <ShieldAlert size={14} color="#EF4444" /> 3. Geofence Compliance
+                  </div>
+                  <span style={{ fontSize: 10, fontWeight: 700, background: outsideGeofenceCount > 0 ? '#FEE2E2' : '#D1FAE5', color: outsideGeofenceCount > 0 ? '#991B1B' : '#065F46', padding: '2px 7px', borderRadius: 10 }}>
+                    {outsideGeofenceCount > 0 ? `${outsideGeofenceCount} Outside` : '100% Inside'}
+                  </span>
+                </div>
+
+                <div style={{ position: 'relative', width: '100%', height: 135 }}>
+                  <ResponsiveContainer width="100%" height="100%">
+                    <PieChart>
+                      <Pie
+                        data={geofenceChartData}
+                        cx="50%"
+                        cy="50%"
+                        innerRadius={36}
+                        outerRadius={54}
+                        paddingAngle={4}
+                        dataKey="value"
+                        stroke="none"
+                      >
+                        {geofenceChartData.map((entry, index) => (
+                          <Cell key={`cell-geo-${index}`} fill={entry.color} />
+                        ))}
+                      </Pie>
+                      <Tooltip content={<CustomGeofenceTooltip />} />
+                    </PieChart>
+                  </ResponsiveContainer>
+
+                  <div style={{
+                    position: 'absolute',
+                    top: '50%',
+                    left: '50%',
+                    transform: 'translate(-50%, -50%)',
+                    textAlign: 'center',
+                    pointerEvents: 'none'
+                  }}>
+                    <div style={{ fontSize: 15, fontWeight: 800, color: outsideGeofenceCount > 0 ? '#DC2626' : '#10B981', lineHeight: 1 }}>
+                      {((insideGeofenceCount / totalEmployees) * 100).toFixed(0)}%
+                    </div>
+                    <div style={{ fontSize: 8, fontWeight: 700, color: '#64748B', textTransform: 'uppercase', marginTop: 2 }}>Compliant</div>
+                  </div>
+                </div>
+
+                <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 8, marginTop: 4 }}>
+                  <div style={{ background: '#F8FAFC', borderRadius: 8, padding: '7px 10px', border: '1px solid #F1F5F9' }}>
+                    <div style={{ display: 'flex', alignItems: 'center', gap: 5, fontSize: 10, color: '#64748B', fontWeight: 600 }}>
+                      <span style={{ width: 6, height: 6, borderRadius: '50%', background: '#10B981' }}></span> Inside Site
+                    </div>
+                    <div style={{ fontSize: 13, fontWeight: 800, color: '#0F172A', marginTop: 2 }}>
+                      {insideGeofenceCount} <span style={{ fontSize: 10, fontWeight: 600, color: '#10B981' }}>({((insideGeofenceCount / totalEmployees) * 100).toFixed(0)}%)</span>
+                    </div>
+                  </div>
+
+                  <div style={{ background: '#F8FAFC', borderRadius: 8, padding: '7px 10px', border: '1px solid #F1F5F9' }}>
+                    <div style={{ display: 'flex', alignItems: 'center', gap: 5, fontSize: 10, color: '#64748B', fontWeight: 600 }}>
+                      <span style={{ width: 6, height: 6, borderRadius: '50%', background: '#EF4444' }}></span> Outside Site
+                    </div>
+                    <div style={{ fontSize: 13, fontWeight: 800, color: '#0F172A', marginTop: 2 }}>
+                      {outsideGeofenceCount} <span style={{ fontSize: 10, fontWeight: 600, color: '#EF4444' }}>({((outsideGeofenceCount / totalEmployees) * 100).toFixed(0)}%)</span>
+                    </div>
+                  </div>
+                </div>
+              </div>
+
             </div>
-
           </div>
         </div>
       </div>
 
-      {/* ── Add/Edit Modal ── */}
+      {/* ── Add/Edit Modal (Scrolldown-Free Modern Layout) ── */}
       {modal && (
-        <div style={{ position:'fixed', inset:0, background:'rgba(0,0,0,0.45)', display:'flex', alignItems:'center', justifyContent:'center', zIndex:999, padding:20 }}>
-          <div style={{ background:'white', borderRadius:16, padding:28, width:520, maxHeight:'90vh', overflowY:'auto', boxShadow:'0 20px 60px rgba(0,0,0,0.2)' }}>
-            <div style={{ display:'flex', justifyContent:'space-between', alignItems:'center', marginBottom:20 }}>
-              <h3 style={{ fontSize:17, fontWeight:700, margin:0 }}>{editId ? 'Edit Employee' : 'Add Employee'}</h3>
-              <button onClick={() => setModal(false)} style={{ border:'none', background:'none', cursor:'pointer', color:'#6B7280' }}><X size={20} /></button>
-            </div>
+        <div style={{
+          position: 'fixed',
+          inset: 0,
+          background: 'rgba(15, 23, 42, 0.55)',
+          backdropFilter: 'blur(10px)',
+          display: 'flex',
+          alignItems: 'center',
+          justifyContent: 'center',
+          zIndex: 9999,
+          padding: 20
+        }}>
+          <div style={{
+            background: '#FFFFFF',
+            borderRadius: 24,
+            width: 700,
+            maxWidth: '95vw',
+            boxShadow: '0 25px 60px -15px rgba(30, 90, 219, 0.25), 0 0 0 1px rgba(226, 232, 240, 0.8)',
+            overflow: 'hidden',
+            display: 'flex',
+            flexDirection: 'column'
+          }}>
 
-            {/* Basic Fields */}
-            {[
-              { key:'name', label:'Full Name', placeholder:'e.g. John Doe', type:'text' },
-              { key:'email', label:'Email', placeholder:'e.g. johndoe@geostride.com', type:'email' },
-              { key:'password', label:'Password', placeholder:'Enter secure password', type:'password' },
-              { key:'idNum', label:'ID Number', placeholder:'e.g. EMP-1001', type:'text' },
-              { key:'org', label:'Department', placeholder:'e.g. Field Operations', type:'text' },
-              { key:'type', label:'Role / Job Title', placeholder:'e.g. Security Guard', type:'text' },
-            ].map(({ key, label, placeholder, type }) => (
-              <div key={key} style={{ marginBottom:14 }}>
-                <label style={labelStyle}>{label}</label>
-                <input type={type} value={form[key] || ''} onChange={e => setForm(p => ({...p, [key]: e.target.value}))}
-                  placeholder={placeholder} style={inputStyle} />
-              </div>
-            ))}
-
-            {/* Status */}
-            <div style={{ marginBottom:14 }}>
-              <label style={labelStyle}>Status</label>
-              <select value={form.status} onChange={e => setForm(p=>({...p,status:e.target.value}))} style={inputStyle}>
-                {['On Site','On Duty','In Transit','Offline'].map(s => <option key={s}>{s}</option>)}
-              </select>
-            </div>
-
-            {/* ─ Work Type ─ */}
-            <div style={{ background:'#F8FAFC', borderRadius:10, padding:16, marginBottom:14 }}>
-              <div style={{ fontSize:13, fontWeight:700, color:'#1E40AF', marginBottom:12, display:'flex', alignItems:'center', gap:6 }}>
-                <MapPin size={14} /> Employee Work Type
-              </div>
-              <div style={{ marginBottom:14 }}>
-                <label style={labelStyle}>Work Type</label>
-                <select value={form.workType || 'Fixed Site Employee'} onChange={e => setForm(p => ({ ...p, workType: e.target.value, assignedSite:'', geofenceRadius:100, assignedRoute:'', assignedDestinations:[] }))} style={inputStyle}>
-                  <option value="Fixed Site Employee">Fixed Site Employee</option>
-                  <option value="Mobile Field Employee">Mobile Field Employee</option>
-                </select>
-                <div style={{ marginTop:6, fontSize:11, color:'#6B7280', lineHeight:1.5 }}>
-                  {form.workType === 'Fixed Site Employee'
-                    ? '🏢 Fixed: Assigned to one site. Geofence monitoring enabled.'
-                    : '🚚 Mobile: Travels between multiple assigned destinations.'}
+            {/* Modal Header with Light Mesh Gradient Background */}
+            <div style={{
+              background: 'linear-gradient(135deg, #EFF6FF 0%, #EEF2FF 50%, #F5F3FF 100%)',
+              padding: '22px 28px 18px 28px',
+              borderBottom: '1px solid #E2E8F0',
+              display: 'flex',
+              justifyContent: 'space-between',
+              alignItems: 'center'
+            }}>
+              <div style={{ display: 'flex', alignItems: 'center', gap: 14 }}>
+                <div style={{
+                  width: 44,
+                  height: 44,
+                  borderRadius: 14,
+                  background: '#FFFFFF',
+                  color: '#1E5ADB',
+                  display: 'flex',
+                  alignItems: 'center',
+                  justifyContent: 'center',
+                  boxShadow: '0 6px 16px rgba(30, 90, 219, 0.15)'
+                }}>
+                  <UserPlus size={22} />
+                </div>
+                <div>
+                  <div style={{ fontSize: 18, fontWeight: 800, color: '#0F172A', display: 'flex', alignItems: 'center', gap: 8 }}>
+                    {editId ? 'Edit Employee Profile' : 'Add New Employee'}
+                  </div>
+                  <div style={{ fontSize: 12, color: '#64748B', marginTop: 2, fontWeight: 500 }}>
+                    Workforce Directory & Deployment Setup
+                  </div>
                 </div>
               </div>
 
-              {/* Fixed Site Fields */}
-              {form.workType === 'Fixed Site Employee' && (
-                <>
-                  <div style={{ marginBottom:14 }}>
-                    <label style={labelStyle}>Assigned Site</label>
-                    <select value={form.assignedSite || ''} onChange={e => setForm(p=>({...p,assignedSite:e.target.value}))} style={inputStyle}>
-                      <option value="">— Select a Site —</option>
-                      {MOCK_SITES.map(s => <option key={s.id} value={s.id}>{s.name}</option>)}
-                    </select>
-                  </div>
-                  <div style={{ marginBottom:4 }}>
-                    <label style={labelStyle}>Geofence Radius (meters)</label>
-                    <div style={{ display:'flex', alignItems:'center', gap:10 }}>
-                      <input type="range" min={50} max={1000} step={50}
-                        value={form.geofenceRadius || 100}
-                        onChange={e => setForm(p=>({...p, geofenceRadius:parseInt(e.target.value)}))}
-                        style={{ flex:1 }} />
-                      <div style={{ fontWeight:700, fontSize:14, color:'#1E5ADB', minWidth:48, textAlign:'right' }}>{form.geofenceRadius || 100}m</div>
-                    </div>
-                    <div style={{ display:'flex', justifyContent:'space-between', fontSize:10, color:'#9CA3AF', marginTop:2 }}>
-                      <span>50m (min)</span><span>1000m (max)</span>
-                    </div>
-                  </div>
-                </>
-              )}
-
-              {/* Mobile Field Fields */}
-              {form.workType === 'Mobile Field Employee' && (
-                <>
-                  <div style={{ marginBottom:14 }}>
-                    <label style={labelStyle}>Starting Location (Warehouse/Pickup)</label>
-                    <input type="text" value={form.assignedRoute || ''} onChange={e => setForm(p=>({...p,assignedRoute:e.target.value}))}
-                      placeholder="e.g. Main Warehouse, North Depot" style={inputStyle} />
-                  </div>
-                  <div style={{ marginBottom:4 }}>
-                    <label style={labelStyle}>Assigned Destinations (comma-separated)</label>
-                    <textarea
-                      value={Array.isArray(form.assignedDestinations) ? form.assignedDestinations.join(', ') : ''}
-                      onChange={e => setForm(p=>({...p, assignedDestinations: e.target.value.split(',').map(d=>d.trim()).filter(Boolean)}))}
-                      placeholder="e.g. Makati Hub, BGC Delivery Point, QC Center"
-                      rows={3}
-                      style={{ ...inputStyle, resize:'vertical' }}
-                    />
-                  </div>
-                </>
-              )}
-            </div>
-
-            {/* Save / Cancel */}
-            <div style={{ display:'flex', gap:10, marginTop:8 }}>
-              <button onClick={() => setModal(false)} disabled={isSaving} style={{ flex:1, padding:'10px', borderRadius:8, border:'1px solid #E5E7EB', background:'white', cursor:isSaving?'not-allowed':'pointer', fontWeight:600, fontSize:13 }}>Cancel</button>
-              <button onClick={handleSave} disabled={isSaving} style={{ flex:1, padding:'10px', borderRadius:8, border:'none', background:'#1E5ADB', color:'white', cursor:isSaving?'not-allowed':'pointer', fontWeight:600, fontSize:13, opacity:isSaving?0.7:1 }}>
-                {isSaving ? 'Saving...' : 'Save Employee'}
+              <button
+                onClick={() => setModal(false)}
+                style={{
+                  width: 34,
+                  height: 34,
+                  borderRadius: '50%',
+                  border: '1px solid #CBD5E1',
+                  background: '#FFFFFF',
+                  color: '#64748B',
+                  display: 'flex',
+                  alignItems: 'center',
+                  justifyContent: 'center',
+                  cursor: 'pointer',
+                  transition: 'all 0.15s ease'
+                }}
+              >
+                <X size={18} />
               </button>
             </div>
+
+            {/* Modern Stepper Progress Header */}
+            <div style={{ padding: '16px 28px 14px 28px', borderBottom: '1px solid #F1F5F9', background: '#FAFAFA' }}>
+              <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between' }}>
+                
+                {/* Step 1 Badge */}
+                <div
+                  onClick={() => setModalTab('info')}
+                  style={{ display: 'flex', alignItems: 'center', gap: 10, cursor: 'pointer' }}
+                >
+                  <div style={{
+                    width: 32,
+                    height: 32,
+                    borderRadius: '50%',
+                    background: modalTab === 'info' ? '#1E5ADB' : (modalTab === 'assignment' || modalTab === 'all' ? '#10B981' : '#F1F5F9'),
+                    color: (modalTab === 'info' || modalTab === 'assignment' || modalTab === 'all') ? '#FFFFFF' : '#64748B',
+                    display: 'flex',
+                    alignItems: 'center',
+                    justifyContent: 'center',
+                    fontWeight: 800,
+                    fontSize: 13,
+                    boxShadow: modalTab === 'info' ? '0 4px 12px rgba(30, 90, 219, 0.3)' : 'none',
+                    transition: 'all 0.2s ease'
+                  }}>
+                    {modalTab === 'assignment' || modalTab === 'all' ? <Check size={16} strokeWidth={3} /> : '1'}
+                  </div>
+                  <div>
+                    <div style={{ fontSize: 12, fontWeight: 700, color: modalTab === 'info' ? '#1E5ADB' : '#0F172A' }}>1. Identity & Role</div>
+                    <div style={{ fontSize: 10, color: '#64748B', fontWeight: 500 }}>Personal & Credentials</div>
+                  </div>
+                </div>
+
+                {/* Connecting Line 1 */}
+                <div style={{ flex: 1, height: 2, background: (modalTab === 'assignment' || modalTab === 'all') ? '#10B981' : '#E2E8F0', margin: '0 12px', transition: 'all 0.3s ease' }} />
+
+                {/* Step 2 Badge */}
+                <div
+                  onClick={() => setModalTab('assignment')}
+                  style={{ display: 'flex', alignItems: 'center', gap: 10, cursor: 'pointer' }}
+                >
+                  <div style={{
+                    width: 32,
+                    height: 32,
+                    borderRadius: '50%',
+                    background: modalTab === 'assignment' ? '#1E5ADB' : (modalTab === 'all' ? '#10B981' : '#F1F5F9'),
+                    color: (modalTab === 'assignment' || modalTab === 'all') ? '#FFFFFF' : '#64748B',
+                    border: modalTab === 'assignment' ? 'none' : '1.5px solid #CBD5E1',
+                    display: 'flex',
+                    alignItems: 'center',
+                    justifyContent: 'center',
+                    fontWeight: 800,
+                    fontSize: 13,
+                    boxShadow: modalTab === 'assignment' ? '0 4px 12px rgba(30, 90, 219, 0.3)' : 'none',
+                    transition: 'all 0.2s ease'
+                  }}>
+                    {modalTab === 'all' ? <Check size={16} strokeWidth={3} /> : '2'}
+                  </div>
+                  <div>
+                    <div style={{ fontSize: 12, fontWeight: 700, color: modalTab === 'assignment' ? '#1E5ADB' : '#0F172A' }}>2. Work & Deployment</div>
+                    <div style={{ fontSize: 10, color: '#64748B', fontWeight: 500 }}>Site & Geofence</div>
+                  </div>
+                </div>
+
+                {/* Connecting Line 2 */}
+                <div style={{ flex: 1, height: 2, background: modalTab === 'all' ? '#10B981' : '#E2E8F0', margin: '0 12px', transition: 'all 0.3s ease' }} />
+
+                {/* Step 3 Badge */}
+                <div
+                  onClick={() => setModalTab('all')}
+                  style={{ display: 'flex', alignItems: 'center', gap: 10, cursor: 'pointer' }}
+                >
+                  <div style={{
+                    width: 32,
+                    height: 32,
+                    borderRadius: '50%',
+                    background: modalTab === 'all' ? '#1E5ADB' : '#F1F5F9',
+                    color: modalTab === 'all' ? '#FFFFFF' : '#64748B',
+                    border: modalTab === 'all' ? 'none' : '1.5px solid #CBD5E1',
+                    display: 'flex',
+                    alignItems: 'center',
+                    justifyContent: 'center',
+                    fontWeight: 800,
+                    fontSize: 13,
+                    boxShadow: modalTab === 'all' ? '0 4px 12px rgba(30, 90, 219, 0.3)' : 'none',
+                    transition: 'all 0.2s ease'
+                  }}>
+                    3
+                  </div>
+                  <div>
+                    <div style={{ fontSize: 12, fontWeight: 700, color: modalTab === 'all' ? '#1E5ADB' : '#0F172A' }}>3. Full Overview</div>
+                    <div style={{ fontSize: 10, color: '#64748B', fontWeight: 500 }}>Review & Save</div>
+                  </div>
+                </div>
+
+              </div>
+            </div>
+
+            {/* Modal Body Form Fields - Optimized for Scrolldown-Free Display */}
+            <div style={{ padding: '24px 28px' }}>
+              {modalTab === 'info' && (
+                <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 16 }}>
+                  <div>
+                    <label style={{ fontSize: 11, fontWeight: 700, color: '#475569', display: 'block', marginBottom: 6 }}>Full Name *</label>
+                    <div style={{ position: 'relative' }}>
+                      <User size={15} color="#94A3B8" style={{ position: 'absolute', left: 12, top: 12 }} />
+                      <input
+                        type="text"
+                        value={form.name || ''}
+                        onChange={e => setForm(p => ({ ...p, name: e.target.value }))}
+                        placeholder="e.g. John Doe"
+                        style={{ width: '100%', padding: '10px 14px 10px 38px', borderRadius: 12, border: '1.5px solid #E2E8F0', fontSize: 13, outline: 'none', background: '#FFFFFF', fontFamily: 'Inter, sans-serif', boxSizing: 'border-box', color: '#0F172A', fontWeight: 500 }}
+                      />
+                    </div>
+                  </div>
+
+                  <div>
+                    <label style={{ fontSize: 11, fontWeight: 700, color: '#475569', display: 'block', marginBottom: 6 }}>ID Number</label>
+                    <div style={{ position: 'relative' }}>
+                      <IdCard size={15} color="#94A3B8" style={{ position: 'absolute', left: 12, top: 12 }} />
+                      <input
+                        type="text"
+                        value={form.idNum || ''}
+                        onChange={e => setForm(p => ({ ...p, idNum: e.target.value }))}
+                        placeholder="e.g. EMP-1001"
+                        style={{ width: '100%', padding: '10px 14px 10px 38px', borderRadius: 12, border: '1.5px solid #E2E8F0', fontSize: 13, outline: 'none', background: '#FFFFFF', fontFamily: 'Inter, sans-serif', boxSizing: 'border-box', color: '#0F172A', fontWeight: 500 }}
+                      />
+                    </div>
+                  </div>
+
+                  <div>
+                    <label style={{ fontSize: 11, fontWeight: 700, color: '#475569', display: 'block', marginBottom: 6 }}>Department / Org</label>
+                    <div style={{ position: 'relative' }}>
+                      <Building2 size={15} color="#94A3B8" style={{ position: 'absolute', left: 12, top: 12 }} />
+                      <input
+                        type="text"
+                        value={form.org || ''}
+                        onChange={e => setForm(p => ({ ...p, org: e.target.value }))}
+                        placeholder="e.g. Field Operations"
+                        style={{ width: '100%', padding: '10px 14px 10px 38px', borderRadius: 12, border: '1.5px solid #E2E8F0', fontSize: 13, outline: 'none', background: '#FFFFFF', fontFamily: 'Inter, sans-serif', boxSizing: 'border-box', color: '#0F172A', fontWeight: 500 }}
+                      />
+                    </div>
+                  </div>
+
+                  <div>
+                    <label style={{ fontSize: 11, fontWeight: 700, color: '#475569', display: 'block', marginBottom: 6 }}>Role / Job Title</label>
+                    <div style={{ position: 'relative' }}>
+                      <Briefcase size={15} color="#94A3B8" style={{ position: 'absolute', left: 12, top: 12 }} />
+                      <input
+                        type="text"
+                        value={form.type || ''}
+                        onChange={e => setForm(p => ({ ...p, type: e.target.value }))}
+                        placeholder="e.g. Security Guard"
+                        style={{ width: '100%', padding: '10px 14px 10px 38px', borderRadius: 12, border: '1.5px solid #E2E8F0', fontSize: 13, outline: 'none', background: '#FFFFFF', fontFamily: 'Inter, sans-serif', boxSizing: 'border-box', color: '#0F172A', fontWeight: 500 }}
+                      />
+                    </div>
+                  </div>
+
+                  <div>
+                    <label style={{ fontSize: 11, fontWeight: 700, color: '#475569', display: 'block', marginBottom: 6 }}>Email Address *</label>
+                    <div style={{ position: 'relative' }}>
+                      <Mail size={15} color="#94A3B8" style={{ position: 'absolute', left: 12, top: 12 }} />
+                      <input
+                        type="email"
+                        value={form.email || ''}
+                        onChange={e => setForm(p => ({ ...p, email: e.target.value }))}
+                        placeholder="e.g. johndoe@geostride.com"
+                        style={{ width: '100%', padding: '10px 14px 10px 38px', borderRadius: 12, border: '1.5px solid #E2E8F0', fontSize: 13, outline: 'none', background: '#FFFFFF', fontFamily: 'Inter, sans-serif', boxSizing: 'border-box', color: '#0F172A', fontWeight: 500 }}
+                      />
+                    </div>
+                  </div>
+
+                  <div>
+                    <label style={{ fontSize: 11, fontWeight: 700, color: '#475569', display: 'block', marginBottom: 6 }}>Account Password</label>
+                    <div style={{ position: 'relative' }}>
+                      <Lock size={15} color="#94A3B8" style={{ position: 'absolute', left: 12, top: 12 }} />
+                      <input
+                        type="password"
+                        value={form.password || ''}
+                        onChange={e => setForm(p => ({ ...p, password: e.target.value }))}
+                        placeholder="Enter secure password"
+                        style={{ width: '100%', padding: '10px 14px 10px 38px', borderRadius: 12, border: '1.5px solid #E2E8F0', fontSize: 13, outline: 'none', background: '#FFFFFF', fontFamily: 'Inter, sans-serif', boxSizing: 'border-box', color: '#0F172A', fontWeight: 500 }}
+                      />
+                    </div>
+                  </div>
+                </div>
+              )}
+
+              {modalTab === 'assignment' && (
+                <div style={{ display: 'flex', flexDirection: 'column', gap: 16 }}>
+                  <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 16 }}>
+                    <div>
+                      <label style={{ fontSize: 11, fontWeight: 700, color: '#475569', display: 'block', marginBottom: 6 }}>Duty Status</label>
+                      <div style={{ position: 'relative' }}>
+                        <Activity size={15} color="#94A3B8" style={{ position: 'absolute', left: 12, top: 12 }} />
+                        <select
+                          value={form.status || 'Offline'}
+                          onChange={e => setForm(p => ({ ...p, status: e.target.value }))}
+                          style={{ width: '100%', padding: '10px 14px 10px 38px', borderRadius: 12, border: '1.5px solid #E2E8F0', fontSize: 13, outline: 'none', background: '#FFFFFF', fontFamily: 'Inter, sans-serif', boxSizing: 'border-box', color: '#0F172A', fontWeight: 500 }}
+                        >
+                          {['On Site', 'On Duty', 'In Transit', 'Offline'].map(s => <option key={s}>{s}</option>)}
+                        </select>
+                      </div>
+                    </div>
+
+                    <div>
+                      <label style={{ fontSize: 11, fontWeight: 700, color: '#475569', display: 'block', marginBottom: 6 }}>Employee Work Type</label>
+                      <div style={{ position: 'relative' }}>
+                        <Building2 size={15} color="#94A3B8" style={{ position: 'absolute', left: 12, top: 12 }} />
+                        <select
+                          value={form.workType || 'Fixed Site Employee'}
+                          onChange={e => setForm(p => ({ ...p, workType: e.target.value, assignedSite: '', geofenceRadius: 100 }))}
+                          style={{ width: '100%', padding: '10px 14px 10px 38px', borderRadius: 12, border: '1.5px solid #E2E8F0', fontSize: 13, outline: 'none', background: '#FFFFFF', fontFamily: 'Inter, sans-serif', boxSizing: 'border-box', color: '#0F172A', fontWeight: 500 }}
+                        >
+                          <option value="Fixed Site Employee">Fixed Site Employee</option>
+                          <option value="Mobile Field Employee">Mobile Field Employee</option>
+                        </select>
+                      </div>
+                    </div>
+                  </div>
+
+                  {form.workType === 'Fixed Site Employee' && (
+                    <div style={{ background: '#F8FAFC', borderRadius: 16, padding: 18, border: '1px solid #E2E8F0', marginTop: 4 }}>
+                      <div style={{ fontSize: 12, fontWeight: 700, color: '#1E5ADB', marginBottom: 12, display: 'flex', alignItems: 'center', gap: 6 }}>
+                        <MapPin size={15} /> Fixed Site Location & Geofence Perimeter
+                      </div>
+
+                      <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 16, alignItems: 'start' }}>
+                        <div>
+                          <label style={{ fontSize: 11, fontWeight: 700, color: '#475569', display: 'block', marginBottom: 6 }}>Assigned Site</label>
+                          <select
+                            value={form.assignedSite || ''}
+                            onChange={e => {
+                              const selSite = e.target.value;
+                              const matched = sites.find(s => (s.name || s.id) === selSite);
+                              const rad = matched?.radius ? (typeof matched.radius === 'number' ? matched.radius : parseInt(matched.radius)) : 20;
+                              setForm(p => ({
+                                ...p,
+                                assignedSite: selSite,
+                                geofenceRadius: rad || p.geofenceRadius || 20
+                              }));
+                            }}
+                            style={{ width: '100%', padding: '10px 14px', borderRadius: 12, border: '1.5px solid #E2E8F0', fontSize: 13, outline: 'none', background: '#FFFFFF', fontFamily: 'Inter, sans-serif', boxSizing: 'border-box', color: '#0F172A', fontWeight: 500 }}
+                          >
+                            <option value="">— Select a Site —</option>
+                            {sites.map(s => <option key={s.id} value={s.name || s.id}>{s.name} ({typeof s.radius === 'number' ? s.radius : (parseInt(s.radius) || 20)}m)</option>)}
+                          </select>
+                        </div>
+
+                        <div>
+                          <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 6 }}>
+                            <label style={{ fontSize: 11, fontWeight: 700, color: '#475569' }}>Geofence Radius</label>
+                            <span style={{ fontSize: 12, fontWeight: 800, color: '#1E5ADB', background: '#EFF6FF', padding: '2px 8px', borderRadius: 8 }}>
+                              {form.geofenceRadius || 20} meters
+                            </span>
+                          </div>
+                          <input
+                            type="range"
+                            min={20}
+                            max={1000}
+                            step={5}
+                            value={form.geofenceRadius || 20}
+                            onChange={e => setForm(p => ({ ...p, geofenceRadius: parseInt(e.target.value) || 20 }))}
+                            style={{ width: '100%', accentColor: '#1E5ADB', cursor: 'pointer' }}
+                          />
+                          <div style={{ display: 'flex', gap: 4, marginTop: 6 }}>
+                            {[
+                              { r: 20, label: '20m (Bldg)' },
+                              { r: 50, label: '50m' },
+                              { r: 100, label: '100m' },
+                              { r: 300, label: '300m' },
+                              { r: 500, label: '500m' }
+                            ].map(item => (
+                              <button
+                                key={item.r}
+                                type="button"
+                                onClick={() => setForm(p => ({ ...p, geofenceRadius: item.r }))}
+                                style={{
+                                  flex: 1,
+                                  padding: '3px 0',
+                                  borderRadius: 6,
+                                  border: (form.geofenceRadius || 20) === item.r ? '1.5px solid #1E5ADB' : '1px solid #E2E8F0',
+                                  background: (form.geofenceRadius || 20) === item.r ? '#EFF6FF' : '#FFFFFF',
+                                  color: (form.geofenceRadius || 20) === item.r ? '#1E5ADB' : '#64748B',
+                                  fontSize: 10,
+                                  fontWeight: 700,
+                                  cursor: 'pointer'
+                                }}
+                              >
+                                {item.label}
+                              </button>
+                            ))}
+                          </div>
+                          {(form.geofenceRadius || 20) <= 30 && (
+                            <div style={{ marginTop: 6, fontSize: 10, color: '#1D4ED8', fontWeight: 600, display: 'flex', alignItems: 'center', gap: 4 }}>
+                              🏢 20m Building Fit: restricts check-in strictly inside building footprint.
+                            </div>
+                          )}
+                        </div>
+                      </div>
+                    </div>
+                  )}
+                </div>
+              )}
+
+              {modalTab === 'all' && (
+                <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 14 }}>
+                  <div>
+                    <label style={{ fontSize: 11, fontWeight: 700, color: '#475569', display: 'block', marginBottom: 4 }}>Full Name *</label>
+                    <input type="text" value={form.name || ''} onChange={e => setForm(p => ({ ...p, name: e.target.value }))} placeholder="John Doe" style={{ width: '100%', padding: '8px 12px', borderRadius: 10, border: '1.5px solid #E2E8F0', fontSize: 12, outline: 'none', background: '#FFFFFF', boxSizing: 'border-box' }} />
+                  </div>
+                  <div>
+                    <label style={{ fontSize: 11, fontWeight: 700, color: '#475569', display: 'block', marginBottom: 4 }}>Email Address *</label>
+                    <input type="email" value={form.email || ''} onChange={e => setForm(p => ({ ...p, email: e.target.value }))} placeholder="johndoe@geostride.com" style={{ width: '100%', padding: '8px 12px', borderRadius: 10, border: '1.5px solid #E2E8F0', fontSize: 12, outline: 'none', background: '#FFFFFF', boxSizing: 'border-box' }} />
+                  </div>
+                  <div>
+                    <label style={{ fontSize: 11, fontWeight: 700, color: '#475569', display: 'block', marginBottom: 4 }}>ID Number</label>
+                    <input type="text" value={form.idNum || ''} onChange={e => setForm(p => ({ ...p, idNum: e.target.value }))} placeholder="EMP-1001" style={{ width: '100%', padding: '8px 12px', borderRadius: 10, border: '1.5px solid #E2E8F0', fontSize: 12, outline: 'none', background: '#FFFFFF', boxSizing: 'border-box' }} />
+                  </div>
+                  <div>
+                    <label style={{ fontSize: 11, fontWeight: 700, color: '#475569', display: 'block', marginBottom: 4 }}>Department</label>
+                    <input type="text" value={form.org || ''} onChange={e => setForm(p => ({ ...p, org: e.target.value }))} placeholder="Field Operations" style={{ width: '100%', padding: '8px 12px', borderRadius: 10, border: '1.5px solid #E2E8F0', fontSize: 12, outline: 'none', background: '#FFFFFF', boxSizing: 'border-box' }} />
+                  </div>
+                  <div>
+                    <label style={{ fontSize: 11, fontWeight: 700, color: '#475569', display: 'block', marginBottom: 4 }}>Role / Title</label>
+                    <input type="text" value={form.type || ''} onChange={e => setForm(p => ({ ...p, type: e.target.value }))} placeholder="Security Guard" style={{ width: '100%', padding: '8px 12px', borderRadius: 10, border: '1.5px solid #E2E8F0', fontSize: 12, outline: 'none', background: '#FFFFFF', boxSizing: 'border-box' }} />
+                  </div>
+                  <div>
+                    <label style={{ fontSize: 11, fontWeight: 700, color: '#475569', display: 'block', marginBottom: 4 }}>Status</label>
+                    <select value={form.status || 'Offline'} onChange={e => setForm(p => ({ ...p, status: e.target.value }))} style={{ width: '100%', padding: '8px 12px', borderRadius: 10, border: '1.5px solid #E2E8F0', fontSize: 12, outline: 'none', background: '#FFFFFF', boxSizing: 'border-box' }}>
+                      {['On Site', 'On Duty', 'In Transit', 'Offline'].map(s => <option key={s}>{s}</option>)}
+                    </select>
+                  </div>
+                  <div>
+                    <label style={{ fontSize: 11, fontWeight: 700, color: '#475569', display: 'block', marginBottom: 4 }}>Work Type</label>
+                    <select value={form.workType || 'Fixed Site Employee'} onChange={e => setForm(p => ({ ...p, workType: e.target.value }))} style={{ width: '100%', padding: '8px 12px', borderRadius: 10, border: '1.5px solid #E2E8F0', fontSize: 12, outline: 'none', background: '#FFFFFF', boxSizing: 'border-box' }}>
+                      <option value="Fixed Site Employee">Fixed Site Employee</option>
+                      <option value="Mobile Field Employee">Mobile Field Employee</option>
+                    </select>
+                  </div>
+                  <div>
+                    <label style={{ fontSize: 11, fontWeight: 700, color: '#475569', display: 'block', marginBottom: 4 }}>Assigned Site</label>
+                    <select value={form.assignedSite || ''} onChange={e => setForm(p => ({ ...p, assignedSite: e.target.value }))} style={{ width: '100%', padding: '8px 12px', borderRadius: 10, border: '1.5px solid #E2E8F0', fontSize: 12, outline: 'none', background: '#FFFFFF', boxSizing: 'border-box' }}>
+                      <option value="">— Select Site —</option>
+                      {sites.map(s => <option key={s.id} value={s.name || s.id}>{s.name}</option>)}
+                    </select>
+                  </div>
+                </div>
+              )}
+            </div>
+
+            {/* Modal Bottom Action Bar with Stepper Controls */}
+            <div style={{
+              padding: '16px 28px 22px 28px',
+              borderTop: '1px solid #F1F5F9',
+              background: '#FAFAFA',
+              display: 'flex',
+              justifyContent: 'space-between',
+              alignItems: 'center'
+            }}>
+              <div style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
+                {modalTab !== 'info' ? (
+                  <button
+                    onClick={() => setModalTab(modalTab === 'all' ? 'assignment' : 'info')}
+                    style={{
+                      padding: '9px 18px',
+                      borderRadius: 12,
+                      border: '1px solid #CBD5E1',
+                      background: '#FFFFFF',
+                      color: '#334155',
+                      fontSize: 13,
+                      fontWeight: 600,
+                      cursor: 'pointer',
+                      display: 'flex',
+                      alignItems: 'center',
+                      gap: 6
+                    }}
+                  >
+                    <ChevronLeft size={16} /> Back
+                  </button>
+                ) : (
+                  <button
+                    onClick={() => setModal(false)}
+                    style={{
+                      padding: '9px 18px',
+                      borderRadius: 12,
+                      border: '1px solid #CBD5E1',
+                      background: '#FFFFFF',
+                      color: '#64748B',
+                      fontSize: 13,
+                      fontWeight: 600,
+                      cursor: 'pointer'
+                    }}
+                  >
+                    Cancel
+                  </button>
+                )}
+              </div>
+
+              <div style={{ display: 'flex', gap: 12 }}>
+                {modalTab !== 'all' ? (
+                  <button
+                    onClick={() => setModalTab(modalTab === 'info' ? 'assignment' : 'all')}
+                    style={{
+                      padding: '9px 20px',
+                      borderRadius: 12,
+                      border: '1px solid #1E5ADB',
+                      background: '#EFF6FF',
+                      color: '#1E5ADB',
+                      fontSize: 13,
+                      fontWeight: 700,
+                      cursor: 'pointer',
+                      display: 'flex',
+                      alignItems: 'center',
+                      gap: 6
+                    }}
+                  >
+                    Next Step <ChevronRight size={16} />
+                  </button>
+                ) : null}
+
+                <button
+                  onClick={handleSave}
+                  disabled={isSaving}
+                  style={{
+                    padding: '9px 24px',
+                    borderRadius: 12,
+                    border: 'none',
+                    background: 'linear-gradient(135deg, #1E5ADB 0%, #1E40AF 100%)',
+                    color: '#FFFFFF',
+                    fontSize: 13,
+                    fontWeight: 700,
+                    cursor: isSaving ? 'not-allowed' : 'pointer',
+                    boxShadow: '0 4px 14px rgba(30, 90, 219, 0.35)',
+                    opacity: isSaving ? 0.7 : 1
+                  }}
+                >
+                  {isSaving ? 'Saving Profile...' : 'Save Employee'}
+                </button>
+              </div>
+            </div>
+
           </div>
         </div>
       )}

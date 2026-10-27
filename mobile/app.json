@@ -1,0 +1,61 @@
+{
+  "expo": {
+    "name": "SubAi",
+    "slug": "subai",
+    "version": "1.0.8",
+    "orientation": "portrait",
+    "icon": "./assets/icon.png",
+    "userInterfaceStyle": "light",
+    "splash": {
+      "image": "./assets/splash-icon.png",
+      "resizeMode": "contain",
+      "backgroundColor": "#4F46E5"
+    },
+    "ios": {
+      "supportsTablet": true,
+      "bundleIdentifier": "com.subai.monitoring"
+    },
+    "android": {
+      "package": "com.subai.monitoring",
+      "versionCode": 10,
+      "adaptiveIcon": {
+        "backgroundColor": "#E6F4FE",
+        "foregroundImage": "./assets/icon.png"
+      },
+      "permissions": [
+        "android.permission.ACCESS_FINE_LOCATION",
+        "android.permission.ACCESS_COARSE_LOCATION",
+        "android.permission.ACCESS_BACKGROUND_LOCATION",
+        "android.permission.FOREGROUND_SERVICE",
+        "android.permission.FOREGROUND_SERVICE_LOCATION",
+        "android.permission.CAMERA",
+        "android.permission.READ_EXTERNAL_STORAGE",
+        "android.permission.WRITE_EXTERNAL_STORAGE",
+        "android.permission.RECORD_AUDIO"
+      ]
+    },
+    "plugins": [
+      "expo-image-picker",
+      [
+        "expo-location",
+        {
+          "locationAlwaysAndWhenInUsePermission": "SubAi needs your location to verify attendance and monitor your assigned site while you are on duty.",
+          "locationWhenInUsePermission": "SubAi needs your location to verify attendance at your assigned site.",
+          "isAndroidBackgroundLocationEnabled": true,
+          "isAndroidForegroundServiceEnabled": true
+        }
+      ],
+      "expo-status-bar",
+      "expo-font"
+    ],
+    "web": {
+      "favicon": "./assets/favicon.png"
+    },
+    "extra": {
+      "eas": {
+        "projectId": "3beecbe4-6267-4035-a7ca-eeaa730d72ea"
+      }
+    },
+    "owner": "jupiter20o2"
+  }
+}

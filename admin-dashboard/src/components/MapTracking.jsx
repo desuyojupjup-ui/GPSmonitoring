@@ -2,7 +2,6 @@ import React, { useState, useEffect } from 'react';
 import { MapContainer, TileLayer, Marker, Popup, Circle, useMap } from 'react-leaflet';
 import L from 'leaflet';
 import 'leaflet/dist/leaflet.css';
-import { MOCK_EMPLOYEES, MOCK_SITES, MOCK_LOCATIONS } from '../mockData';
 
 // Fix Leaflet default marker icons
 delete L.Icon.Default.prototype._getIconUrl;
@@ -68,17 +67,38 @@ function MapFitBounds({ boundsLocations }) {
   return null;
 }
 
-export default function MapTracking({ employees, sites, locations, onFullscreen }) {
-  const mappableLocations = employees.filter(e => locations[e.id]).map(emp => locations[emp.id]);
+function MapFocusController({ focusedEmployee, locations = {} }) {
+  const map = useMap();
+  useEffect(() => {
+    if (focusedEmployee) {
+      const lat = focusedEmployee.lat || locations[focusedEmployee.id]?.lat;
+      const lng = focusedEmployee.lng || locations[focusedEmployee.id]?.lng;
+      if (lat && lng) {
+        map.flyTo([lat, lng], 17, { animate: true, duration: 1.2 });
+      }
+    }
+  }, [focusedEmployee, locations, map]);
+
+  return null;
+}
+
+export default function MapTracking({ employees = [], sites = [], locations = {}, onFullscreen, focusedEmployee = null, onClearFocus = null }) {
+  const mappableEmployees = employees.filter(e => (e.lat && e.lng) || locations[e.id]);
+  const mappableLocations = mappableEmployees.map(emp => ({
+    lat: emp.lat || locations[emp.id]?.lat,
+    lng: emp.lng || locations[emp.id]?.lng
+  }));
 
   return (
-    <div className="map-container-premium">
-      <MapContainer center={[14.608, 120.990]} zoom={13} scrollWheelZoom style={{ height: '100%', width: '100%' }}>
+    <div className="map-container-premium" style={{ minHeight: '350px', height: '100%', width: '100%' }}>
+      <MapContainer center={[14.608, 120.990]} zoom={13} scrollWheelZoom style={{ height: '100%', width: '100%', minHeight: '350px' }}>
         <TileLayer
-          attribution='&copy; <a href="https://carto.com/">CartoDB</a>'
-          url="https://{s}.basemaps.cartocdn.com/rastertiles/voyager/{z}/{x}/{y}{r}.png"
+          attribution='&copy; Google Maps'
+          url="https://mt1.google.com/vt/lyrs=m&x={x}&y={y}&z={z}"
+          maxZoom={20}
         />
         <MapFitBounds boundsLocations={mappableLocations} />
+        <MapFocusController focusedEmployee={focusedEmployee} locations={locations} />
         {sites.map(s => {
           const r = typeof s.radius === 'string' ? parseInt(s.radius.replace('m', '')) : (s.radius || 300);
           return s.lat && s.lng ? (
@@ -87,11 +107,12 @@ export default function MapTracking({ employees, sites, locations, onFullscreen 
             />
           ) : null;
         })}
-        {employees.filter(e => locations[e.id]).map(emp => {
-          const loc = locations[emp.id];
+        {mappableEmployees.map(emp => {
+          const lat = emp.lat || locations[emp.id]?.lat;
+          const lng = emp.lng || locations[emp.id]?.lng;
           const status = emp.status || 'Offline';
           return (
-            <Marker key={emp.id} position={[loc.lat, loc.lng]} icon={createEmojiIcon(getInitials(emp.name), STATUS_COLORS[status] || '#9CA3AF', emp.profilePic)}>
+            <Marker key={emp.id} position={[lat, lng]} icon={createEmojiIcon(getInitials(emp.name), STATUS_COLORS[status] || '#9CA3AF', emp.profilePic)}>
               <Popup>
                 <div style={{ fontWeight: 600, fontSize: 13 }}>{emp.name}</div>
                 <div style={{ fontSize: 11, color: '#6B7280' }}>{emp.status || 'Offline'} • {emp.department || ''}</div>
@@ -102,11 +123,50 @@ export default function MapTracking({ employees, sites, locations, onFullscreen 
       </MapContainer>
       {/* Floating controls */}
       <div className="map-floating-controls">
+        {focusedEmployee && (
+          <div style={{
+            display: 'flex',
+            alignItems: 'center',
+            gap: 8,
+            background: 'rgba(15, 23, 42, 0.90)',
+            backdropFilter: 'blur(8px)',
+            color: '#FFFFFF',
+            padding: '6px 12px',
+            borderRadius: 20,
+            fontSize: 11,
+            fontWeight: 700,
+            boxShadow: '0 4px 14px rgba(0,0,0,0.25)',
+            border: '1px solid rgba(255,255,255,0.18)'
+          }}>
+            <span style={{ width: 8, height: 8, borderRadius: '50%', background: '#10B981', display: 'inline-block' }} />
+            <span>Focused: {focusedEmployee.name}</span>
+            {onClearFocus && (
+              <button
+                onClick={onClearFocus}
+                style={{
+                  background: 'rgba(255,255,255,0.15)',
+                  border: 'none',
+                  color: '#FFFFFF',
+                  borderRadius: '50%',
+                  width: 18,
+                  height: 18,
+                  cursor: 'pointer',
+                  display: 'flex',
+                  alignItems: 'center',
+                  justifyContent: 'center',
+                  fontSize: 11,
+                  padding: 0,
+                  marginLeft: 4
+                }}
+                title="Clear Focus"
+              >
+                ✕
+              </button>
+            )}
+          </div>
+        )}
         <button className="map-ctrl-btn" onClick={onFullscreen} title="Fullscreen">
           <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M8 3H5a2 2 0 0 0-2 2v3m18 0V5a2 2 0 0 0-2-2h-3m0 18h3a2 2 0 0 0 2-2v-3M3 16v3a2 2 0 0 0 2 2h3"/></svg>
-        </button>
-        <button className="map-ctrl-btn" title="Refresh">
-          <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M21 12a9 9 0 0 0-9-9 9.75 9.75 0 0 0-6.74 2.74L3 8"/><path d="M3 3v5h5"/><path d="M3 12a9 9 0 0 0 9 9 9.75 9.75 0 0 0 6.74-2.74L21 16"/><path d="M16 16h5v5"/></svg>
         </button>
       </div>
       {/* Legend */}
