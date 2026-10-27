@@ -977,8 +977,7 @@ export default function HomeScreen({ navigation, route, user: propUser }) {
                   key={siteItem.id || `home_site_${idx}`}
                   style={[
                     styles.siteInfoContainer,
-                    { marginBottom: 0 },
-                    assignedSitesList.length > 1 && { borderLeftWidth: 3.5, borderLeftColor: '#4F46E5' }
+                    { marginBottom: 0 }
                   ]}
                   onPress={() => navigation.navigate('Map', { assignment: siteItem.assignment, site: siteItem.site })}
                   activeOpacity={0.8}
