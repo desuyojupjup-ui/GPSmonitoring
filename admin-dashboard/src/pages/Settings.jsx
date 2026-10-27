@@ -12,7 +12,7 @@ const DEFAULT_SETTINGS = {
   profile: {
     firstName: 'System',
     lastName: 'Admin',
-    email: 'admin@geostride.com',
+    email: 'admin@subai.com',
     phone: '+63 917 123 4567',
     role: 'Super Administrator',
     department: 'Command Center Ops',
@@ -67,7 +67,7 @@ export default function Settings() {
           ...DEFAULT_SETTINGS.profile,
           firstName: parsedSettings?.profile?.firstName || userFirstName || 'System',
           lastName: parsedSettings?.profile?.lastName || userLastName || 'Admin',
-          email: parsedSettings?.profile?.email || savedUser.email || 'admin@geostride.com',
+          email: parsedSettings?.profile?.email || savedUser.email || 'admin@subai.com',
           phone: parsedSettings?.profile?.phone || savedUser.phone || '+63 917 123 4567',
           role: parsedSettings?.profile?.role || savedUser.role || 'Super Administrator',
           department: parsedSettings?.profile?.department || savedUser.department || 'Command Center Ops',

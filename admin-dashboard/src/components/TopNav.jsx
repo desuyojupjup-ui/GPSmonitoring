@@ -441,13 +441,13 @@ export default function TopNav({ user, onLogout, onMenuToggle }) {
       id: 'ai-assistant',
       icon: <Bot size={15} />,
       label: 'AI Assistant',
-      subtitle: 'Ask GeoStride AI questions',
+      subtitle: 'Ask SubAi questions',
       color: '#06B6D4',
       handler: () => {
         setShowQuickActions(false);
         window.dispatchEvent(new CustomEvent('subai_open_chat'));
         navigate('/ai-assistant');
-        showToast('AI Assistant', 'Opening GeoStride AI Assistant...', 'info');
+        showToast('AI Assistant', 'Opening SubAi Assistant...', 'info');
       }
     },
   ];

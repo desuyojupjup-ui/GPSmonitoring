@@ -1144,7 +1144,7 @@ export default function Employees() {
                         type="email"
                         value={form.email || ''}
                         onChange={e => setForm(p => ({ ...p, email: e.target.value }))}
-                        placeholder="e.g. johndoe@geostride.com"
+                        placeholder="e.g. johndoe@subai.com"
                         style={{ width: '100%', padding: '10px 14px 10px 38px', borderRadius: 12, border: '1.5px solid #E2E8F0', fontSize: 13, outline: 'none', background: '#FFFFFF', fontFamily: 'Inter, sans-serif', boxSizing: 'border-box', color: '#0F172A', fontWeight: 500 }}
                       />
                     </div>
@@ -1291,7 +1291,7 @@ export default function Employees() {
                   </div>
                   <div>
                     <label style={{ fontSize: 11, fontWeight: 700, color: '#475569', display: 'block', marginBottom: 4 }}>Email Address *</label>
-                    <input type="email" value={form.email || ''} onChange={e => setForm(p => ({ ...p, email: e.target.value }))} placeholder="johndoe@geostride.com" style={{ width: '100%', padding: '8px 12px', borderRadius: 10, border: '1.5px solid #E2E8F0', fontSize: 12, outline: 'none', background: '#FFFFFF', boxSizing: 'border-box' }} />
+                    <input type="email" value={form.email || ''} onChange={e => setForm(p => ({ ...p, email: e.target.value }))} placeholder="johndoe@subai.com" style={{ width: '100%', padding: '8px 12px', borderRadius: 10, border: '1.5px solid #E2E8F0', fontSize: 12, outline: 'none', background: '#FFFFFF', boxSizing: 'border-box' }} />
                   </div>
                   <div>
                     <label style={{ fontSize: 11, fontWeight: 700, color: '#475569', display: 'block', marginBottom: 4 }}>ID Number</label>

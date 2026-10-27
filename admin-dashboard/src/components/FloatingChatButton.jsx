@@ -20,7 +20,7 @@ export default function FloatingChatButton() {
   const [messages, setMessages] = useState([
     {
       id: '1',
-      text: "👋 Hello, Admin! I'm your **GeoStride AI**.\n\nAsk me about employees, attendance, assignments, or site activity!",
+      text: "👋 Hello, Admin! I'm your **SubAi**.\n\nAsk me about employees, attendance, assignments, or site activity!",
       sender: 'bot',
       time: new Date()
     }
@@ -118,7 +118,7 @@ export default function FloatingChatButton() {
               <img src={chatbotIcon} alt="Bot" style={{ width: 22, height: 22, objectFit: 'contain' }} />
             </div>
             <div style={{ flex: 1 }}>
-              <div style={{ color: 'white', fontWeight: 700, fontSize: 14 }}>GeoStride AI</div>
+              <div style={{ color: 'white', fontWeight: 700, fontSize: 14 }}>SubAi</div>
               <div style={{ color: 'rgba(255,255,255,0.7)', fontSize: 11, display: 'flex', alignItems: 'center', gap: 4 }}>
                 <span style={{ width: 5, height: 5, borderRadius: '50%', background: '#4ADE80', display: 'inline-block' }} />
                 Online · Live Database

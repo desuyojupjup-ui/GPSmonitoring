@@ -20,7 +20,7 @@ export default function AIAssistant() {
   const [messages, setMessages] = useState([
     {
       id: '1',
-      text: '👋 Hello, Admin! I\'m your **GeoStride AI Assistant**. I have full access to your live database. Ask me anything!\n\n**Try:**\n• "Who is offline today?"\n• "How many employees are on site?"\n• "Show active assignments"\n• "Which sites are registered?"',
+      text: '👋 Hello, Admin! I\'m your **SubAi Assistant**. I have full access to your live database. Ask me anything!\n\n**Try:**\n• "Who is offline today?"\n• "How many employees are on site?"\n• "Show active assignments"\n• "Which sites are registered?"',
       sender: 'bot',
       time: new Date()
     }
@@ -123,7 +123,7 @@ export default function AIAssistant() {
               <Bot size={22} color="white" />
             </div>
             <div>
-              <div style={{ color: 'white', fontWeight: 700, fontSize: 16 }}>GeoStride AI Assistant</div>
+              <div style={{ color: 'white', fontWeight: 700, fontSize: 16 }}>SubAi Assistant</div>
               <div style={{ color: 'rgba(255,255,255,0.75)', fontSize: 12, display: 'flex', alignItems: 'center', gap: 4 }}>
                 <span style={{ width: 6, height: 6, borderRadius: '50%', background: '#4ADE80', display: 'inline-block' }} />
                 Online · Live Database Connected
