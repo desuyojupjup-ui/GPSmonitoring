@@ -363,12 +363,12 @@ export default function Employees() {
     setIsSaving(true);
     try {
       const isMobile = form.workType === 'Mobile Field Employee';
-      const sitesList = Array.isArray(form.assignedSites) ? form.assignedSites : [];
+      const existing = editId ? employees.find(e => e.id === editId) : null;
       const dataToSave = {
         ...form,
-        assignedSites: isMobile ? sitesList : (form.assignedSite ? [form.assignedSite] : []),
-        assignedSite: isMobile ? sitesList.join(', ') : (form.assignedSite || ''),
-        assignedDestinations: isMobile ? sitesList : []
+        assignedSites: isMobile ? (existing?.assignedSites || []) : (form.assignedSite ? [form.assignedSite] : []),
+        assignedSite: isMobile ? (existing?.assignedSite || '') : (form.assignedSite || ''),
+        assignedDestinations: isMobile ? (existing?.assignedDestinations || []) : []
       };
       if (editId) {
         await updateDoc(doc(db, 'employees', editId), dataToSave);
@@ -1304,122 +1304,13 @@ export default function Employees() {
                   )}
 
                   {form.workType === 'Mobile Field Employee' && (
-                    <div style={{ background: '#F8FAFC', borderRadius: 16, padding: 18, border: '1px solid #E2E8F0', marginTop: 4 }}>
-                      <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 10 }}>
-                        <div style={{ fontSize: 12, fontWeight: 700, color: '#D97706', display: 'flex', alignItems: 'center', gap: 6 }}>
-                          <Truck size={15} color="#D97706" /> Multiple Assigned Sites (Field Patrol / Deployment)
-                        </div>
-                        <span style={{ fontSize: 11, fontWeight: 700, background: '#FEF3C7', color: '#92400E', padding: '2px 8px', borderRadius: 6 }}>
-                          {(form.assignedSites || []).length} Selected
-                        </span>
+                    <div style={{ background: '#FFFBEB', borderRadius: 16, padding: 18, border: '1px solid #FDE68A', marginTop: 4 }}>
+                      <div style={{ fontSize: 13, fontWeight: 700, color: '#92400E', display: 'flex', alignItems: 'center', gap: 8, marginBottom: 8 }}>
+                        <Truck size={16} color="#D97706" /> Mobile Field Employee Mode
                       </div>
-
-                      <p style={{ margin: '0 0 10px', fontSize: 11, color: '#64748B' }}>
-                        Select all worksites this mobile field employee is assigned to patrol or visit (can assign multiple sites):
+                      <p style={{ margin: 0, fontSize: 12, color: '#78350F', lineHeight: 1.5 }}>
+                        Site assignments and patrol locations for mobile field employees are scheduled and assigned in the <strong>Assignments</strong> page modal.
                       </p>
-
-                      <div style={{ 
-                        display: 'grid', 
-                        gridTemplateColumns: 'repeat(auto-fill, minmax(180px, 1fr))', 
-                        gap: 8, 
-                        maxHeight: 160, 
-                        overflowY: 'auto',
-                        padding: 8,
-                        background: '#FFFFFF',
-                        borderRadius: 10,
-                        border: '1px solid #E2E8F0'
-                      }}>
-                        {sites.length === 0 ? (
-                          <div style={{ fontSize: 12, color: '#94A3B8', padding: 12, gridColumn: '1 / -1', textAlign: 'center' }}>
-                            No sites configured in system yet.
-                          </div>
-                        ) : (
-                          sites.map(s => {
-                            const siteName = s.name || s.id;
-                            const isSelected = (form.assignedSites || []).includes(siteName);
-                            return (
-                              <label
-                                key={s.id}
-                                style={{
-                                  display: 'flex',
-                                  alignItems: 'center',
-                                  gap: 8,
-                                  padding: '8px 10px',
-                                  borderRadius: 8,
-                                  border: isSelected ? '1.5px solid #D97706' : '1px solid #E2E8F0',
-                                  background: isSelected ? '#FFFBEB' : '#FFFFFF',
-                                  cursor: 'pointer',
-                                  transition: 'all 0.15s ease'
-                                }}
-                              >
-                                <input
-                                  type="checkbox"
-                                  checked={isSelected}
-                                  onChange={e => {
-                                    const current = form.assignedSites || [];
-                                    const next = e.target.checked 
-                                      ? [...current, siteName]
-                                      : current.filter(n => n !== siteName);
-                                    setForm(p => ({
-                                      ...p,
-                                      assignedSites: next,
-                                      assignedSite: next.join(', '),
-                                      assignedDestinations: next
-                                    }));
-                                  }}
-                                  style={{ accentColor: '#D97706', width: 15, height: 15, cursor: 'pointer' }}
-                                />
-                                <div style={{ minWidth: 0, flex: 1 }}>
-                                  <div style={{ fontSize: 12, fontWeight: isSelected ? 700 : 500, color: isSelected ? '#92400E' : '#334155', whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>
-                                    {siteName}
-                                  </div>
-                                  <div style={{ fontSize: 10, color: '#94A3B8' }}>
-                                    {typeof s.radius === 'number' ? s.radius : (parseInt(s.radius) || 20)}m perimeter
-                                  </div>
-                                </div>
-                              </label>
-                            );
-                          })
-                        )}
-                      </div>
-
-                      <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginTop: 10 }}>
-                        <span style={{ fontSize: 11, color: '#64748B' }}>
-                          ✓ Mobile employees can check into any of their assigned locations.
-                        </span>
-                        <div style={{ display: 'flex', gap: 8 }}>
-                          <button
-                            type="button"
-                            onClick={() => {
-                              const allSiteNames = sites.map(s => s.name || s.id);
-                              setForm(p => ({
-                                ...p,
-                                assignedSites: allSiteNames,
-                                assignedSite: allSiteNames.join(', '),
-                                assignedDestinations: allSiteNames
-                              }));
-                            }}
-                            style={{ fontSize: 11, fontWeight: 600, color: '#1E5ADB', background: 'none', border: 'none', cursor: 'pointer', textDecoration: 'underline' }}
-                          >
-                            Select All
-                          </button>
-                          <span style={{ color: '#CBD5E1' }}>•</span>
-                          <button
-                            type="button"
-                            onClick={() => {
-                              setForm(p => ({
-                                ...p,
-                                assignedSites: [],
-                                assignedSite: '',
-                                assignedDestinations: []
-                              }));
-                            }}
-                            style={{ fontSize: 11, fontWeight: 600, color: '#64748B', background: 'none', border: 'none', cursor: 'pointer', textDecoration: 'underline' }}
-                          >
-                            Clear All
-                          </button>
-                        </div>
-                      </div>
                     </div>
                   )}
                 </div>
@@ -1505,41 +1396,6 @@ export default function Employees() {
                             </>
                           ) : (
                             <span style={{ color: '#94A3B8' }}>No site assigned</span>
-                          )}
-                        </div>
-                      </div>
-                    )}
-
-                    {form.workType === 'Mobile Field Employee' && (
-                      <div style={{ background: '#FFFFFF', padding: '10px 14px', borderRadius: 10, border: '1px solid #E2E8F0', gridColumn: 'span 2' }}>
-                        <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 6 }}>
-                          <div style={{ fontSize: 10, fontWeight: 700, color: '#64748B', textTransform: 'uppercase', letterSpacing: '0.04em' }}>
-                            Multiple Assigned Sites ({(form.assignedSites || []).length})
-                          </div>
-                          <span style={{ fontSize: 10, fontWeight: 700, color: '#92400E', background: '#FEF3C7', padding: '1px 6px', borderRadius: 4 }}>
-                            Mobile Field Patrol
-                          </span>
-                        </div>
-                        <div style={{ display: 'flex', flexWrap: 'wrap', gap: 6 }}>
-                          {(form.assignedSites && form.assignedSites.length > 0) ? (
-                            form.assignedSites.map(s => (
-                              <span key={s} style={{ 
-                                display: 'inline-flex', 
-                                alignItems: 'center', 
-                                gap: 4, 
-                                fontSize: 11, 
-                                fontWeight: 600, 
-                                background: '#FFFBEB', 
-                                color: '#92400E', 
-                                border: '1px solid #FDE68A', 
-                                padding: '3px 8px', 
-                                borderRadius: 6 
-                              }}>
-                                <MapPin size={11} color="#D97706" /> {s}
-                              </span>
-                            ))
-                          ) : (
-                            <span style={{ fontSize: 12, color: '#94A3B8', fontStyle: 'italic' }}>No sites assigned yet</span>
                           )}
                         </div>
                       </div>

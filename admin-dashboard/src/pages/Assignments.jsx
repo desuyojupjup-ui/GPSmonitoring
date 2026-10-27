@@ -1,6 +1,6 @@
 import React, { useState, useCallback, useEffect } from 'react';
 import { useLocation } from 'react-router-dom';
-import { Search, Plus, Edit2, Trash2, X, ClipboardList, Clock, CheckCircle, XCircle, AlertTriangle, PieChart as PieIcon, BarChart3, Activity, Calendar, Sun, Moon, ShieldAlert, User, Building2, Flag, IdCard } from 'lucide-react';
+import { Search, Plus, Edit2, Trash2, X, ClipboardList, Clock, CheckCircle, XCircle, AlertTriangle, PieChart as PieIcon, BarChart3, Activity, Calendar, Sun, Moon, ShieldAlert, User, Building2, Flag, IdCard, Truck, MapPin } from 'lucide-react';
 import Swal from 'sweetalert2';
 import { db, collection, onSnapshot, addDoc, updateDoc, deleteDoc, doc, query, getDocs } from '../firebase';
 import { showToast, showConfirmDelete } from '../utils/toast';
@@ -109,7 +109,7 @@ const PRIORITY_COLOR = {
   'Low': '#10B981'
 };
 
-const EMPTY = { empName: '', empId: '', site: '', assignDate: '', shiftStart: '08:00', shiftEnd: '17:00', shift: '08:00 AM - 05:00 PM', priority: 'Medium', status: 'Active' };
+const EMPTY = { empName: '', empId: '', site: '', assignedSites: [], assignDate: '', shiftStart: '08:00', shiftEnd: '17:00', shift: '08:00 AM - 05:00 PM', priority: 'Medium', status: 'Active' };
 
 const selStyle = { width: '100%', padding: '9px 12px', borderRadius: 8, border: '1px solid #E5E7EB', fontSize: 13, outline: 'none', background: 'white', fontFamily: 'Inter, sans-serif' };
 const inpStyle = { width: '100%', padding: '9px 12px', borderRadius: 8, border: '1px solid #E5E7EB', fontSize: 13, outline: 'none', fontFamily: 'Inter, sans-serif' };
@@ -287,7 +287,19 @@ export default function Assignments() {
   const location = useLocation();
 
   const openAdd  = () => { setForm(EMPTY); setEditId(null); setModal(true); };
-  const openEdit = (row) => { setForm(row); setEditId(row.id); setModal(true); };
+  const openEdit = (row) => {
+    let sitesArray = Array.isArray(row.assignedSites) ? row.assignedSites : [];
+    if (sitesArray.length === 0 && row.site) {
+      sitesArray = row.site.split(',').map(s => s.trim()).filter(Boolean);
+    }
+    setForm({
+      ...row,
+      assignedSites: sitesArray,
+      site: row.site || sitesArray.join(', ')
+    });
+    setEditId(row.id);
+    setModal(true);
+  };
 
   useEffect(() => {
     const params = new URLSearchParams(location.search);
@@ -332,6 +344,7 @@ export default function Assignments() {
                 await updateDoc(doc(db, 'employees', empDoc.id), {
                   assignedSite: 'Unassigned',
                   assignedSiteId: '',
+                  assignedSites: [],
                   shift: 'Unassigned',
                   updatedAt: Date.now()
                 }).catch(() => {});
@@ -349,12 +362,88 @@ export default function Assignments() {
   };
 
   const handleEmpSelect = (e) => {
-    const emp = employees.find(em => em.name === e.target.value);
-    setForm(prev => ({ ...prev, empName: e.target.value, empId: emp?.idNum || emp?.id || '' }));
+    const empName = e.target.value;
+    const emp = employees.find(em => em.name === empName);
+    const isMobile = emp?.workType === 'Mobile Field Employee';
+    const defaultSites = Array.isArray(emp?.assignedSites) ? emp.assignedSites : (emp?.assignedSite ? emp.assignedSite.split(',').map(s => s.trim()).filter(Boolean) : []);
+
+    setForm(prev => ({
+      ...prev,
+      empName: empName,
+      empId: emp?.idNum || emp?.id || '',
+      assignedSites: isMobile ? (defaultSites.length ? defaultSites : prev.assignedSites || []) : [],
+      site: isMobile 
+        ? ((defaultSites.length ? defaultSites : prev.assignedSites || []).join(', '))
+        : (emp?.assignedSite || prev.site || '')
+    }));
   };
 
   const handleSave = async () => {
-    if (!form.empName || !form.site) return showToast('error', 'Missing Fields', 'Employee and Site are required.');
+    if (!form.empName) return showToast('error', 'Missing Fields', 'Please select an employee.');
+
+    const cleanFormName = (form.empName || '').trim().toLowerCase();
+    const empToUpdate = employees.find(em => {
+      const emName = (em.name || '').trim().toLowerCase();
+      const emEmail = (em.email || '').trim().toLowerCase();
+      const emId = (em.idNum || em.id || em.uid || '').toString().trim().toLowerCase();
+      const formId = (form.empId || '').toString().trim().toLowerCase();
+
+      if (emName && cleanFormName && (emName === cleanFormName || emName.includes(cleanFormName) || cleanFormName.includes(emName))) return true;
+      if (emEmail && cleanFormName && emEmail.includes(cleanFormName)) return true;
+      if (emId && formId && (emId === formId || emId.includes(formId))) return true;
+
+      const formTokens = cleanFormName.split(/\s+/).filter(t => t.length > 1);
+      const emTokens = emName.split(/\s+/).filter(t => t.length > 1);
+      if (formTokens.some(ft => emTokens.some(et => ft.includes(et) || et.includes(ft)))) return true;
+
+      return false;
+    });
+
+    const isMobile = empToUpdate?.workType === 'Mobile Field Employee';
+
+    let siteId = 'site-main';
+    let siteName = form.site || 'Assigned Worksite';
+    let siteAddress = 'Registered Worksite Address';
+    let latitude = 10.2818;
+    let longitude = 123.8808;
+    let geofenceRadius = 20;
+    let assignedSitesList = [];
+
+    if (isMobile) {
+      assignedSitesList = (form.assignedSites && form.assignedSites.length > 0)
+        ? form.assignedSites
+        : (form.site ? form.site.split(',').map(s => s.trim()).filter(Boolean) : []);
+
+      if (assignedSitesList.length === 0) {
+        return showToast('error', 'Missing Assigned Sites', 'Please select at least one site for this mobile field employee.');
+      }
+
+      siteName = assignedSitesList.join(', ');
+      const matchedSites = sites.filter(s => assignedSitesList.includes(s.name || s.id));
+      if (matchedSites.length > 0) {
+        siteId = matchedSites.map(s => s.id).join(', ');
+        siteAddress = matchedSites.map(s => s.address || s.location || s.name).join(' | ');
+        latitude = Number(matchedSites[0].latitude || matchedSites[0].lat || 10.2818);
+        longitude = Number(matchedSites[0].longitude || matchedSites[0].lng || 123.8808);
+        geofenceRadius = Number(matchedSites[0].geofenceRadius ?? matchedSites[0].radius ?? 20);
+      }
+    } else {
+      if (!form.site) return showToast('error', 'Missing Fields', 'Please select an assigned site.');
+
+      const formSiteClean = (form.site || '').trim().toLowerCase();
+      const selectedSiteObj = sites.find(s => {
+        const sName = (s.name || '').trim().toLowerCase();
+        const sId = (s.id || '').trim().toLowerCase();
+        return sName === formSiteClean || sId === formSiteClean || (sName && formSiteClean && (sName.includes(formSiteClean) || formSiteClean.includes(sName)));
+      });
+      siteId = selectedSiteObj?.id || form.siteId || 'site-main';
+      siteName = selectedSiteObj?.name || form.site || 'Assigned Worksite';
+      siteAddress = selectedSiteObj?.address || selectedSiteObj?.location || 'Registered Worksite Address';
+      latitude = Number(selectedSiteObj?.latitude || selectedSiteObj?.lat || 10.2818);
+      longitude = Number(selectedSiteObj?.longitude || selectedSiteObj?.lng || 123.8808);
+      geofenceRadius = Number(selectedSiteObj?.geofenceRadius ?? selectedSiteObj?.radius ?? 20);
+      assignedSitesList = [siteName];
+    }
 
     const todayStr = new Date().toISOString().split('T')[0];
     if (form.assignDate && form.assignDate < todayStr) {
@@ -381,37 +470,6 @@ export default function Assignments() {
         ? `${sStartFormatted} - ${sEndFormatted}`
         : form.shift || form.shiftTime || '08:00 AM - 05:00 PM';
 
-      const cleanFormName = (form.empName || '').trim().toLowerCase();
-      const empToUpdate = employees.find(em => {
-        const emName = (em.name || '').trim().toLowerCase();
-        const emEmail = (em.email || '').trim().toLowerCase();
-        const emId = (em.idNum || em.id || em.uid || '').toString().trim().toLowerCase();
-        const formId = (form.empId || '').toString().trim().toLowerCase();
-
-        if (emName && cleanFormName && (emName === cleanFormName || emName.includes(cleanFormName) || cleanFormName.includes(emName))) return true;
-        if (emEmail && cleanFormName && emEmail.includes(cleanFormName)) return true;
-        if (emId && formId && (emId === formId || emId.includes(formId))) return true;
-
-        const formTokens = cleanFormName.split(/\s+/).filter(t => t.length > 1);
-        const emTokens = emName.split(/\s+/).filter(t => t.length > 1);
-        if (formTokens.some(ft => emTokens.some(et => ft.includes(et) || et.includes(ft)))) return true;
-
-        return false;
-      });
-
-      const formSiteClean = (form.site || '').trim().toLowerCase();
-      const selectedSiteObj = sites.find(s => {
-        const sName = (s.name || '').trim().toLowerCase();
-        const sId = (s.id || '').trim().toLowerCase();
-        return sName === formSiteClean || sId === formSiteClean || (sName && formSiteClean && (sName.includes(formSiteClean) || formSiteClean.includes(sName)));
-      });
-      const siteId = selectedSiteObj?.id || form.siteId || 'site-main';
-      const siteName = selectedSiteObj?.name || form.site || 'Assigned Worksite';
-      const siteAddress = selectedSiteObj?.address || selectedSiteObj?.location || 'Registered Worksite Address';
-      const latitude = Number(selectedSiteObj?.latitude || selectedSiteObj?.lat || 10.2818);
-      const longitude = Number(selectedSiteObj?.longitude || selectedSiteObj?.lng || 123.8808);
-      const geofenceRadius = Number(selectedSiteObj?.geofenceRadius ?? selectedSiteObj?.radius ?? 20);
-
       const finalForm = {
         ...form,
         employeeId: empToUpdate?.idNum || empToUpdate?.id || empToUpdate?.uid || form.empId || '',
@@ -425,6 +483,8 @@ export default function Assignments() {
         siteId,
         siteName,
         site: siteName,
+        assignedSites: assignedSitesList,
+        assignedDestinations: assignedSitesList,
         siteAddress,
         address: siteAddress,
         latitude,
@@ -510,12 +570,20 @@ export default function Assignments() {
                               (formTokens.length > 0 && formTokens.some(ft => eName.includes(ft)));
 
               if (isMatch) {
-                await updateDoc(doc(db, 'employees', empDoc.id), {
+                const empUpdateData = {
                   assignedSite: siteName,
                   assignedSiteId: siteId,
                   shift: computedShift,
                   updatedAt: Date.now()
-                }).catch(console.warn);
+                };
+                if (isMobile) {
+                  empUpdateData.assignedSites = assignedSitesList;
+                  empUpdateData.assignedDestinations = assignedSitesList;
+                } else {
+                  empUpdateData.assignedSites = [siteName];
+                  empUpdateData.assignedDestinations = [siteName];
+                }
+                await updateDoc(doc(db, 'employees', empDoc.id), empUpdateData).catch(console.warn);
               }
             }
           }
@@ -622,7 +690,24 @@ export default function Assignments() {
                           </div>
                         </div>
                       </td>
-                      <td style={{ padding: '12px 16px', color: '#374151', fontWeight: 600, whiteSpace: 'nowrap' }}>{row.site}</td>
+                      <td style={{ padding: '12px 16px', color: '#374151', fontWeight: 600 }}>
+                        {(() => {
+                          const sitesList = Array.isArray(row.assignedSites) && row.assignedSites.length > 0
+                            ? row.assignedSites
+                            : (row.site ? row.site.split(',').map(s => s.trim()).filter(Boolean) : []);
+                          if (sitesList.length > 1) {
+                            return (
+                              <div style={{ display: 'flex', alignItems: 'center', gap: 6, flexWrap: 'wrap' }}>
+                                <span style={{ fontSize: 10, fontWeight: 700, background: '#FEF3C7', color: '#92400E', padding: '2px 6px', borderRadius: 4, display: 'inline-flex', alignItems: 'center', gap: 4 }}>
+                                  <Truck size={10} color="#D97706" /> {sitesList.length} Sites
+                                </span>
+                                <span style={{ fontSize: 12, color: '#1E293B' }}>{row.site}</span>
+                              </div>
+                            );
+                          }
+                          return <span style={{ whiteSpace: 'nowrap' }}>{row.site || '—'}</span>;
+                        })()}
+                      </td>
                       <td style={{ padding: '12px 16px', color: '#6B7280', whiteSpace: 'nowrap' }}>{row.shift || '—'}</td>
                       <td style={{ padding: '12px 16px', fontWeight: 700, color: PRIORITY_COLOR[row.priority] || '#374151', whiteSpace: 'nowrap' }}>{row.priority}</td>
                       <td style={{ padding: '12px 16px', whiteSpace: 'nowrap' }}>
@@ -1035,110 +1120,258 @@ export default function Assignments() {
             {/* Modal Form Content */}
             <div style={{ padding: '24px 28px', display: 'flex', flexDirection: 'column', gap: 16 }}>
 
-              {/* Employee Selection */}
-              <div>
-                <label style={{ fontSize: 11, fontWeight: 700, color: '#475569', display: 'block', marginBottom: 6 }}>
-                  Select Employee *
-                </label>
-                <div style={{ position: 'relative' }}>
-                  <User size={15} color="#94A3B8" style={{ position: 'absolute', left: 12, top: 12 }} />
-                  <select
-                    value={form.empName}
-                    onChange={handleEmpSelect}
-                    style={{
-                      width: '100%',
-                      padding: '10px 14px 10px 38px',
-                      borderRadius: 12,
-                      border: '1.5px solid #E2E8F0',
-                      fontSize: 13,
-                      outline: 'none',
-                      background: '#FFFFFF',
-                      boxSizing: 'border-box',
-                      color: '#0F172A',
-                      fontWeight: 600,
-                      cursor: 'pointer'
-                    }}
-                  >
-                    <option value="">— Select Employee —</option>
-                    {employees.map(e => (
-                      <option key={e.id} value={e.name}>{e.name} ({e.email || 'Staff'})</option>
-                    ))}
-                  </select>
-                </div>
-              </div>
-
-              {/* Employee ID (Auto-filled) */}
-              <div>
-                <label style={{ fontSize: 11, fontWeight: 700, color: '#475569', display: 'block', marginBottom: 6 }}>
-                  Employee ID (Auto-filled)
-                </label>
-                <div style={{ position: 'relative' }}>
-                  <IdCard size={15} color="#94A3B8" style={{ position: 'absolute', left: 12, top: 12 }} />
-                  <input
-                    readOnly
-                    value={form.empId || ''}
-                    placeholder="Auto-filled upon employee selection"
-                    style={{
-                      width: '100%',
-                      padding: '10px 14px 10px 38px',
-                      borderRadius: 12,
-                      border: '1.5px solid #E2E8F0',
-                      fontSize: 13,
-                      outline: 'none',
-                      background: '#F8FAFC',
-                      boxSizing: 'border-box',
-                      color: '#64748B',
-                      fontWeight: 600
-                    }}
-                  />
-                </div>
-              </div>
-
-              {/* Assigned Site */}
-              <div>
-                <label style={{ fontSize: 11, fontWeight: 700, color: '#475569', display: 'block', marginBottom: 6 }}>
-                  Assigned Site Location *
-                </label>
-                <div style={{ position: 'relative' }}>
-                  <Building2 size={15} color="#94A3B8" style={{ position: 'absolute', left: 12, top: 12 }} />
-                  <select
-                    value={form.site}
-                    onChange={e => setForm(p => ({ ...p, site: e.target.value }))}
-                    style={{
-                      width: '100%',
-                      padding: '10px 14px 10px 38px',
-                      borderRadius: 12,
-                      border: '1.5px solid #E2E8F0',
-                      fontSize: 13,
-                      outline: 'none',
-                      background: '#FFFFFF',
-                      boxSizing: 'border-box',
-                      color: '#0F172A',
-                      fontWeight: 600,
-                      cursor: 'pointer'
-                    }}
-                  >
-                    <option value="">— Select Site —</option>
-                    {sites.map(s => (
-                      <option key={s.id} value={s.name}>{s.name}</option>
-                    ))}
-                  </select>
-                </div>
-                {form.site && (() => {
-                  const sel = sites.find(s => s.name === form.site || s.id === form.site);
-                  const rad = sel?.radius ? (typeof sel.radius === 'number' ? sel.radius : parseInt(sel.radius)) : 20;
-                  return (
-                    <div style={{ marginTop: 6, display: 'flex', alignItems: 'center', gap: 6, fontSize: 11, color: '#1E5ADB', fontWeight: 600 }}>
-                      <span>📍 Perimeter: <strong>{rad}m</strong></span>
-                      {rad <= 30 && (
-                        <span style={{ background: '#EFF6FF', padding: '2px 6px', borderRadius: 6, border: '1px solid #BFDBFE', fontSize: 10, color: '#1D4ED8' }}>
-                          🏢 Building Fit
-                        </span>
+              {(() => {
+                const selectedEmp = employees.find(em => em.name === form.empName || (form.empId && (em.idNum === form.empId || em.id === form.empId)));
+                const isMobileEmp = selectedEmp?.workType === 'Mobile Field Employee';
+                return (
+                  <>
+                    {/* Employee Selection */}
+                    <div>
+                      <label style={{ fontSize: 11, fontWeight: 700, color: '#475569', display: 'block', marginBottom: 6 }}>
+                        Select Employee *
+                      </label>
+                      <div style={{ position: 'relative' }}>
+                        <User size={15} color="#94A3B8" style={{ position: 'absolute', left: 12, top: 12 }} />
+                        <select
+                          value={form.empName}
+                          onChange={handleEmpSelect}
+                          style={{
+                            width: '100%',
+                            padding: '10px 14px 10px 38px',
+                            borderRadius: 12,
+                            border: '1.5px solid #E2E8F0',
+                            fontSize: 13,
+                            outline: 'none',
+                            background: '#FFFFFF',
+                            boxSizing: 'border-box',
+                            color: '#0F172A',
+                            fontWeight: 600,
+                            cursor: 'pointer'
+                          }}
+                        >
+                          <option value="">— Select Employee —</option>
+                          {employees.map(e => (
+                            <option key={e.id} value={e.name}>{e.name} ({e.email || 'Staff'})</option>
+                          ))}
+                        </select>
+                      </div>
+                      {form.empName && selectedEmp && (
+                        <div style={{ marginTop: 6, display: 'flex', alignItems: 'center', gap: 6 }}>
+                          <span style={{
+                            fontSize: 11,
+                            fontWeight: 700,
+                            padding: '3px 8px',
+                            borderRadius: 6,
+                            display: 'inline-flex',
+                            alignItems: 'center',
+                            gap: 4,
+                            background: isMobileEmp ? '#FEF3C7' : '#EFF6FF',
+                            color: isMobileEmp ? '#92400E' : '#1E40AF',
+                            border: isMobileEmp ? '1px solid #FDE68A' : '1px solid #BFDBFE'
+                          }}>
+                            {isMobileEmp ? <Truck size={12} color="#D97706" /> : <Building2 size={12} color="#2563EB" />}
+                            {selectedEmp.workType || 'Fixed Site Employee'}
+                          </span>
+                        </div>
                       )}
                     </div>
-                  );
-                })()}
-              </div>
+
+                    {/* Employee ID (Auto-filled) */}
+                    <div>
+                      <label style={{ fontSize: 11, fontWeight: 700, color: '#475569', display: 'block', marginBottom: 6 }}>
+                        Employee ID (Auto-filled)
+                      </label>
+                      <div style={{ position: 'relative' }}>
+                        <IdCard size={15} color="#94A3B8" style={{ position: 'absolute', left: 12, top: 12 }} />
+                        <input
+                          readOnly
+                          value={form.empId || ''}
+                          placeholder="Auto-filled upon employee selection"
+                          style={{
+                            width: '100%',
+                            padding: '10px 14px 10px 38px',
+                            borderRadius: 12,
+                            border: '1.5px solid #E2E8F0',
+                            fontSize: 13,
+                            outline: 'none',
+                            background: '#F8FAFC',
+                            boxSizing: 'border-box',
+                            color: '#64748B',
+                            fontWeight: 600
+                          }}
+                        />
+                      </div>
+                    </div>
+
+                    {/* Assigned Site(s) Selection */}
+                    {isMobileEmp ? (
+                      <div style={{ background: '#F8FAFC', borderRadius: 14, padding: 16, border: '1.5px solid #FDE68A' }}>
+                        <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 8 }}>
+                          <div style={{ fontSize: 12, fontWeight: 700, color: '#92400E', display: 'flex', alignItems: 'center', gap: 6 }}>
+                            <Truck size={15} color="#D97706" /> Multiple Assigned Sites (Field Patrol / Visit) *
+                          </div>
+                          <span style={{ fontSize: 11, fontWeight: 700, background: '#FEF3C7', color: '#92400E', padding: '2px 8px', borderRadius: 6 }}>
+                            {(form.assignedSites || []).length} Selected
+                          </span>
+                        </div>
+
+                        <p style={{ margin: '0 0 10px', fontSize: 11, color: '#64748B' }}>
+                          Select all worksites this mobile field employee is authorized to patrol or visit (can assign multiple sites):
+                        </p>
+
+                        <div style={{
+                          display: 'grid',
+                          gridTemplateColumns: 'repeat(auto-fill, minmax(190px, 1fr))',
+                          gap: 8,
+                          maxHeight: 180,
+                          overflowY: 'auto',
+                          padding: 8,
+                          background: '#FFFFFF',
+                          borderRadius: 10,
+                          border: '1px solid #E2E8F0'
+                        }}>
+                          {sites.length === 0 ? (
+                            <div style={{ fontSize: 12, color: '#94A3B8', padding: 12, gridColumn: '1 / -1', textAlign: 'center' }}>
+                              No sites configured in system yet.
+                            </div>
+                          ) : (
+                            sites.map(s => {
+                              const siteName = s.name || s.id;
+                              const isSelected = (form.assignedSites || []).includes(siteName);
+                              return (
+                                <label
+                                  key={s.id}
+                                  style={{
+                                    display: 'flex',
+                                    alignItems: 'center',
+                                    gap: 8,
+                                    padding: '8px 10px',
+                                    borderRadius: 8,
+                                    border: isSelected ? '1.5px solid #D97706' : '1px solid #E2E8F0',
+                                    background: isSelected ? '#FFFBEB' : '#FFFFFF',
+                                    cursor: 'pointer',
+                                    transition: 'all 0.15s ease'
+                                  }}
+                                >
+                                  <input
+                                    type="checkbox"
+                                    checked={isSelected}
+                                    onChange={e => {
+                                      const current = form.assignedSites || [];
+                                      const next = e.target.checked
+                                        ? [...current, siteName]
+                                        : current.filter(n => n !== siteName);
+                                      setForm(p => ({
+                                        ...p,
+                                        assignedSites: next,
+                                        site: next.join(', ')
+                                      }));
+                                    }}
+                                    style={{ accentColor: '#D97706', width: 15, height: 15, cursor: 'pointer' }}
+                                  />
+                                  <div style={{ minWidth: 0, flex: 1 }}>
+                                    <div style={{ fontSize: 12, fontWeight: isSelected ? 700 : 500, color: isSelected ? '#92400E' : '#334155', whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>
+                                      {siteName}
+                                    </div>
+                                    <div style={{ fontSize: 10, color: '#94A3B8' }}>
+                                      {typeof s.radius === 'number' ? s.radius : (parseInt(s.radius) || 20)}m perimeter
+                                    </div>
+                                  </div>
+                                </label>
+                              );
+                            })
+                          )}
+                        </div>
+
+                        <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginTop: 10 }}>
+                          <span style={{ fontSize: 11, color: '#64748B' }}>
+                            ✓ Mobile employee can check in/out at any assigned site.
+                          </span>
+                          <div style={{ display: 'flex', gap: 8 }}>
+                            <button
+                              type="button"
+                              onClick={() => {
+                                const allNames = sites.map(s => s.name || s.id);
+                                setForm(p => ({
+                                  ...p,
+                                  assignedSites: allNames,
+                                  site: allNames.join(', ')
+                                }));
+                              }}
+                              style={{ fontSize: 11, fontWeight: 600, color: '#1E5ADB', background: 'none', border: 'none', cursor: 'pointer', textDecoration: 'underline' }}
+                            >
+                              Select All
+                            </button>
+                            <span style={{ color: '#CBD5E1' }}>•</span>
+                            <button
+                              type="button"
+                              onClick={() => {
+                                setForm(p => ({
+                                  ...p,
+                                  assignedSites: [],
+                                  site: ''
+                                }));
+                              }}
+                              style={{ fontSize: 11, fontWeight: 600, color: '#64748B', background: 'none', border: 'none', cursor: 'pointer', textDecoration: 'underline' }}
+                            >
+                              Clear All
+                            </button>
+                          </div>
+                        </div>
+                      </div>
+                    ) : (
+                      /* Assigned Site for Fixed Site Employee */
+                      <div>
+                        <label style={{ fontSize: 11, fontWeight: 700, color: '#475569', display: 'block', marginBottom: 6 }}>
+                          Assigned Site Location *
+                        </label>
+                        <div style={{ position: 'relative' }}>
+                          <Building2 size={15} color="#94A3B8" style={{ position: 'absolute', left: 12, top: 12 }} />
+                          <select
+                            value={form.site}
+                            onChange={e => {
+                              const val = e.target.value;
+                              setForm(p => ({ ...p, site: val, assignedSites: val ? [val] : [] }));
+                            }}
+                            style={{
+                              width: '100%',
+                              padding: '10px 14px 10px 38px',
+                              borderRadius: 12,
+                              border: '1.5px solid #E2E8F0',
+                              fontSize: 13,
+                              outline: 'none',
+                              background: '#FFFFFF',
+                              boxSizing: 'border-box',
+                              color: '#0F172A',
+                              fontWeight: 600,
+                              cursor: 'pointer'
+                            }}
+                          >
+                            <option value="">— Select Site —</option>
+                            {sites.map(s => (
+                              <option key={s.id} value={s.name}>{s.name}</option>
+                            ))}
+                          </select>
+                        </div>
+                        {form.site && (() => {
+                          const sel = sites.find(s => s.name === form.site || s.id === form.site);
+                          const rad = sel?.radius ? (typeof sel.radius === 'number' ? sel.radius : parseInt(sel.radius)) : 20;
+                          return (
+                            <div style={{ marginTop: 6, display: 'flex', alignItems: 'center', gap: 6, fontSize: 11, color: '#1E5ADB', fontWeight: 600 }}>
+                              <span>📍 Perimeter: <strong>{rad}m</strong></span>
+                              {rad <= 30 && (
+                                <span style={{ background: '#EFF6FF', padding: '2px 6px', borderRadius: 6, border: '1px solid #BFDBFE', fontSize: 10, color: '#1D4ED8' }}>
+                                  🏢 Building Fit
+                                </span>
+                              )}
+                            </div>
+                          );
+                        })()}
+                      </div>
+                    )}
+                  </>
+                );
+              })()}
 
               {/* Assign Date */}
               <div>
