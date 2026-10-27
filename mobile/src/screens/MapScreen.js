@@ -1,5 +1,5 @@
 import React, { useState, useEffect, useRef } from 'react';
-import { View, Text, StyleSheet, TouchableOpacity, Alert, ActivityIndicator, Image, Linking, Platform } from 'react-native';
+import { View, Text, StyleSheet, TouchableOpacity, Alert, ActivityIndicator, Image, Linking, Platform, ScrollView } from 'react-native';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { WebView } from 'react-native-webview';
 import * as Location from 'expo-location';
@@ -750,7 +750,7 @@ export default function MapScreen({ navigation, route, user: propUser }) {
               <Ionicons name="navigate-sharp" size={22} color="white" />
             </View>
             <View style={{ flex: 1 }}>
-              <Text style={styles.navHUDTitle}>Navigating to {site?.name || assignment?.site || 'Site'}</Text>
+              <Text style={styles.navHUDTitle}>Navigating to {typeof site?.name === 'string' ? site.name : (typeof assignment?.site === 'string' ? assignment.site : 'Site')}</Text>
               <Text style={styles.navHUDSub}>
                 {distance !== null ? `${distance} meters away` : 'Calculating route...'} • Live Guided Navigation
               </Text>
@@ -837,7 +837,7 @@ export default function MapScreen({ navigation, route, user: propUser }) {
           <View style={styles.bottomCard}>
             <View style={styles.cardHeader}>
               <View style={{ flex: 1 }}>
-                <Text style={styles.siteName}>{site.name || assignment?.site || 'Assigned Site'}</Text>
+                <Text style={styles.siteName}>{typeof site?.name === 'string' ? site.name : (typeof assignment?.site === 'string' ? assignment.site : 'Assigned Site')}</Text>
                 <Text style={styles.distanceText} numberOfLines={1}>
                   {distance !== null ? `${distance}m away` : 'Locating GPS...'} • Geofence Radius: {siteRadius}m
                 </Text>
@@ -852,7 +852,9 @@ export default function MapScreen({ navigation, route, user: propUser }) {
 
             <View style={styles.addressRow}>
               <Ionicons name="location" size={16} color="#6B7280" style={{ marginTop: 2 }} />
-              <Text style={styles.addressText} numberOfLines={2}>{site.address || 'Registered Worksite Address'}</Text>
+              <Text style={styles.addressText} numberOfLines={2}>
+                {typeof site?.address === 'string' ? site.address : (typeof assignment?.address === 'string' ? assignment.address : 'Registered Worksite Address')}
+              </Text>
             </View>
 
             <View style={styles.actionButtonsRow}>
