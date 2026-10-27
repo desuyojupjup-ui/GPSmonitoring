@@ -2,7 +2,7 @@ import React, { useState, useRef, useEffect } from 'react';
 import { Bot, Send, User, BarChart2, Users, MapPin, Clock, AlertCircle } from 'lucide-react';
 import { db, collection, onSnapshot, query } from '../firebase';
 import { resolveAssignmentStatus } from './Assignments';
-import { isEmployeeOnline, resolveEmployeeStatus } from '../components/Dashboard';
+import { isEmployeeOnline, resolveEmployeeStatus } from '../utils/statusUtils';
 
 const QUICK_PROMPTS = [
   { label: '🔴 Offline employees', query: 'who is offline' },

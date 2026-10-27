@@ -4,7 +4,7 @@ import { MessageSquare, X, Bot, Send, User, Minimize2 } from 'lucide-react';
 import chatbotIcon from '../assets/chatbot.png';
 import { db, collection, onSnapshot, query } from '../firebase';
 import { resolveAssignmentStatus } from '../pages/Assignments';
-import { isEmployeeOnline, resolveEmployeeStatus } from './Dashboard';
+import { isEmployeeOnline, resolveEmployeeStatus } from '../utils/statusUtils';
 
 const QUICK_PROMPTS = [
   'Who is on site?',

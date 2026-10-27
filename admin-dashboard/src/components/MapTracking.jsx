@@ -2,7 +2,7 @@ import React, { useState, useEffect } from 'react';
 import { MapContainer, TileLayer, Marker, Popup, Circle, useMap } from 'react-leaflet';
 import L from 'leaflet';
 import 'leaflet/dist/leaflet.css';
-import { resolveEmployeeStatus } from './Dashboard';
+import { resolveEmployeeStatus } from '../utils/statusUtils';
 
 // Fix Leaflet default marker icons
 delete L.Icon.Default.prototype._getIconUrl;
