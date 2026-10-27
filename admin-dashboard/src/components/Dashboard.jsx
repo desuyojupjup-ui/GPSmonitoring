@@ -476,7 +476,7 @@ function DashboardDrilldownModal({
       pills: [
         { label: 'Field Staff', value: employees.filter(e => resolveEmployeeWorkType(e, assignments) === 'Mobile Field Employee').length },
         { label: 'In Transit', value: employees.filter(e => resolveEmployeeWorkType(e, assignments) === 'Mobile Field Employee' && resolveEmployeeStatus(e) === 'In Transit').length, color: '#F59E0B' },
-        { label: 'Completed Tasks', value: assignments.filter(a => resolveAssignmentStatus(a) === 'Completed').length, color: '#10B981' },
+        { label: 'Completed Tasks', value: assignments.filter(a => resolveAssignmentStatus(a, attendance) === 'Completed').length, color: '#10B981' },
         { label: 'Fleet Sync', value: '100%', color: '#059669' }
       ]
     },
@@ -547,10 +547,10 @@ function DashboardDrilldownModal({
       subtitle: 'Historical record of completed site assignments and shifts.',
       icon: ClipboardCheck,
       color: '#06B6D4',
-      items: assignments.filter(a => resolveAssignmentStatus(a) === 'Completed'),
+      items: assignments.filter(a => resolveAssignmentStatus(a, attendance) === 'Completed'),
       isAssignmentList: true,
       pills: [
-        { label: 'Completed Tasks', value: assignments.filter(a => resolveAssignmentStatus(a) === 'Completed').length, color: '#06B6D4' },
+        { label: 'Completed Tasks', value: assignments.filter(a => resolveAssignmentStatus(a, attendance) === 'Completed').length, color: '#06B6D4' },
         { label: 'Total Assignments', value: assignments.length, color: '#64748B' }
       ]
     }
@@ -1012,6 +1012,7 @@ export default function Dashboard() {
   const [sites, setSites] = useState([]);
   const [recentLogs, setRecentLogs] = useState([]);
   const [assignments, setAssignments] = useState([]);
+  const [attendance, setAttendance] = useState([]);
   const [fullscreen, setFullscreen] = useState(false);
 
   // Drilldown modal state
@@ -1036,10 +1037,13 @@ export default function Dashboard() {
       const unsubAsg = onSnapshot(query(collection(db, 'Assignments')), (snap) => {
         setAssignments(snap.docs.map(d => ({ id: d.id, ...d.data() })));
       });
+      const unsubAtt = onSnapshot(query(collection(db, 'attendance')), (snap) => {
+        setAttendance(snap.docs.map(d => ({ id: d.id, ...d.data() })));
+      });
       const unsubLogs = onSnapshot(query(collection(db, 'tracking_logs'), limit(10)), (snap) => {
         setRecentLogs(snap.docs.map(d => ({ id: d.id, ...d.data() })));
       });
-      return () => { unsubEmp(); unsubSites(); unsubAsg(); unsubLogs(); };
+      return () => { unsubEmp(); unsubSites(); unsubAsg(); unsubAtt(); unsubLogs(); };
     } catch (e) {
       console.warn('Dashboard subscription error:', e);
     }
@@ -1071,7 +1075,7 @@ export default function Dashboard() {
   const offlineCount = offlineEmployees.length;
 
   const inTransitCount = employees.filter(e => resolveEmployeeStatus(e) === 'In Transit').length;
-  const completedAssignments = assignments.filter(a => resolveAssignmentStatus(a) === 'Completed').length;
+  const completedAssignments = assignments.filter(a => resolveAssignmentStatus(a, attendance) === 'Completed').length;
   const geofenceViolations = employees.filter(e => e.geofenceStatus === 'Outside Assigned Site').length;
 
   // Top KPI Metric Cards

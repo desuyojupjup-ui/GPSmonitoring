@@ -328,11 +328,13 @@ export default function AnomalyList() {
   const catVelocity = anomalies.filter(a => (a.type || '').toLowerCase().includes('velocity') || (a.type || '').toLowerCase().includes('speed')).length;
   const catGeofence = anomalies.filter(a => (a.type || '').toLowerCase().includes('geofence') || (a.type || '').toLowerCase().includes('boundary')).length;
   const catFace = anomalies.filter(a => (a.type || '').toLowerCase().includes('face') || (a.type || '').toLowerCase().includes('biometric')).length;
+  const catAttendance = anomalies.filter(a => (a.type || '').toLowerCase().includes('attendance') || (a.type || '').toLowerCase().includes('shift') || (a.type || '').toLowerCase().includes('check-in') || (a.type || '').toLowerCase().includes('check-out')).length;
   const catInactivity = anomalies.filter(a => (a.type || '').toLowerCase().includes('inactivity') || (a.type || '').toLowerCase().includes('idle')).length;
 
   const horizontalBarData = [
     { type: 'Velocity', count: catVelocity, color: '#EF4444' },
     { type: 'Geofence', count: catGeofence, color: '#F59E0B' },
+    { type: 'Shift Schedule', count: catAttendance, color: '#EC4899' },
     { type: 'Biometric', count: catFace, color: '#6366F1' },
     { type: 'Idle Time', count: catInactivity, color: '#3B82F6' },
   ];

@@ -36,7 +36,7 @@ export function isAssignmentDatePassed(asg) {
   const status = (asg.status || '').toString().trim().toLowerCase();
   
   // Explicitly terminated statuses
-  if (status === 'completed' || status === 'cancelled' || status === 'archived' || status === 'expired' || status === 'inactive') {
+  if (status === 'completed' || status === 'cancelled' || status === 'archived' || status === 'expired' || status === 'inactive' || status === 'missed shift' || status === 'missing check-out' || status === 'unattended' || status === 'incomplete') {
     return true;
   }
 

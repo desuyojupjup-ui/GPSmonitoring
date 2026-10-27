@@ -18,6 +18,7 @@ import {
   addDoc as realAddDoc,
   updateDoc as realUpdateDoc,
   deleteDoc as realDeleteDoc,
+  setDoc as realSetDoc,
   doc as realDoc,
   serverTimestamp as realServerTimestamp
 } from 'firebase/firestore';
@@ -1463,6 +1464,26 @@ export const updateDoc = async (_docRef, _data) => {
       } catch (e) {}
     }
   });
+};
+
+export const setDoc = async (_docRef, _data, _options = {}) => {
+  if (isRealFirebaseConfigured) return await realSetDoc(_docRef, _data, _options);
+  const path = _docRef?.path || _docRef?.colPath || 'default';
+  const id = _docRef?.id || _data.id || ('doc_' + Date.now());
+  const items = getLocalCollection(path);
+  const newItem = { ..._data, id };
+  const existingIdx = items.findIndex(i => i && i.id === id);
+  if (existingIdx >= 0) {
+    if (_options?.merge) {
+      items[existingIdx] = { ...items[existingIdx], ...newItem };
+    } else {
+      items[existingIdx] = newItem;
+    }
+  } else {
+    items.unshift(newItem);
+  }
+  setLocalCollection(path, items);
+  return { id };
 };
 
 export const deleteDoc = async (_docRef) => {

@@ -2,7 +2,7 @@ import React, { useState, useCallback, useEffect } from 'react';
 import { useLocation } from 'react-router-dom';
 import { Search, Plus, Edit2, Trash2, X, ClipboardList, Clock, CheckCircle, XCircle, AlertTriangle, PieChart as PieIcon, BarChart3, Activity, Calendar, Sun, Moon, ShieldAlert, User, Building2, Flag, IdCard, Truck, MapPin } from 'lucide-react';
 import Swal from 'sweetalert2';
-import { db, collection, onSnapshot, addDoc, updateDoc, deleteDoc, doc, query, getDocs } from '../firebase';
+import { db, collection, onSnapshot, addDoc, updateDoc, deleteDoc, doc, setDoc, query, getDocs } from '../firebase';
 import { showToast, showConfirmDelete } from '../utils/toast';
 import { ResponsiveContainer, PieChart, Pie, Cell, BarChart, Bar, XAxis, YAxis, Tooltip, CartesianGrid } from 'recharts';
 
@@ -97,10 +97,12 @@ function useToast() {
 }
 
 const STATUS_STYLE = {
-  'Active':    { background: '#DBEAFE', color: '#1E40AF', dot: '#3B82F6' },
-  'Upcoming':  { background: '#FEF3C7', color: '#92400E', dot: '#F59E0B' },
-  'Completed': { background: '#D1FAE5', color: '#065F46', dot: '#10B981' },
-  'Cancelled': { background: '#FEE2E2', color: '#991B1B', dot: '#EF4444' },
+  'Active':            { background: '#DBEAFE', color: '#1E40AF', dot: '#3B82F6' },
+  'Upcoming':          { background: '#FEF3C7', color: '#92400E', dot: '#F59E0B' },
+  'Completed':         { background: '#D1FAE5', color: '#065F46', dot: '#10B981' },
+  'Cancelled':         { background: '#FEE2E2', color: '#991B1B', dot: '#EF4444' },
+  'Missed Shift':      { background: '#FEE2E2', color: '#B91C1C', dot: '#DC2626' },
+  'Missing Check-Out': { background: '#FEF3C7', color: '#B45309', dot: '#F59E0B' },
 };
 
 const PRIORITY_COLOR = {
@@ -202,10 +204,148 @@ export function getAssignmentScheduledDate(asg) {
   return { year: y, month: m, day: d };
 }
 
+export function extractDateString(val) {
+  if (!val) return '';
+  if (typeof val === 'string') {
+    const trimmed = val.trim();
+    const match = trimmed.match(/^(\d{4})-(\d{2})-(\d{2})/);
+    if (match) return `${match[1]}-${match[2]}-${match[3]}`;
+    const parsed = new Date(trimmed);
+    if (!isNaN(parsed.getTime())) {
+      const y = parsed.getFullYear();
+      const m = String(parsed.getMonth() + 1).padStart(2, '0');
+      const d = String(parsed.getDate()).padStart(2, '0');
+      return `${y}-${m}-${d}`;
+    }
+    return '';
+  }
+  if (val?.toDate && typeof val.toDate === 'function') {
+    try {
+      const d = val.toDate();
+      const y = d.getFullYear();
+      const m = String(d.getMonth() + 1).padStart(2, '0');
+      const day = String(d.getDate()).padStart(2, '0');
+      return `${y}-${m}-${day}`;
+    } catch (_) {}
+  }
+  if (typeof val?.seconds === 'number') {
+    const d = new Date(val.seconds * 1000);
+    const y = d.getFullYear();
+    const m = String(d.getMonth() + 1).padStart(2, '0');
+    const day = String(d.getDate()).padStart(2, '0');
+    return `${y}-${m}-${day}`;
+  }
+  if (typeof val === 'number') {
+    const d = new Date(val);
+    if (!isNaN(d.getTime())) {
+      const y = d.getFullYear();
+      const m = String(d.getMonth() + 1).padStart(2, '0');
+      const day = String(d.getDate()).padStart(2, '0');
+      return `${y}-${m}-${day}`;
+    }
+  }
+  if (val instanceof Date && !isNaN(val.getTime())) {
+    const y = val.getFullYear();
+    const m = String(val.getMonth() + 1).padStart(2, '0');
+    const day = String(val.getDate()).padStart(2, '0');
+    return `${y}-${m}-${day}`;
+  }
+  return '';
+}
+
+export function matchesAssignmentEmployee(asg, att) {
+  if (!asg || !att) return false;
+
+  const asgId = (asg.empId || asg.employeeId || asg.employee_id || asg.guardId || '').toString().trim().toLowerCase();
+  const attId = (att.employeeId || att.employee_id || att.empId || att.employeeUid || att.uid || att.userId || '').toString().trim().toLowerCase();
+  if (asgId && attId && asgId === attId) return true;
+
+  const asgEmail = (asg.empEmail || asg.employeeEmail || asg.email || '').trim().toLowerCase();
+  const attEmail = (att.email || att.employeeEmail || '').trim().toLowerCase();
+  if (asgEmail && attEmail && asgEmail === attEmail) return true;
+  if (asgEmail && attEmail) {
+    const asgPrefix = asgEmail.split('@')[0];
+    const attPrefix = attEmail.split('@')[0];
+    if (asgPrefix && attPrefix && asgPrefix === attPrefix) return true;
+  }
+
+  const asgName = (asg.empName || asg.employeeName || asg.assignedTo || asg.guard || '').trim().toLowerCase();
+  const attName = (att.employeeName || att.employee_name || att.name || att.emp || '').trim().toLowerCase();
+  if (asgName && attName) {
+    if (asgName === attName) return true;
+    if (asgName.length >= 3 && attName.length >= 3) {
+      if (asgName.includes(attName) || attName.includes(asgName)) return true;
+    }
+  }
+
+  return false;
+}
+
+export function getAssignmentAttendanceInfo(asg, attendanceList = []) {
+  if (!asg) {
+    return { hasCheckIn: false, hasCheckOut: false, record: null };
+  }
+
+  if (asg.hasCheckIn !== undefined && asg.hasCheckOut !== undefined) {
+    return {
+      hasCheckIn: Boolean(asg.hasCheckIn),
+      hasCheckOut: Boolean(asg.hasCheckOut),
+      record: null
+    };
+  }
+
+  if (!Array.isArray(attendanceList) || attendanceList.length === 0) {
+    const checkedIn = Boolean(asg.checkIn || asg.timeIn || asg.checkedIn || asg.lastCheckIn);
+    const checkedOut = Boolean(asg.checkOut || asg.timeOut || asg.checkedOut || asg.lastCheckOut);
+    return { hasCheckIn: checkedIn, hasCheckOut: checkedOut, record: null };
+  }
+
+  const dateObj = getAssignmentScheduledDate(asg);
+  const asgDateStr = extractDateString(asg.assignDate || asg.scheduleDate || asg.date || asg.assignmentDate) ||
+    (dateObj ? `${dateObj.year}-${String(dateObj.month + 1).padStart(2, '0')}-${String(dateObj.day).padStart(2, '0')}` : '');
+
+  const matchingRecords = attendanceList.filter(att => {
+    if (!matchesAssignmentEmployee(asg, att)) return false;
+    if (asgDateStr) {
+      const attDateStr = extractDateString(att.date || att.checkInDate || att.timeIn || att.checkIn || att.check_in || att.timestamp || att.createdAt);
+      if (attDateStr && attDateStr !== asgDateStr) return false;
+    }
+    return true;
+  });
+
+  if (matchingRecords.length === 0) {
+    return { hasCheckIn: false, hasCheckOut: false, record: null };
+  }
+
+  let hasCheckIn = false;
+  let hasCheckOut = false;
+  let matchedRecord = matchingRecords[0];
+
+  for (const rec of matchingRecords) {
+    const rawIn = rec.timeIn || rec.checkIn || rec.check_in || rec.in;
+    const rawOut = rec.timeOut || rec.checkOut || rec.check_out || rec.out;
+    const status = (rec.status || '').toString().trim().toLowerCase();
+
+    const recordHasIn = Boolean(rawIn) || ['present', 'on site', 'on duty', 'checked in', 'completed'].includes(status);
+    const recordHasOut = Boolean(rawOut) || status === 'completed';
+
+    if (recordHasIn) {
+      hasCheckIn = true;
+      matchedRecord = rec;
+    }
+    if (recordHasOut) {
+      hasCheckOut = true;
+      matchedRecord = rec;
+    }
+  }
+
+  return { hasCheckIn, hasCheckOut, record: matchedRecord };
+}
+
 export function isAssignmentEnded(asg, now = new Date()) {
   if (!asg) return false;
   const status = (asg.status || '').toString().trim().toLowerCase();
-  if (status === 'completed' || status === 'cancelled' || status === 'archived' || status === 'expired') {
+  if (status === 'completed' || status === 'cancelled' || status === 'archived' || status === 'expired' || status === 'missed shift' || status === 'missing check-out') {
     return true;
   }
 
@@ -237,7 +377,7 @@ export function isAssignmentEnded(asg, now = new Date()) {
 export function isAssignmentUpcoming(asg, now = new Date()) {
   if (!asg) return false;
   const status = (asg.status || '').toString().trim().toLowerCase();
-  if (status === 'completed' || status === 'cancelled') return false;
+  if (status === 'completed' || status === 'cancelled' || status === 'missed shift') return false;
 
   const dateParts = getAssignmentScheduledDate(asg);
   if (!dateParts) return false;
@@ -256,20 +396,45 @@ export function isAssignmentUpcoming(asg, now = new Date()) {
   return now.getTime() < startDateTime.getTime();
 }
 
-export function resolveAssignmentStatus(asg, now = new Date()) {
+export function resolveAssignmentStatus(asg, attendanceList = [], now = new Date()) {
   if (!asg) return 'Completed';
+
+  let attList = attendanceList;
+  let currentTime = now;
+  if (attendanceList instanceof Date) {
+    currentTime = attendanceList;
+    attList = [];
+  }
+
   const raw = (asg.status || 'Active').trim();
   const rawLower = raw.toLowerCase();
 
   if (rawLower === 'cancelled') return 'Cancelled';
-  if (rawLower === 'completed') return 'Completed';
 
-  if (isAssignmentEnded(asg, now)) {
-    return 'Completed';
+  const ended = isAssignmentEnded(asg, currentTime);
+  const upcoming = isAssignmentUpcoming(asg, currentTime);
+  const attInfo = getAssignmentAttendanceInfo(asg, attList);
+
+  if (ended) {
+    // If and ONLY if the employee checked in AND checked out, mark Completed
+    if (attInfo.hasCheckIn && attInfo.hasCheckOut) {
+      return 'Completed';
+    }
+    // If employee checked in but did not check out after shift ended
+    if (attInfo.hasCheckIn && !attInfo.hasCheckOut) {
+      return 'Missing Check-Out';
+    }
+    // If employee did NOT check in within shift schedule date and time
+    return 'Missed Shift';
   }
 
-  if (isAssignmentUpcoming(asg, now)) {
+  if (upcoming) {
     return 'Upcoming';
+  }
+
+  // Active shift
+  if (attInfo.hasCheckIn && attInfo.hasCheckOut) {
+    return 'Completed';
   }
 
   return 'Active';
@@ -284,6 +449,7 @@ export default function Assignments() {
   const [data, setData] = useState([]);
   const [employees, setEmployees] = useState([]);
   const [sites, setSites] = useState([]);
+  const [attendance, setAttendance] = useState([]);
   const [loading, setLoading] = useState(true);
   const [search, setSearch] = useState('');
   const [modal, setModal] = useState(false);
@@ -328,7 +494,24 @@ export default function Assignments() {
         setSites(snapshot.docs.map(d => ({ id: d.id, ...d.data() })));
       });
 
-      return () => { unsub1(); unsub2(); unsubEmp(); unsubSites(); };
+      let attDocs1 = [], attDocs2 = [];
+      const updateAttendance = () => {
+        const merged = [...attDocs1, ...attDocs2];
+        const unique = Array.from(new Map(merged.map(item => [item.id, item])).values());
+        setAttendance(unique);
+      };
+
+      const unsubAtt1 = onSnapshot(query(collection(db, 'attendance')), (snap) => {
+        attDocs1 = snap.docs.map(d => ({ id: d.id, ...d.data() }));
+        updateAttendance();
+      }, () => {});
+
+      const unsubAtt2 = onSnapshot(query(collection(db, 'Attendance')), (snap) => {
+        attDocs2 = snap.docs.map(d => ({ id: d.id, ...d.data() }));
+        updateAttendance();
+      }, () => {});
+
+      return () => { unsub1(); unsub2(); unsubEmp(); unsubSites(); unsubAtt1(); unsubAtt2(); };
     } catch (e) {
       setLoading(false);
     }
@@ -340,39 +523,207 @@ export default function Assignments() {
     return () => clearInterval(timer);
   }, []);
 
-  // Background auto-sync: persistently update ended assignments in Firestore to 'Completed'
+  // Background auto-sync & AI Anomaly Detection:
+  // Evaluates assignments whose shift schedule has passed or is ongoing.
+  // 1. If employee did NOT check in: Status is 'Missed Shift', generates High severity Anomaly Alert.
+  // 2. If employee checked in but did NOT check out after shift ended: Status is 'Missing Check-Out', generates Medium severity Anomaly Alert.
+  // 3. Only if checked in AND checked out: Status is 'Completed'.
   useEffect(() => {
     if (!data.length) return;
     const now = new Date();
-    const endedDocs = data.filter(d => 
-      (d.status === 'Active' || d.status === 'active' || d.status === 'Upcoming' || d.status === 'upcoming') &&
-      isAssignmentEnded(d, now)
-    );
 
-    if (endedDocs.length > 0) {
-      endedDocs.forEach(async (asg) => {
-        try {
-          if (asg.id) {
-            await updateDoc(doc(db, 'Assignments', asg.id), { status: 'Completed', updatedAt: Date.now() }).catch(() => {});
-            await updateDoc(doc(db, 'assignments', asg.id), { status: 'Completed', updatedAt: Date.now() }).catch(() => {});
+    data.forEach(async (asg) => {
+      try {
+        if (!asg || !asg.id) return;
+        const rawStatus = (asg.status || '').toLowerCase();
+        if (rawStatus === 'cancelled') return;
+
+        const attInfo = getAssignmentAttendanceInfo(asg, attendance);
+        const ended = isAssignmentEnded(asg, now);
+        const upcoming = isAssignmentUpcoming(asg, now);
+
+        const dateObj = getAssignmentScheduledDate(asg);
+        const dateStr = extractDateString(asg.assignDate || asg.scheduleDate || asg.date || asg.assignmentDate) ||
+          (dateObj ? `${dateObj.year}-${String(dateObj.month + 1).padStart(2, '0')}-${String(dateObj.day).padStart(2, '0')}` : '');
+
+        const empName = asg.empName || asg.employeeName || 'Assigned Employee';
+        const empId = asg.empId || asg.employeeId || '';
+        const empEmail = asg.empEmail || asg.employeeEmail || '';
+        const siteName = asg.site || asg.siteName || 'Assigned Site';
+        const shiftStr = asg.shift || asg.shiftTime || 'Scheduled Shift';
+
+        // ── 1. Shift has ENDED ──
+        if (ended) {
+          let targetStatus = 'Completed';
+          if (!attInfo.hasCheckIn) {
+            targetStatus = 'Missed Shift';
+          } else if (!attInfo.hasCheckOut) {
+            targetStatus = 'Missing Check-Out';
           }
-        } catch (_) {}
-      });
-    }
-  }, [data]);
+
+          // Persistently sync status in Firestore if needed
+          if (asg.status !== targetStatus) {
+            await updateDoc(doc(db, 'Assignments', asg.id), {
+              status: targetStatus,
+              hasCheckIn: attInfo.hasCheckIn,
+              hasCheckOut: attInfo.hasCheckOut,
+              updatedAt: Date.now()
+            }).catch(() => {});
+            await updateDoc(doc(db, 'assignments', asg.id), {
+              status: targetStatus,
+              hasCheckIn: attInfo.hasCheckIn,
+              hasCheckOut: attInfo.hasCheckOut,
+              updatedAt: Date.now()
+            }).catch(() => {});
+          }
+
+          // AI Anomaly Alert: No Shift Check-In Detected
+          if (!attInfo.hasCheckIn && dateStr) {
+            const alertId = `anomaly_no_checkin_${asg.id}_${dateStr}`;
+            const anomalyDoc = {
+              id: alertId,
+              anomalyId: alertId,
+              type: 'Missed Shift Check-In',
+              eventType: 'MISSED_CHECK_IN',
+              category: 'Attendance Anomaly',
+              title: 'AI Anomaly: No Shift Check-In Detected',
+              description: `Employee ${empName} did not check in for assigned shift (${shiftStr}) on ${dateStr} at ${siteName} within the shift schedule.`,
+              employeeName: empName,
+              employeeId: empId,
+              employeeEmail: empEmail,
+              siteName: siteName,
+              location: siteName,
+              shift: shiftStr,
+              date: dateStr,
+              assignmentId: asg.id,
+              severity: 'High',
+              confidence: '96%',
+              status: 'Active',
+              createdAt: Date.now(),
+              timestamp: new Date().toISOString(),
+              sourceCollection: 'ai_analysis'
+            };
+            await setDoc(doc(db, 'ai_analysis', alertId), anomalyDoc, { merge: true }).catch(() => {});
+            await setDoc(doc(db, 'ActivityLogs', alertId), {
+              ...anomalyDoc,
+              action: 'Anomaly Detected',
+              type: 'Security Anomaly'
+            }, { merge: true }).catch(() => {});
+          }
+
+          // AI Anomaly Alert: Missing Shift Check-Out
+          if (attInfo.hasCheckIn && !attInfo.hasCheckOut && dateStr) {
+            const alertId = `anomaly_no_checkout_${asg.id}_${dateStr}`;
+            const anomalyDoc = {
+              id: alertId,
+              anomalyId: alertId,
+              type: 'Missing Shift Check-Out',
+              eventType: 'MISSING_CHECK_OUT',
+              category: 'Attendance Anomaly',
+              title: 'AI Anomaly: Missing Shift Check-Out',
+              description: `Employee ${empName} checked in but failed to check out after assigned shift (${shiftStr}) ended on ${dateStr} at ${siteName}.`,
+              employeeName: empName,
+              employeeId: empId,
+              employeeEmail: empEmail,
+              siteName: siteName,
+              location: siteName,
+              shift: shiftStr,
+              date: dateStr,
+              assignmentId: asg.id,
+              severity: 'Medium',
+              confidence: '95%',
+              status: 'Active',
+              createdAt: Date.now(),
+              timestamp: new Date().toISOString(),
+              sourceCollection: 'ai_analysis'
+            };
+            await setDoc(doc(db, 'ai_analysis', alertId), anomalyDoc, { merge: true }).catch(() => {});
+            await setDoc(doc(db, 'ActivityLogs', alertId), {
+              ...anomalyDoc,
+              action: 'Anomaly Detected',
+              type: 'Security Anomaly'
+            }, { merge: true }).catch(() => {});
+          }
+        } else if (!upcoming) {
+          // ── 2. Shift is ONGOING (past start time) ──
+          const shiftTimes = getAssignmentShiftTimes(asg);
+          if (shiftTimes.start && dateObj) {
+            const startDateTime = new Date(dateObj.year, dateObj.month, dateObj.day, shiftTimes.start.hours, shiftTimes.start.minutes, 0, 0);
+            const gracePeriodMs = 15 * 60 * 1000; // 15 minutes
+            if (now.getTime() > startDateTime.getTime() + gracePeriodMs && !attInfo.hasCheckIn && dateStr) {
+              const alertId = `anomaly_no_checkin_${asg.id}_${dateStr}`;
+              const anomalyDoc = {
+                id: alertId,
+                anomalyId: alertId,
+                type: 'Missed Shift Check-In',
+                eventType: 'MISSED_CHECK_IN',
+                category: 'Attendance Anomaly',
+                title: 'AI Anomaly: No Shift Check-In Detected',
+                description: `Employee ${empName} has not checked in for assigned shift (${shiftStr}) on ${dateStr} at ${siteName} within the scheduled start time.`,
+                employeeName: empName,
+                employeeId: empId,
+                employeeEmail: empEmail,
+                siteName: siteName,
+                location: siteName,
+                shift: shiftStr,
+                date: dateStr,
+                assignmentId: asg.id,
+                severity: 'High',
+                confidence: '94%',
+                status: 'Active',
+                createdAt: Date.now(),
+                timestamp: new Date().toISOString(),
+                sourceCollection: 'ai_analysis'
+              };
+              await setDoc(doc(db, 'ai_analysis', alertId), anomalyDoc, { merge: true }).catch(() => {});
+              await setDoc(doc(db, 'ActivityLogs', alertId), {
+                ...anomalyDoc,
+                action: 'Anomaly Detected',
+                type: 'Security Anomaly'
+              }, { merge: true }).catch(() => {});
+            }
+          }
+        }
+
+        // ── 3. Auto-resolve anomalies if employee checks in / checks out ──
+        if (attInfo.hasCheckIn && dateStr) {
+          const checkInAlertId = `anomaly_no_checkin_${asg.id}_${dateStr}`;
+          updateDoc(doc(db, 'ai_analysis', checkInAlertId), {
+            status: 'Resolved',
+            resolvedAt: Date.now(),
+            resolutionNote: 'Check-in recorded'
+          }).catch(() => {});
+        }
+        if (attInfo.hasCheckOut && dateStr) {
+          const checkOutAlertId = `anomaly_no_checkout_${asg.id}_${dateStr}`;
+          updateDoc(doc(db, 'ai_analysis', checkOutAlertId), {
+            status: 'Resolved',
+            resolvedAt: Date.now(),
+            resolutionNote: 'Check-out recorded'
+          }).catch(() => {});
+        }
+      } catch (err) {
+        console.warn('Assignment anomaly check error:', err);
+      }
+    });
+  }, [data, attendance]);
 
   const totalAssignments = data.length || 1;
 
   // Chart 1: Assignment Status Breakdown Donut Data (Dynamically resolved)
-  const activeCount    = data.filter(d => resolveAssignmentStatus(d) === 'Active').length;
-  const upcomingCount  = data.filter(d => resolveAssignmentStatus(d) === 'Upcoming').length;
-  const completedCount = data.filter(d => resolveAssignmentStatus(d) === 'Completed').length;
-  const cancelledCount = data.filter(d => resolveAssignmentStatus(d) === 'Cancelled').length;
+  const activeCount     = data.filter(d => resolveAssignmentStatus(d, attendance) === 'Active').length;
+  const upcomingCount   = data.filter(d => resolveAssignmentStatus(d, attendance) === 'Upcoming').length;
+  const completedCount  = data.filter(d => resolveAssignmentStatus(d, attendance) === 'Completed').length;
+  const missedCount     = data.filter(d => resolveAssignmentStatus(d, attendance) === 'Missed Shift').length;
+  const missingOutCount = data.filter(d => resolveAssignmentStatus(d, attendance) === 'Missing Check-Out').length;
+  const cancelledCount  = data.filter(d => resolveAssignmentStatus(d, attendance) === 'Cancelled').length;
 
   const asgStatusChartData = [
     { name: 'Active', value: activeCount, color: '#3B82F6', pct: ((activeCount / totalAssignments) * 100).toFixed(0) },
     { name: 'Upcoming', value: upcomingCount, color: '#F59E0B', pct: ((upcomingCount / totalAssignments) * 100).toFixed(0) },
     { name: 'Completed', value: completedCount, color: '#10B981', pct: ((completedCount / totalAssignments) * 100).toFixed(0) },
+    ...(missedCount > 0 ? [{ name: 'Missed Shift', value: missedCount, color: '#DC2626', pct: ((missedCount / totalAssignments) * 100).toFixed(0) }] : []),
+    ...(missingOutCount > 0 ? [{ name: 'Missing Check-Out', value: missingOutCount, color: '#F59E0B', pct: ((missingOutCount / totalAssignments) * 100).toFixed(0) }] : []),
     { name: 'Cancelled', value: cancelledCount, color: '#EF4444', pct: ((cancelledCount / totalAssignments) * 100).toFixed(0) },
   ];
 
@@ -401,7 +752,7 @@ export default function Assignments() {
   const filtered = data.filter(d =>
     (d.empName || '').toLowerCase().includes(search.toLowerCase()) ||
     (d.site || '').toLowerCase().includes(search.toLowerCase()) ||
-    (resolveAssignmentStatus(d) || '').toLowerCase().includes(search.toLowerCase())
+    (resolveAssignmentStatus(d, attendance) || '').toLowerCase().includes(search.toLowerCase())
   );
 
   // Pagination metrics
@@ -723,7 +1074,7 @@ export default function Assignments() {
                                   (eName && asgName && (eName === asgName || eName.includes(asgName) || asgName.includes(eName)));
 
                   if (isMatch) {
-                    await updateDoc(doc(db, colName, dDoc.id), { status: 'Completed', updatedAt: Date.now() }).catch(() => {});
+                    await updateDoc(doc(db, colName, dDoc.id), { status: 'Cancelled', updatedAt: Date.now() }).catch(() => {});
                   }
                 }
               }
@@ -795,14 +1146,24 @@ export default function Assignments() {
     }
   };
 
-  const stats = ['Active','Upcoming','Completed','Cancelled'].map(s => ({
-    label: s,
-    count: data.filter(d => resolveAssignmentStatus(d) === s).length,
-    pct: data.length ? ((data.filter(d => resolveAssignmentStatus(d) === s).length / data.length) * 100).toFixed(1) + '%' : '0.0%',
-    color: STATUS_STYLE[s]?.dot || '#9CA3AF',
-    bg: STATUS_STYLE[s]?.background || '#F3F4F6',
-    icon: s === 'Active' ? <ClipboardList size={14}/> : s === 'Upcoming' ? <Clock size={14}/> : s === 'Completed' ? <CheckCircle size={14}/> : <XCircle size={14}/>
-  }));
+  const stats = [
+    { label: 'Active', icon: <ClipboardList size={14}/> },
+    { label: 'Upcoming', icon: <Clock size={14}/> },
+    { label: 'Completed', icon: <CheckCircle size={14}/> },
+    { label: 'Missed Shift', icon: <AlertTriangle size={14}/> },
+    { label: 'Missing Check-Out', icon: <Clock size={14}/> },
+    { label: 'Cancelled', icon: <XCircle size={14}/> },
+  ].map(({ label, icon }) => {
+    const count = data.filter(d => resolveAssignmentStatus(d, attendance) === label).length;
+    return {
+      label,
+      count,
+      pct: data.length ? ((count / data.length) * 100).toFixed(1) + '%' : '0.0%',
+      color: STATUS_STYLE[label]?.dot || '#9CA3AF',
+      bg: STATUS_STYLE[label]?.background || '#F3F4F6',
+      icon
+    };
+  });
 
   return (
     <>
@@ -906,7 +1267,7 @@ export default function Assignments() {
                       <td style={{ padding: '12px 16px', fontWeight: 700, color: PRIORITY_COLOR[row.priority] || '#374151', whiteSpace: 'nowrap' }}>{row.priority}</td>
                       <td style={{ padding: '12px 16px', whiteSpace: 'nowrap' }}>
                         {(() => {
-                          const status = resolveAssignmentStatus(row);
+                          const status = resolveAssignmentStatus(row, attendance);
                           const style = STATUS_STYLE[status] || STATUS_STYLE.Active;
                           return (
                             <div style={{ display: 'inline-flex', alignItems: 'center', gap: 6, background: style.background, color: style.color, padding: '4px 10px', borderRadius: 20, fontWeight: 600, fontSize: 11 }}>
@@ -1718,7 +2079,7 @@ export default function Assignments() {
                         cursor: 'pointer'
                       }}
                     >
-                      {['Active', 'Upcoming', 'Completed', 'Cancelled'].map(s => (
+                      {['Active', 'Upcoming', 'Completed', 'Missed Shift', 'Missing Check-Out', 'Cancelled'].map(s => (
                         <option key={s} value={s}>{s}</option>
                       ))}
                     </select>
