@@ -228,7 +228,7 @@ class PresenceService {
       this.currentStatus = explicitStatus;
       payload.status = explicitStatus;
     } else if (isOnline) {
-      payload.status = this.currentStatus || 'Online';
+      payload.status = (this.currentStatus && this.currentStatus !== 'Offline') ? this.currentStatus : 'Online';
     } else {
       payload.status = 'Offline';
     }
@@ -301,8 +301,10 @@ class PresenceService {
     if (employeeId && employeeId !== 'emp_fallback' && !employeeId.startsWith('emp_current')) {
       this.currentEmployeeId = employeeId;
     }
-    if (initialStatus) {
+    if (initialStatus && initialStatus !== 'Offline') {
       this.currentStatus = initialStatus;
+    } else {
+      this.currentStatus = 'Online';
     }
     this.isRunning = true;
 

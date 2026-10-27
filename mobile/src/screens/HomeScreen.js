@@ -282,7 +282,8 @@ export default function HomeScreen({ navigation, route, user: propUser }) {
         presenceService.setEmployeeId(empData.id);
         if (!hasSetOnline.current) {
           hasSetOnline.current = true;
-          presenceService.startPresence(empData, empData.id, empData.status || 'Online');
+          const initialStatus = (empData.status === 'On Duty') ? 'On Duty' : 'Online';
+          presenceService.startPresence(empData, empData.id, initialStatus);
         }
       }
       setLoading(false);
@@ -572,8 +573,8 @@ export default function HomeScreen({ navigation, route, user: propUser }) {
       commitAttendance();
     };
 
-    const unsub1 = onSnapshot(collection(db, 'Attendance'), handleSnap('Attendance'));
-    const unsub2 = onSnapshot(collection(db, 'attendance'), handleSnap('attendance'));
+    const unsub1 = onSnapshot(collection(db, 'Attendance'), handleSnap('Attendance'), () => {});
+    const unsub2 = onSnapshot(collection(db, 'attendance'), handleSnap('attendance'), () => {});
 
     return () => {
       unsub1();

@@ -258,8 +258,8 @@ export default function AttendanceScreen({ navigation, route, user: propUser }) 
       commit();
     };
 
-    const unsub1 = onSnapshot(collection(db, 'Attendance'), handle('Attendance'));
-    const unsub2 = onSnapshot(collection(db, 'attendance'), handle('attendance'));
+    const unsub1 = onSnapshot(collection(db, 'Attendance'), handle('Attendance'), () => {});
+    const unsub2 = onSnapshot(collection(db, 'attendance'), handle('attendance'), () => {});
     return () => { unsub1(); unsub2(); };
   }, [currentEmail, employee?.id]);
 

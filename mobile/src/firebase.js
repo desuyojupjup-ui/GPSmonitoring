@@ -531,7 +531,17 @@ export const getDocs = async (_q) => {
 };
 
 export const onSnapshot = (_q, _success, _error) => {
-  if (isRealFirebaseConfigured) return realOnSnapshot(_q, _success, _error);
+  const safeError = typeof _error === 'function' ? _error : (err) => {
+    console.warn(`[Firestore onSnapshot] Caught listener notice (${_q?.path || _q?._query?.path || 'query'}):`, err?.message || err);
+  };
+  if (isRealFirebaseConfigured) {
+    try {
+      return realOnSnapshot(_q, _success, safeError);
+    } catch (e) {
+      console.warn('[Firestore onSnapshot] Subscription exception caught:', e?.message);
+      return () => {};
+    }
+  }
   const path = _q?.path || _q?.type || _q?.collection?.path || 'default';
 
   if (!listenersMap.has(path)) listenersMap.set(path, []);
