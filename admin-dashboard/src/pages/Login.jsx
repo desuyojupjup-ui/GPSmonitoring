@@ -517,7 +517,7 @@ export default function Login({ onLogin, currentUser, onLogout }) {
           }}>
             <ShieldAlert size={16} color="#64748B" style={{ flexShrink: 0, marginTop: 2 }} />
             <div style={{ fontSize: 11, color: '#64748B', lineHeight: 1.5 }}>
-              <strong style={{ color: '#334155' }}>Restricted System:</strong> Account creation is managed strictly by System Administrators. New Operations Managers and Dispatchers must be provisioned internally via Users & Roles.
+              <strong style={{ color: '#334155' }}>Restricted System:</strong> Account creation is managed strictly by System Administrators. New Managers, Supervisors, and HR staff must be provisioned internally via Users & Roles.
             </div>
           </div>
         </div>

@@ -24,6 +24,15 @@ import Login from './pages/Login';
 import TopNav from './components/TopNav';
 import FloatingChatButton from './components/FloatingChatButton';
 
+import { isPathAllowedForRole } from './utils/roles';
+
+const RoleRoute = ({ path, element, userRole }) => {
+  if (!isPathAllowedForRole(userRole, path)) {
+    return <Navigate to="/" replace />;
+  }
+  return element;
+};
+
 function AppContent() {
   const [user, setUser] = useState(() => {
     try {
@@ -119,26 +128,27 @@ function AppContent() {
                 setCollapsed={setCollapsed}
                 mobileOpen={mobileOpen}
                 setMobileOpen={setMobileOpen}
+                user={user}
               />
               <main className="main-content">
                 <TopNav user={user} onLogout={handleLogout} onMenuToggle={() => setMobileOpen(prev => !prev)} />
                 <Routes>
                   <Route path="/" element={<Dashboard />} />
-                  <Route path="/tracking" element={<LiveTracking />} />
-                  <Route path="/employees" element={<Employees />} />
-                  <Route path="/sites" element={<Sites />} />
-                  <Route path="/assignments" element={<Assignments />} />
-                  <Route path="/attendance" element={<Attendance />} />
-                  <Route path="/verifications" element={<FacialVerificationList />} />
-                  <Route path="/anomalies" element={<AnomalyList />} />
-                  <Route path="/fraud-reports" element={<FraudReportList />} />
-                  <Route path="/delay-reports" element={<DelayReportList />} />
-                  <Route path="/reports" element={<ReportsPage />} />
-                  <Route path="/notifications" element={<NotificationsPage />} />
-                  <Route path="/settings" element={<Settings />} />
-                  <Route path="/users" element={<UsersRoles />} />
-                  <Route path="/logs" element={<ActivityLogs />} />
-                  <Route path="/ai-assistant" element={<AIAssistant />} />
+                  <Route path="/tracking" element={<RoleRoute path="/tracking" element={<LiveTracking />} userRole={user.role} />} />
+                  <Route path="/employees" element={<RoleRoute path="/employees" element={<Employees />} userRole={user.role} />} />
+                  <Route path="/sites" element={<RoleRoute path="/sites" element={<Sites />} userRole={user.role} />} />
+                  <Route path="/assignments" element={<RoleRoute path="/assignments" element={<Assignments />} userRole={user.role} />} />
+                  <Route path="/attendance" element={<RoleRoute path="/attendance" element={<Attendance />} userRole={user.role} />} />
+                  <Route path="/verifications" element={<RoleRoute path="/verifications" element={<FacialVerificationList />} userRole={user.role} />} />
+                  <Route path="/anomalies" element={<RoleRoute path="/anomalies" element={<AnomalyList />} userRole={user.role} />} />
+                  <Route path="/fraud-reports" element={<RoleRoute path="/fraud-reports" element={<FraudReportList />} userRole={user.role} />} />
+                  <Route path="/delay-reports" element={<RoleRoute path="/delay-reports" element={<DelayReportList />} userRole={user.role} />} />
+                  <Route path="/reports" element={<RoleRoute path="/reports" element={<ReportsPage />} userRole={user.role} />} />
+                  <Route path="/notifications" element={<RoleRoute path="/notifications" element={<NotificationsPage />} userRole={user.role} />} />
+                  <Route path="/settings" element={<RoleRoute path="/settings" element={<Settings />} userRole={user.role} />} />
+                  <Route path="/users" element={<RoleRoute path="/users" element={<UsersRoles />} userRole={user.role} />} />
+                  <Route path="/logs" element={<RoleRoute path="/logs" element={<ActivityLogs />} userRole={user.role} />} />
+                  <Route path="/ai-assistant" element={<RoleRoute path="/ai-assistant" element={<AIAssistant />} userRole={user.role} />} />
                   <Route path="*" element={<Navigate to="/" replace />} />
                 </Routes>
               </main>

@@ -8,6 +8,7 @@ import {
 } from 'lucide-react';
 import { showToast, showConfirmLogout } from '../utils/toast';
 import { db, collection, onSnapshot, query, doc, updateDoc, safeLocalStorageSet } from '../firebase';
+import { isPathAllowedForRole } from '../utils/roles';
 
 const RECENT_SEARCHES = ['John Cruz', 'Maria Santos', 'Attendance', 'Greenfield Mall', 'Site Guard Duty'];
 
@@ -452,16 +453,27 @@ export default function TopNav({ user, onLogout, onMenuToggle }) {
     },
   ];
 
+  const currentRole = profile?.role || user?.role || 'Super Admin';
+  const filteredQuickActions = QUICK_ACTIONS.filter(action => {
+    if (action.id === 'add-employee') return isPathAllowedForRole(currentRole, '/employees');
+    if (action.id === 'assign-site') return isPathAllowedForRole(currentRole, '/sites');
+    if (action.id === 'create-assignment') return isPathAllowedForRole(currentRole, '/assignments');
+    if (action.id === 'ai-assistant') return isPathAllowedForRole(currentRole, '/ai-assistant');
+    return true;
+  });
+
   // ─── Universal Search Filtering ──────────────────────────────
   const searchResults = useMemo(() => {
     const q = searchQuery.trim().toLowerCase();
     if (!q) return null;
 
-    // 1. Matched Pages
+    // 1. Matched Pages (filtered by user's role access)
     const pages = SEARCH_PAGES.filter(p => 
-      p.label.toLowerCase().includes(q) || 
-      p.desc.toLowerCase().includes(q) || 
-      p.path.toLowerCase().includes(q)
+      isPathAllowedForRole(currentRole, p.path) && (
+        p.label.toLowerCase().includes(q) || 
+        p.desc.toLowerCase().includes(q) || 
+        p.path.toLowerCase().includes(q)
+      )
     ).slice(0, 4);
 
     // 2. Matched Employees
@@ -829,7 +841,7 @@ export default function TopNav({ user, onLogout, onMenuToggle }) {
           {showQuickActions && (
             <div className="quick-actions-dropdown">
               <div className="quick-actions-header">Quick Actions</div>
-              {QUICK_ACTIONS.map((action) => (
+              {filteredQuickActions.map((action) => (
                 <div 
                   key={action.id} 
                   className="quick-action-item" 

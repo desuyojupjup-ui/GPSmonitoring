@@ -5,6 +5,7 @@ import {
   CalendarCheck, FileBarChart2, Bell, Settings, ShieldCheck, ScrollText,
   ScanLine, ShieldAlert, ShieldX, Clock, ChevronsLeft, ChevronsRight
 } from 'lucide-react';
+import { isPathAllowedForRole, getRoleConfig } from '../utils/roles';
 
 import logoImage from '../assets/logo.png';
 
@@ -26,7 +27,11 @@ const navItems = [
   { to: '/logs',        icon: ScrollText,       label: 'Activity Logs' },
 ];
 
-export default function Sidebar({ collapsed, setCollapsed, mobileOpen, setMobileOpen }) {
+export default function Sidebar({ collapsed, setCollapsed, mobileOpen, setMobileOpen, user }) {
+  const currentRole = user?.role || 'Super Admin';
+  const roleConfig = getRoleConfig(currentRole);
+  const visibleNavItems = navItems.filter(item => isPathAllowedForRole(currentRole, item.to));
+
   return (
     <aside className={`sidebar ${collapsed ? 'collapsed' : ''} ${mobileOpen ? 'mobile-open' : ''}`}>
       {/* Logo & Collapse Button Header */}
@@ -64,9 +69,40 @@ export default function Sidebar({ collapsed, setCollapsed, mobileOpen, setMobile
         </button>
       </div>
 
+      {/* Role Indicator Badge */}
+      {!collapsed ? (
+        <div style={{
+          padding: '2px 18px 8px',
+          display: 'flex',
+          alignItems: 'center',
+          gap: 6
+        }}>
+          <div style={{
+            display: 'inline-flex',
+            alignItems: 'center',
+            gap: 6,
+            padding: '3px 10px',
+            borderRadius: 20,
+            background: roleConfig.bg,
+            border: `1px solid ${roleConfig.border}`,
+            color: roleConfig.color,
+            fontSize: 11,
+            fontWeight: 700,
+            letterSpacing: '0.2px'
+          }}>
+            <span style={{ width: 6, height: 6, borderRadius: '50%', background: roleConfig.color }} />
+            {roleConfig.role} Portal
+          </div>
+        </div>
+      ) : (
+        <div style={{ display: 'flex', justifyContent: 'center', padding: '4px 0 8px' }} title={`${roleConfig.role} Portal`}>
+          <span style={{ width: 7, height: 7, borderRadius: '50%', background: roleConfig.color }} />
+        </div>
+      )}
+
       {/* Nav */}
       <nav className="nav-section">
-        {navItems.map(({ to, icon: Icon, label }) => (
+        {visibleNavItems.map(({ to, icon: Icon, label }) => (
           <NavLink
             key={to}
             to={to}

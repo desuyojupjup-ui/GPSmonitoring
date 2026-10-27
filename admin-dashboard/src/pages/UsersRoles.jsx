@@ -2,7 +2,8 @@ import React, { useState, useEffect, useMemo } from 'react';
 import { useLocation } from 'react-router-dom';
 import { 
   Search, Plus, Edit2, Trash2, X, ShieldCheck, UserCog, Shield, Users, 
-  Lock, Activity, CheckCircle2, UserX, KeyRound, Eye, EyeOff, Sparkles, Check 
+  Lock, Activity, CheckCircle2, UserX, KeyRound, Eye, EyeOff, Sparkles, Check,
+  UserCheck, Briefcase
 } from 'lucide-react';
 import Swal from 'sweetalert2';
 import { 
@@ -10,6 +11,7 @@ import {
   registerAdminUser, getRegisteredAdminAccounts, saveRegisteredAdminAccounts, safeLocalStorageSet 
 } from '../firebase';
 import { showToast, showConfirmDelete } from '../utils/toast';
+import { ROLE_OPTIONS, ROLE_PERMISSIONS, getRoleConfig } from '../utils/roles';
 import { ResponsiveContainer, PieChart, Pie, Cell, BarChart, Bar, XAxis, YAxis, Tooltip, CartesianGrid, AreaChart, Area } from 'recharts';
 
 const STATUS_STYLE = {
@@ -21,8 +23,8 @@ const EMPTY = {
   name: '', 
   email: '', 
   password: '', 
-  role: 'Operations Manager', 
-  access: 'Sites & Attendance', 
+  role: 'Manager', 
+  access: 'Operations & Fleet Management', 
   status: 'Active' 
 };
 
@@ -269,8 +271,8 @@ export default function UsersRoles() {
       name: row.name || '',
       email: row.email || '',
       password: '', // blank unless changing
-      role: row.role || 'Operations Manager',
-      access: row.access || 'Sites & Attendance',
+      role: row.role || 'Manager',
+      access: row.access || 'Operations & Fleet Management',
       status: row.status || 'Active'
     }); 
     setEditId(row.id); 
@@ -326,8 +328,8 @@ export default function UsersRoles() {
           name: form.name.trim(),
           email: cleanEmail,
           password: assignedPass,
-          role: form.role || 'Operations Manager',
-          access: form.access || 'Sites & Attendance',
+          role: form.role || 'Manager',
+          access: form.access || 'Operations & Fleet Management',
           status: form.status || 'Active',
           lastLogin: 'Never',
           createdAt: new Date().toISOString()
@@ -411,8 +413,15 @@ export default function UsersRoles() {
   // ── Real KPI metrics from actual registered users - NO FAKE FALLBACKS ──
   const totalUsers = data.length;
   const superCount = data.filter(d => (d.role || '').toLowerCase().includes('super')).length;
-  const managerCount = data.filter(d => (d.role || '').toLowerCase().includes('manager')).length;
-  const dispatchCount = data.filter(d => (d.role || '').toLowerCase().includes('dispatch')).length;
+  const managerCount = data.filter(d => {
+    const r = (d.role || '').toLowerCase();
+    return (r === 'manager' || r.includes('operat')) && !r.includes('supervisor');
+  }).length;
+  const supervisorCount = data.filter(d => (d.role || '').toLowerCase().includes('supervisor')).length;
+  const hrCount = data.filter(d => {
+    const r = (d.role || '').toLowerCase();
+    return r === 'hr' || r.includes('human') || r.includes('resource');
+  }).length;
 
   // Real Role Composition Donut Data
   const rolePieData = useMemo(() => {
@@ -420,29 +429,31 @@ export default function UsersRoles() {
     const list = [
       { name: 'Super Admin', value: superCount, color: '#8B5CF6', pct: Math.round((superCount / totalUsers) * 100) },
       { name: 'Manager', value: managerCount, color: '#1E5ADB', pct: Math.round((managerCount / totalUsers) * 100) },
-      { name: 'Dispatcher', value: dispatchCount, color: '#10B981', pct: Math.round((dispatchCount / totalUsers) * 100) },
+      { name: 'Supervisor', value: supervisorCount, color: '#10B981', pct: Math.round((supervisorCount / totalUsers) * 100) },
+      { name: 'HR', value: hrCount, color: '#F59E0B', pct: Math.round((hrCount / totalUsers) * 100) },
     ];
     return list.filter(item => item.value > 0);
-  }, [totalUsers, superCount, managerCount, dispatchCount]);
+  }, [totalUsers, superCount, managerCount, supervisorCount, hrCount]);
 
   // Real Access Permission Matrix Bar Data
   const accessBarData = useMemo(() => {
     if (totalUsers === 0) return [];
     return [
-      { access: 'Full Access', value: superCount, color: '#8B5CF6' },
-      { access: 'Sites & Ops', value: managerCount, color: '#1E5ADB' },
-      { access: 'Dispatch & GPS', value: dispatchCount, color: '#10B981' },
+      { access: 'Full System', value: superCount, color: '#8B5CF6' },
+      { access: 'Ops & Fleet', value: managerCount, color: '#1E5ADB' },
+      { access: 'Field Duty', value: supervisorCount, color: '#10B981' },
+      { access: 'HR & Staff', value: hrCount, color: '#F59E0B' },
     ];
-  }, [totalUsers, superCount, managerCount, dispatchCount]);
+  }, [totalUsers, superCount, managerCount, supervisorCount, hrCount]);
 
   return (
     <div style={{ padding: '24px', minHeight: '100vh', display: 'flex', flexDirection: 'column', gap: '24px' }}>
       
       {/* Top KPI Cards - Real Metrics */}
-      <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(220px, 1fr))', gap: '16px' }}>
+      <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(190px, 1fr))', gap: '16px' }}>
         <div style={cardStyle}>
           <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
-            <span style={{ fontSize: '12px', color: '#64748B', fontWeight: '700', letterSpacing: '0.5px' }}>TOTAL ADMIN USERS</span>
+            <span style={{ fontSize: '12px', color: '#64748B', fontWeight: '700', letterSpacing: '0.5px' }}>TOTAL USERS</span>
             <div style={{ width: 34, height: 34, borderRadius: 8, background: '#EEF2FF', display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
               <Users size={18} color="#1E5ADB" />
             </div>
@@ -472,12 +483,22 @@ export default function UsersRoles() {
 
         <div style={cardStyle}>
           <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
-            <span style={{ fontSize: '12px', color: '#64748B', fontWeight: '700', letterSpacing: '0.5px' }}>DISPATCHERS</span>
+            <span style={{ fontSize: '12px', color: '#64748B', fontWeight: '700', letterSpacing: '0.5px' }}>SUPERVISORS</span>
             <div style={{ width: 34, height: 34, borderRadius: 8, background: '#ECFDF5', display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
-              <Shield size={18} color="#10B981" />
+              <UserCheck size={18} color="#10B981" />
             </div>
           </div>
-          <div style={{ fontSize: '28px', fontWeight: '800', color: '#10B981', marginTop: '8px' }}>{dispatchCount}</div>
+          <div style={{ fontSize: '28px', fontWeight: '800', color: '#10B981', marginTop: '8px' }}>{supervisorCount}</div>
+        </div>
+
+        <div style={cardStyle}>
+          <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+            <span style={{ fontSize: '12px', color: '#64748B', fontWeight: '700', letterSpacing: '0.5px' }}>HR PERSONNEL</span>
+            <div style={{ width: 34, height: 34, borderRadius: 8, background: '#FEF3C7', display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
+              <Briefcase size={18} color="#F59E0B" />
+            </div>
+          </div>
+          <div style={{ fontSize: '28px', fontWeight: '800', color: '#F59E0B', marginTop: '8px' }}>{hrCount}</div>
         </div>
       </div>
 
@@ -623,8 +644,27 @@ export default function UsersRoles() {
                             </div>
                           </td>
                           <td style={{ padding: '12px 16px', color: '#334155', whiteSpace: 'nowrap', fontFamily: 'monospace', fontSize: 12 }}>{row.email}</td>
-                          <td style={{ padding: '12px 16px', fontWeight: 700, color: (row.role || '').includes('Super') ? '#8B5CF6' : (row.role || '').includes('Manager') ? '#1E5ADB' : '#10B981', whiteSpace: 'nowrap' }}>
-                            {row.role || 'Staff'}
+                          <td style={{ padding: '12px 16px', whiteSpace: 'nowrap' }}>
+                            {(() => {
+                              const roleCfg = getRoleConfig(row.role);
+                              return (
+                                <span style={{
+                                  display: 'inline-flex',
+                                  alignItems: 'center',
+                                  gap: 6,
+                                  padding: '3px 10px',
+                                  borderRadius: 20,
+                                  background: roleCfg.bg,
+                                  color: roleCfg.color,
+                                  border: `1px solid ${roleCfg.border}`,
+                                  fontWeight: 700,
+                                  fontSize: 11
+                                }}>
+                                  <span style={{ width: 6, height: 6, borderRadius: '50%', background: roleCfg.color }} />
+                                  {roleCfg.role}
+                                </span>
+                              );
+                            })()}
                           </td>
                           <td style={{ padding: '12px 16px', color: '#64748B', whiteSpace: 'nowrap' }}>{row.access || 'Full Access'}</td>
                           <td style={{ padding: '12px 16px', whiteSpace: 'nowrap' }}>
@@ -862,7 +902,7 @@ export default function UsersRoles() {
               <span style={{ fontSize: '13px', fontWeight: '700', color: '#1E293B', display: 'flex', alignItems: 'center', gap: 6 }}>
                 <Lock size={15} color="#8B5CF6" /> Access Permissions Matrix
               </span>
-              <span style={{ fontSize: '11px', fontWeight: '600', color: '#8B5CF6' }}>3 Privilege Tiers</span>
+              <span style={{ fontSize: '11px', fontWeight: '600', color: '#8B5CF6' }}>4 Privilege Tiers</span>
             </div>
 
             <div style={{ width: '100%', height: 120 }}>
@@ -932,18 +972,20 @@ export default function UsersRoles() {
                   value={form.role} 
                   onChange={e => {
                     const r = e.target.value;
-                    let acc = form.access;
-                    if (r === 'Super Admin') acc = 'Full System Access';
-                    else if (r === 'Operations Manager') acc = 'Sites & Attendance';
-                    else if (r === 'Field Dispatcher') acc = 'Live Tracking & GPS';
-                    setForm({...form, role: r, access: acc });
+                    const cfg = getRoleConfig(r);
+                    setForm({...form, role: r, access: cfg.access });
                   }} 
-                  style={{ width: '100%', padding: '10px 12px', borderRadius: 8, border: '1px solid #E5E7EB', fontSize: 13, outline: 'none', background: 'white' }}
+                  style={{ width: '100%', padding: '10px 12px', borderRadius: 8, border: '1px solid #E5E7EB', fontSize: 13, outline: 'none', background: 'white', fontWeight: 600, color: '#0F172A' }}
                 >
                   <option value="Super Admin">Super Admin</option>
-                  <option value="Operations Manager">Operations Manager</option>
-                  <option value="Field Dispatcher">Field Dispatcher</option>
+                  <option value="Manager">Manager</option>
+                  <option value="Supervisor">Supervisor</option>
+                  <option value="HR">HR</option>
                 </select>
+                <div style={{ marginTop: 6, fontSize: 11, color: '#64748B', display: 'flex', alignItems: 'center', gap: 6 }}>
+                  <span style={{ width: 6, height: 6, borderRadius: '50%', background: getRoleConfig(form.role).color }} />
+                  <strong>{getRoleConfig(form.role).role}:</strong> {getRoleConfig(form.role).description}
+                </div>
               </div>
 
               <div>

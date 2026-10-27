@@ -401,8 +401,8 @@ export const authenticateAdminUser = async (email, password) => {
               name: d.name || cleanEmail.split('@')[0],
               email: (d.email || cleanEmail).trim(),
               password: d.password || 'password123',
-              role: d.role || 'Operations Manager',
-              access: d.access || 'Sites & Attendance',
+              role: d.role || 'Manager',
+              access: d.access || 'Operations & Fleet Management',
               status: d.status || 'Active',
               createdAt: d.createdAt || new Date().toISOString(),
               lastLogin: d.lastLogin || null
@@ -471,8 +471,8 @@ export const authenticateAdminUser = async (email, password) => {
               name: d.name || d.empName || cleanEmail.split('@')[0],
               email: cleanEmail,
               password: d.password || 'password123',
-              role: d.role || 'Operations Manager',
-              access: 'Full System Access',
+              role: d.role || 'Manager',
+              access: d.access || 'Operations & Fleet Management',
               status: d.status || 'Active',
               createdAt: d.createdAt || new Date().toISOString(),
               lastLogin: null
