@@ -151,6 +151,8 @@ export default function HomeScreen({ navigation, route, user: propUser }) {
   const [employee, setEmployee] = useState(null);
   const [assignment, setAssignment] = useState(null);
   const [site, setSite] = useState(null);
+  const [assignedSitesList, setAssignedSitesList] = useState([]);
+  const [sitesData, setSitesData] = useState([]);
   const [attendance, setAttendance] = useState(null);
   const [allAttendance, setAllAttendance] = useState([]);
   const [loading, setLoading] = useState(true);
@@ -299,7 +301,9 @@ export default function HomeScreen({ navigation, route, user: propUser }) {
     ensureAuthenticatedSession();
 
     const unsubSites = onSnapshot(collection(db, 'Sites'), (snap) => {
-      sitesRef.current = !snap.empty ? snap.docs.map(d => ({ id: d.id, ...d.data() })) : [];
+      const loaded = !snap.empty ? snap.docs.map(d => ({ id: d.id, ...d.data() })) : [];
+      sitesRef.current = loaded;
+      setSitesData(loaded);
     }, (err) => console.warn('Sites snap warning:', err.message));
     return () => unsubSites();
   }, []);
@@ -361,91 +365,142 @@ export default function HomeScreen({ navigation, route, user: propUser }) {
       return 0;
     };
 
-    let selectedAsg = null;
     const cleanDocs = asgDocs.filter(a => a && a.id !== 'asg1' && !isAssignmentDatePassed(a));
+    const empAsg = cleanDocs.length > 0 ? cleanDocs.filter(a => isAssignmentForEmployee(a, emp, emailToUse, currentUserName)) : [];
+    empAsg.sort((a, b) => getTs(b) - getTs(a));
 
-    if (cleanDocs.length > 0) {
-      const empAsg = cleanDocs.filter(a => isAssignmentForEmployee(a, emp, emailToUse, currentUserName));
-      empAsg.sort((a, b) => getTs(b) - getTs(a));
+    const gatheredSites = [];
+    const seenSiteNames = new Set();
 
-      selectedAsg = empAsg.find(a => {
-        const st = (a.status || 'active').toLowerCase();
-        return st === 'active' || st === 'upcoming' || st === 'scheduled' || st === 'on duty';
-      }) || empAsg[0] || null;
+    const addSiteItem = (siteName, asgDoc, isVirtual = false) => {
+      if (!siteName || typeof siteName !== 'string') return;
+      const cleanName = siteName.trim();
+      if (!cleanName || cleanName.toLowerCase() === 'unassigned' || cleanName.toLowerCase() === 'none') return;
 
-      // Loose fallback: if empAsg was empty, check if any clean document matches employee site or name
-      if (!selectedAsg) {
-        const looseMatch = cleanDocs.find(a => {
-          const asgSite = (a.site || a.siteName || '').trim().toLowerCase();
-          const empSite = (emp?.assignedSite || emp?.site || '').trim().toLowerCase();
-          if (asgSite && empSite && (asgSite === empSite || asgSite.includes(empSite) || empSite.includes(asgSite))) return true;
+      const key = cleanName.toLowerCase();
+      if (seenSiteNames.has(key)) return;
+      seenSiteNames.add(key);
 
-          const aName = (a.employeeName || a.empName || a.assignedTo || '').toLowerCase();
-          const eName = (emp?.name || currentUserName || '').toLowerCase();
-          if (aName && eName && (aName.includes(eName) || eName.includes(aName))) return true;
-
-          const aEmail = (a.employeeEmail || a.empEmail || a.email || '').toLowerCase();
-          if (aEmail && emailToUse && (aEmail === emailToUse || aEmail.startsWith(emailToUse.split('@')[0]))) return true;
-
-          return false;
+      let matchedSiteDoc = null;
+      if (sitesRef.current && sitesRef.current.length > 0) {
+        matchedSiteDoc = sitesRef.current.find(s => {
+          const sName = (s.name || s.id || '').trim().toLowerCase();
+          return sName === key || sName.includes(key) || key.includes(sName);
         });
-        if (looseMatch) selectedAsg = looseMatch;
+      }
+
+      const resolvedSite = resolveSiteDetails(matchedSiteDoc, cleanName, asgDoc);
+      const composedShift = resolveShift(asgDoc, emp);
+      const asgDate = asgDoc?.assignDate || asgDoc?.assignedAt || new Date().toISOString().split('T')[0];
+      const priority = asgDoc?.priority || 'Medium';
+      const status = asgDoc?.status || 'Active';
+
+      const cardAsg = {
+        ...(asgDoc || {}),
+        id: asgDoc?.id ? `${asgDoc.id}_${key.replace(/\s+/g, '_')}` : `site_asg_${key.replace(/\s+/g, '_')}`,
+        site: cleanName,
+        siteName: cleanName,
+        siteAddress: resolvedSite?.address || asgDoc?.siteAddress || asgDoc?.address || '',
+        address: resolvedSite?.address || asgDoc?.siteAddress || asgDoc?.address || '',
+        latitude: resolvedSite?.latitude,
+        longitude: resolvedSite?.longitude,
+        geofenceRadius: resolvedSite?.radius || 200,
+        shift: composedShift,
+        status: status,
+        priority: priority,
+        assignDate: asgDate,
+        isVirtualFromProfile: isVirtual,
+      };
+
+      gatheredSites.push({
+        id: cardAsg.id,
+        siteName: cleanName,
+        address: resolvedSite?.address || 'Registered Worksite Address',
+        radius: resolvedSite?.radius || 200,
+        latitude: resolvedSite?.latitude,
+        longitude: resolvedSite?.longitude,
+        shift: composedShift,
+        date: asgDate,
+        priority: priority,
+        status: status,
+        assignment: cardAsg,
+        site: resolvedSite,
+      });
+    };
+
+    // 1. Process matching assignment docs from database
+    if (empAsg.length > 0) {
+      for (const asg of empAsg) {
+        if (Array.isArray(asg.assignedSites) && asg.assignedSites.length > 0) {
+          asg.assignedSites.forEach(s => addSiteItem(s, asg));
+        } else if (asg.site && asg.site.includes(',')) {
+          asg.site.split(',').forEach(s => addSiteItem(s, asg));
+        } else if (asg.site || asg.siteName) {
+          addSiteItem(asg.site || asg.siteName, asg);
+        }
       }
     }
 
-    // Fallback: ONLY if employee has NO explicit assignment records in the database,
-    // use the employee's assignedSite configured on their profile by admin.
-    // If the employee had an assignment but its date passed, do NOT synthesize an active assignment!
-    const hasEmployeeAssignmentsInDb = asgDocs.some(a => isAssignmentForEmployee(a, emp, emailToUse, currentUserName));
+    // 2. Loose fallback if empAsg was empty
+    if (gatheredSites.length === 0 && cleanDocs.length > 0) {
+      const looseMatch = cleanDocs.find(a => {
+        const asgSite = (a.site || a.siteName || '').trim().toLowerCase();
+        const empSite = (emp?.assignedSite || emp?.site || '').trim().toLowerCase();
+        if (asgSite && empSite && (asgSite === empSite || asgSite.includes(empSite) || empSite.includes(asgSite))) return true;
 
-    if (!selectedAsg && emp && !hasEmployeeAssignmentsInDb) {
-      const profileSite = (emp.assignedSite || emp.site || emp.assignedSiteName || '').trim();
-      if (profileSite && profileSite.toLowerCase() !== 'unassigned' && profileSite.toLowerCase() !== 'none') {
-        selectedAsg = {
-          id: `profile_site_${emp.id || 'emp'}`,
-          assignmentId: `profile_site_${emp.id || 'emp'}`,
-          site: profileSite,
-          siteName: profileSite,
-          siteId: emp.assignedSiteId || emp.siteId || 'site-active',
-          siteAddress: emp.assignedSiteAddress || emp.address || '',
-          shift: emp.shift || '08:00 AM - 05:00 PM',
-          status: 'Active',
-          geofenceRadius: emp.geofenceRadius || 200,
-          employeeName: emp.name || currentUserName || 'Employee',
-          employeeEmail: emp.email || emailToUse || '',
-          employeeId: emp.id || emp.idNum || '',
-          assignDate: new Date().toISOString().split('T')[0],
-          isVirtualFromProfile: true
-        };
+        const aName = (a.employeeName || a.empName || a.assignedTo || '').toLowerCase();
+        const eName = (emp?.name || currentUserName || '').toLowerCase();
+        if (aName && eName && (aName.includes(eName) || eName.includes(aName))) return true;
+
+        const aEmail = (a.employeeEmail || a.empEmail || a.email || '').toLowerCase();
+        if (aEmail && emailToUse && (aEmail === emailToUse || aEmail.startsWith(emailToUse.split('@')[0]))) return true;
+
+        return false;
+      });
+
+      if (looseMatch) {
+        if (Array.isArray(looseMatch.assignedSites) && looseMatch.assignedSites.length > 0) {
+          looseMatch.assignedSites.forEach(s => addSiteItem(s, looseMatch));
+        } else if (looseMatch.site && looseMatch.site.includes(',')) {
+          looseMatch.site.split(',').forEach(s => addSiteItem(s, looseMatch));
+        } else if (looseMatch.site || looseMatch.siteName) {
+          addSiteItem(looseMatch.site || looseMatch.siteName, looseMatch);
+        }
       }
     }
 
-    if (selectedAsg) {
-      const composedShift = resolveShift(selectedAsg, emp);
-      selectedAsg = { ...selectedAsg, shift: composedShift };
-      assignmentRef.current = selectedAsg;
-      setAssignment(selectedAsg);
+    // 3. Fallback: ONLY if employee has NO explicit assignment records in the database,
+    // check employee profile assignedSites or assignedSite.
+    const hasEmployeeAssignmentsInDb = cleanDocs.some(a => isAssignmentForEmployee(a, emp, emailToUse, currentUserName));
 
-      const targetSiteName = selectedAsg.site || selectedAsg.siteName || selectedAsg.location || 'Assigned Site';
-      let matchedSiteObj = null;
-      if (sitesRef.current.length > 0) {
-        const matchedSiteDoc = sitesRef.current.find(s => {
-          const sName = (s.name || '').trim().toLowerCase();
-          const tName = targetSiteName.trim().toLowerCase();
-          return sName === tName || sName.includes(tName) || tName.includes(sName);
-        });
-        if (matchedSiteDoc) matchedSiteObj = matchedSiteDoc;
+    if (gatheredSites.length === 0 && emp && !hasEmployeeAssignmentsInDb) {
+      if (Array.isArray(emp.assignedSites) && emp.assignedSites.length > 0) {
+        emp.assignedSites.forEach(s => addSiteItem(s, null, true));
+      } else if (emp.assignedSite && emp.assignedSite.includes(',')) {
+        emp.assignedSite.split(',').forEach(s => addSiteItem(s, null, true));
+      } else {
+        const profileSite = (emp.assignedSite || emp.site || emp.assignedSiteName || '').trim();
+        if (profileSite && profileSite.toLowerCase() !== 'unassigned' && profileSite.toLowerCase() !== 'none') {
+          addSiteItem(profileSite, null, true);
+        }
       }
-      const resolvedSite = resolveSiteDetails(matchedSiteObj, targetSiteName, selectedAsg);
-      siteRef.current = resolvedSite;
-      setSite(resolvedSite);
+    }
+
+    setAssignedSitesList(gatheredSites);
+
+    if (gatheredSites.length > 0) {
+      const primary = gatheredSites[0];
+      assignmentRef.current = primary.assignment;
+      setAssignment(primary.assignment);
+      siteRef.current = primary.site;
+      setSite(primary.site);
     } else {
       assignmentRef.current = null;
       setAssignment(null);
       siteRef.current = null;
       setSite(null);
     }
-  }, [asgDocs, employee, currentEmail]);
+  }, [asgDocs, employee, currentEmail, sitesData]);
 
   // 3. Fetch Attendance Records
   useEffect(() => {
@@ -553,16 +608,18 @@ export default function HomeScreen({ navigation, route, user: propUser }) {
 
       // ── Anti-Spoofing & Security Checks Pipeline ──
       // Checks: Root/Jailbreak, VPN/Proxy, Mock GPS, Accuracy, Geofence, Speed/Consistency
-      const checkResult = await runPreAttendanceChecks({ employee, site, action: 'time_in' });
+      const sitesToCheck = assignedSitesList.length > 0 ? assignedSitesList.map(s => s.site) : site;
+      const checkResult = await runPreAttendanceChecks({ employee, site: sitesToCheck, action: 'time_in' });
       if (!checkResult.passed) {
         if (checkResult.failedCheck === 'geofence') {
           const lat = checkResult.report?.latitude || 0;
           const lng = checkResult.report?.longitude || 0;
+          const matchedSite = checkResult.report?.matchedSite || site;
           Alert.alert(
             'Geofence Warning',
             'You are outside your assigned site radius. Check-in registered with out-of-bounds flag.',
             [
-              { text: 'Proceed', onPress: () => processCheckIn(lat, lng, false) },
+              { text: 'Proceed', onPress: () => processCheckIn(lat, lng, false, matchedSite) },
               { text: 'Cancel', style: 'cancel' }
             ]
           );
@@ -579,7 +636,8 @@ export default function HomeScreen({ navigation, route, user: propUser }) {
       }
 
       const { latitude, longitude } = checkResult.report;
-      await processCheckIn(latitude, longitude, true);
+      const activeSite = checkResult.report?.matchedSite || site;
+      await processCheckIn(latitude, longitude, true, activeSite);
     } catch (err) {
       console.error(err);
       Alert.alert('Error', 'Failed to retrieve location or verify security.');
@@ -588,9 +646,10 @@ export default function HomeScreen({ navigation, route, user: propUser }) {
     }
   };
 
-  const processCheckIn = async (lat, lng, inFence) => {
+  const processCheckIn = async (lat, lng, inFence, activeSite) => {
     try {
       const statusText = inFence ? 'On Site' : 'Flagged';
+      const siteToUse = activeSite || site;
 
       const newAtt = {
         employee_id: employee.id,
@@ -598,8 +657,8 @@ export default function HomeScreen({ navigation, route, user: propUser }) {
         employeeUid: employee.uid || employee.id,
         employeeName: employee.name,
         email: employee.email || currentEmail,
-        site_id: site?.id || 'Unknown',
-        siteName: site?.name || assignment?.site || 'Unassigned Site',
+        site_id: siteToUse?.id || site?.id || 'Unknown',
+        siteName: siteToUse?.name || site?.name || assignment?.site || 'Unassigned Site',
         date: serverTimestamp(),
         timeIn: serverTimestamp(),
         timeOut: null,
@@ -1023,70 +1082,107 @@ export default function HomeScreen({ navigation, route, user: propUser }) {
           </View>
         </TouchableOpacity>
 
-        {/* ── Active Site Assignment Bento Card ── */}
-        {assignment ? (
-          <View style={styles.asgBentoCard}>
-            <View style={styles.asgBentoHeader}>
-              <View style={{ flexDirection: 'row', alignItems: 'center', gap: 8 }}>
-                <View style={styles.asgIconBg}>
-                  <Ionicons name="briefcase" size={18} color="#4F46E5" />
-                </View>
-                <View>
-                  <Text style={styles.asgBentoLabel}>Active Site Assignment</Text>
-                  <Text style={styles.asgBentoTitle}>{assignment?.site || site?.name || '—'}</Text>
-                </View>
-              </View>
-              <View style={styles.asgStatusBadge}>
-                <Text style={styles.asgStatusText}>{assignment?.status || 'Active'}</Text>
-              </View>
-            </View>
-
-            <View style={styles.asgDetailsGrid}>
-              <View style={styles.asgDetailRow}>
-                <Ionicons name="location-outline" size={15} color="#6B7280" />
-                <Text style={[styles.asgDetailText, { flex: 1 }]} numberOfLines={2}>
-                  Address: <Text style={styles.asgDetailBold}>{site?.address || assignment?.address || '—'}</Text>
-                </Text>
-              </View>
-              <View style={styles.asgDetailRow}>
-                <Ionicons name="time-outline" size={15} color="#6B7280" />
-                <Text style={styles.asgDetailText}>Shift: <Text style={styles.asgDetailBold}>{resolveShift(assignment) || '—'}</Text></Text>
-              </View>
-              <View style={styles.asgDetailRow}>
-                <Ionicons name="calendar-outline" size={15} color="#6B7280" />
-                <Text style={styles.asgDetailText}>Date: <Text style={styles.asgDetailBold}>{assignment?.assignDate || assignment?.assignedAt || 'Daily Scheduled'}</Text></Text>
-              </View>
-              <View style={styles.asgDetailRow}>
-                <Ionicons
-                  name="flag-outline"
-                  size={15}
-                  color={
-                    (assignment?.priority || '').toLowerCase() === 'medium' ? '#F59E0B' :
-                      (assignment?.priority || '').toLowerCase() === 'low' ? '#10B981' : '#EF4444'
-                  }
-                />
-                <Text style={styles.asgDetailText}>
-                  Priority: <Text style={[
-                    styles.asgDetailBold,
-                    {
-                      color: (assignment?.priority || '').toLowerCase() === 'medium' ? '#F59E0B' :
-                        (assignment?.priority || '').toLowerCase() === 'low' ? '#10B981' : '#EF4444'
-                    }
-                  ]}>
-                    {assignment?.priority || 'Medium'}
+        {/* ── Assigned Worksites (Rendered as Separate Cards) ── */}
+        {assignedSitesList && assignedSitesList.length > 0 ? (
+          <View style={{ marginBottom: 4 }}>
+            {assignedSitesList.length > 1 && (
+              <View style={{ flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', marginBottom: 10, paddingHorizontal: 2 }}>
+                <View style={{ flexDirection: 'row', alignItems: 'center', gap: 6 }}>
+                  <Ionicons name="business" size={17} color="#4F46E5" />
+                  <Text style={{ fontSize: 15, fontWeight: '800', color: '#111827' }}>
+                    Assigned Worksites ({assignedSitesList.length})
                   </Text>
-                </Text>
+                </View>
+                <View style={{ backgroundColor: '#EEF2FF', paddingHorizontal: 8, paddingVertical: 3, borderRadius: 12 }}>
+                  <Text style={{ fontSize: 11, fontWeight: '700', color: '#4F46E5' }}>Mobile Field</Text>
+                </View>
               </View>
-            </View>
+            )}
 
-            <TouchableOpacity
-              style={styles.openMapNavBtn}
-              onPress={() => navigation.navigate('Map', { assignment: assignment, site: site })}
-            >
-              <Ionicons name="map" size={16} color="white" />
-              <Text style={styles.openMapNavText}>Open Live Map & Geofence</Text>
-              <Ionicons name="arrow-forward" size={16} color="white" />
-            </TouchableOpacity>
+            {assignedSitesList.map((siteItem, idx) => {
+              const isMultiple = assignedSitesList.length > 1;
+              return (
+                <View key={siteItem.id || `asg_${idx}`} style={[styles.asgBentoCard, idx > 0 && { marginTop: 4 }]}>
+                  <View style={styles.asgBentoHeader}>
+                    <View style={{ flexDirection: 'row', alignItems: 'center', gap: 8, flex: 1, paddingRight: 8 }}>
+                      <View style={[styles.asgIconBg, isMultiple && { backgroundColor: '#F5F3FF' }]}>
+                        <Ionicons name={isMultiple ? "business" : "briefcase"} size={18} color={isMultiple ? "#7C3AED" : "#4F46E5"} />
+                      </View>
+                      <View style={{ flex: 1 }}>
+                        <View style={{ flexDirection: 'row', alignItems: 'center', gap: 6 }}>
+                          <Text style={styles.asgBentoLabel}>
+                            {isMultiple ? `Assigned Worksite ${idx + 1}` : 'Active Site Assignment'}
+                          </Text>
+                          {isMultiple && (
+                            <View style={{ backgroundColor: '#EDE9FE', paddingHorizontal: 6, paddingVertical: 1, borderRadius: 6 }}>
+                              <Text style={{ fontSize: 10, fontWeight: '700', color: '#6D28D9' }}>Site {idx + 1}</Text>
+                            </View>
+                          )}
+                        </View>
+                        <Text style={styles.asgBentoTitle} numberOfLines={1}>{siteItem.siteName}</Text>
+                      </View>
+                    </View>
+                    <View style={styles.asgStatusBadge}>
+                      <Text style={styles.asgStatusText}>{siteItem.status || 'Active'}</Text>
+                    </View>
+                  </View>
+
+                  <View style={styles.asgDetailsGrid}>
+                    <View style={styles.asgDetailRow}>
+                      <Ionicons name="location-outline" size={15} color="#6B7280" />
+                      <Text style={[styles.asgDetailText, { flex: 1 }]} numberOfLines={2}>
+                        Address: <Text style={styles.asgDetailBold}>{siteItem.address || '—'}</Text>
+                      </Text>
+                    </View>
+                    <View style={styles.asgDetailRow}>
+                      <Ionicons name="radio-outline" size={15} color="#4F46E5" />
+                      <Text style={styles.asgDetailText}>
+                        Perimeter: <Text style={styles.asgDetailBold}>{siteItem.radius}m Geofence Radius</Text>
+                      </Text>
+                    </View>
+                    <View style={styles.asgDetailRow}>
+                      <Ionicons name="time-outline" size={15} color="#6B7280" />
+                      <Text style={styles.asgDetailText}>Shift: <Text style={styles.asgDetailBold}>{siteItem.shift || '—'}</Text></Text>
+                    </View>
+                    <View style={styles.asgDetailRow}>
+                      <Ionicons name="calendar-outline" size={15} color="#6B7280" />
+                      <Text style={styles.asgDetailText}>Date: <Text style={styles.asgDetailBold}>{siteItem.date || 'Daily Scheduled'}</Text></Text>
+                    </View>
+                    <View style={styles.asgDetailRow}>
+                      <Ionicons
+                        name="flag-outline"
+                        size={15}
+                        color={
+                          (siteItem.priority || '').toLowerCase() === 'medium' ? '#F59E0B' :
+                            (siteItem.priority || '').toLowerCase() === 'low' ? '#10B981' : '#EF4444'
+                        }
+                      />
+                      <Text style={styles.asgDetailText}>
+                        Priority: <Text style={[
+                          styles.asgDetailBold,
+                          {
+                            color: (siteItem.priority || '').toLowerCase() === 'medium' ? '#F59E0B' :
+                              (siteItem.priority || '').toLowerCase() === 'low' ? '#10B981' : '#EF4444'
+                          }
+                        ]}>
+                          {siteItem.priority || 'Medium'}
+                        </Text>
+                      </Text>
+                    </View>
+                  </View>
+
+                  <TouchableOpacity
+                    style={styles.openMapNavBtn}
+                    onPress={() => navigation.navigate('Map', { assignment: siteItem.assignment, site: siteItem.site })}
+                    activeOpacity={0.85}
+                  >
+                    <Ionicons name="map" size={16} color="white" />
+                    <Text style={styles.openMapNavText}>Open Live Map & Geofence</Text>
+                    <Ionicons name="arrow-forward" size={16} color="white" />
+                  </TouchableOpacity>
+                </View>
+              );
+            })}
           </View>
         ) : (
           <View style={[styles.asgBentoCard, { alignItems: 'center', paddingVertical: 32 }]}>

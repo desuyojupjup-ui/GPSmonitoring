@@ -252,27 +252,38 @@ export function isMobileFieldWithoutSite(emp, asg, site) {
   const isMobile = wt === 'mobile field employee' || wt.includes('mobile');
   if (!isMobile) return false;
 
-  // 1. Check assignedSites array
+  // 1. Check assignedSites array on employee
   if (Array.isArray(emp.assignedSites) && emp.assignedSites.length > 0) {
     const valid = emp.assignedSites.filter(s => s && typeof s === 'string' && s.trim() && s.trim().toLowerCase() !== 'unassigned' && s.trim().toLowerCase() !== 'none');
     if (valid.length > 0) return false;
   }
 
-  // 2. Check assignedDestinations array
+  // 2. Check assignedDestinations array on employee
   if (Array.isArray(emp.assignedDestinations) && emp.assignedDestinations.length > 0) {
     const valid = emp.assignedDestinations.filter(s => s && typeof s === 'string' && s.trim() && s.trim().toLowerCase() !== 'unassigned' && s.trim().toLowerCase() !== 'none');
     if (valid.length > 0) return false;
   }
 
-  // 3. Check assignedSite string
+  // 3. Check assignedSite string on employee
   const rawSite = (emp.assignedSite || emp.site || emp.assignedSiteName || '').toString().trim();
   if (rawSite && rawSite.toLowerCase() !== 'unassigned' && rawSite.toLowerCase() !== 'none') {
     return false;
   }
 
-  // 4. Check active assignment
+  // 4. Check assignedSites array on active assignment
+  if (Array.isArray(asg?.assignedSites) && asg.assignedSites.length > 0) {
+    const valid = asg.assignedSites.filter(s => s && typeof s === 'string' && s.trim() && s.trim().toLowerCase() !== 'unassigned' && s.trim().toLowerCase() !== 'none');
+    if (valid.length > 0) return false;
+  }
+
+  // 5. Check active assignment site string or site object
   const asgSite = (asg?.site || asg?.siteName || site?.name || '').toString().trim();
   if (asgSite && asgSite.toLowerCase() !== 'unassigned' && asgSite.toLowerCase() !== 'none') {
+    return false;
+  }
+
+  // 6. Check site array
+  if (Array.isArray(site) && site.length > 0) {
     return false;
   }
 

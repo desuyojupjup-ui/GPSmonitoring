@@ -270,6 +270,8 @@ export default function MapScreen({ navigation, route, user: propUser }) {
   const validRouteAsg = (routeAsg && !isAssignmentDatePassed(routeAsg)) ? routeAsg : null;
   const [site, setSite] = useState(route?.params?.site && validRouteAsg ? resolveSiteDetails(route.params.site, route.params.site.name) : null);
   const [assignment, setAssignment] = useState(validRouteAsg);
+  const [assignedSitesList, setAssignedSitesList] = useState([]);
+  const [sitesData, setSitesData] = useState([]);
   const [distance, setDistance] = useState(null);
   const [employee, setEmployee] = useState(null);
   const [layerType, setLayerType] = useState('osm'); // osm, satellite, terrain
@@ -350,7 +352,9 @@ export default function MapScreen({ navigation, route, user: propUser }) {
     ensureAuthenticatedSession();
 
     const unsubSites = onSnapshot(collection(db, 'Sites'), (snap) => {
-      sitesRef.current = !snap.empty ? snap.docs.map(d => ({ id: d.id, ...d.data() })) : [];
+      const loaded = !snap.empty ? snap.docs.map(d => ({ id: d.id, ...d.data() })) : [];
+      sitesRef.current = loaded;
+      setSitesData(loaded);
     }, (err) => console.warn('Map Sites snap warning:', err.message));
     return () => unsubSites();
   }, []);
@@ -378,6 +382,19 @@ export default function MapScreen({ navigation, route, user: propUser }) {
     return () => { unsub1(); unsub2(); };
   }, []);
 
+  const selectSite = (siteItem) => {
+    if (!siteItem || !siteItem.site) return;
+    const resolved = siteItem.site;
+    setSite(resolved);
+    setAssignment(siteItem.assignment);
+    siteRef.current = resolved;
+    assignmentRef.current = siteItem.assignment;
+    if (resolved.lat && resolved.lng && webViewRef.current) {
+      const js = `if (window.updateSite) { window.updateSite(${resolved.lat}, ${resolved.lng}, ${resolved.radius}, ${JSON.stringify(resolved.name)}, ${isOnSite}); } if (window.centerOnSite) { window.centerOnSite(); } true;`;
+      webViewRef.current.injectJavaScript(js);
+    }
+  };
+
   useEffect(() => {
     const emp = employeeRef.current || employee;
     const emailToUse = currentEmail;
@@ -396,88 +413,157 @@ export default function MapScreen({ navigation, route, user: propUser }) {
       return 0;
     };
 
-    let selectedAsg = null;
     const cleanDocs = asgDocs.filter(a => a && a.id !== 'asg1' && !isAssignmentDatePassed(a));
+    const empAsg = cleanDocs.length > 0 ? cleanDocs.filter(a => isAssignmentForEmployee(a, emp, emailToUse, currentUserName)) : [];
+    empAsg.sort((a, b) => getTs(b) - getTs(a));
 
-    if (cleanDocs.length > 0) {
-      const empAsg = cleanDocs.filter(a => isAssignmentForEmployee(a, emp, emailToUse, currentUserName));
-      empAsg.sort((a, b) => getTs(b) - getTs(a));
+    const gatheredSites = [];
+    const seenSiteNames = new Set();
 
-      selectedAsg = empAsg.find(a => {
-        const st = (a.status || 'active').toLowerCase();
-        return st === 'active' || st === 'upcoming' || st === 'scheduled' || st === 'on duty';
-      }) || empAsg[0] || null;
+    const addSiteItem = (siteName, asgDoc, isVirtual = false) => {
+      if (!siteName || typeof siteName !== 'string') return;
+      const cleanName = siteName.trim();
+      if (!cleanName || cleanName.toLowerCase() === 'unassigned' || cleanName.toLowerCase() === 'none') return;
 
-      // Loose fallback: if empAsg was empty, check if any clean document matches employee site, name, or email
-      if (!selectedAsg) {
-        const looseMatch = cleanDocs.find(a => {
-          const asgSite = (a.site || a.siteName || '').trim().toLowerCase();
-          const empSite = (emp?.assignedSite || emp?.site || '').trim().toLowerCase();
-          if (asgSite && empSite && (asgSite === empSite || asgSite.includes(empSite) || empSite.includes(asgSite))) return true;
+      const key = cleanName.toLowerCase();
+      if (seenSiteNames.has(key)) return;
+      seenSiteNames.add(key);
 
-          const aName = (a.employeeName || a.empName || a.assignedTo || '').toLowerCase();
-          const eName = (emp?.name || currentUserName || '').toLowerCase();
-          if (aName && eName && (aName.includes(eName) || eName.includes(aName))) return true;
-
-          const aEmail = (a.employeeEmail || a.empEmail || a.email || '').toLowerCase();
-          if (aEmail && emailToUse && (aEmail === emailToUse || aEmail.startsWith(emailToUse.split('@')[0]))) return true;
-
-          return false;
+      let matchedSiteDoc = null;
+      if (sitesRef.current && sitesRef.current.length > 0) {
+        matchedSiteDoc = sitesRef.current.find(s => {
+          const sName = (s.name || s.id || '').trim().toLowerCase();
+          return sName === key || sName.includes(key) || key.includes(sName);
         });
-        if (looseMatch) selectedAsg = looseMatch;
+      }
+
+      const resolvedSite = resolveSiteDetails(matchedSiteDoc, cleanName, asgDoc);
+      const composedShift = resolveShift(asgDoc, emp);
+      const asgDate = asgDoc?.assignDate || asgDoc?.assignedAt || new Date().toISOString().split('T')[0];
+      const priority = asgDoc?.priority || 'Medium';
+      const status = asgDoc?.status || 'Active';
+
+      const cardAsg = {
+        ...(asgDoc || {}),
+        id: asgDoc?.id ? `${asgDoc.id}_${key.replace(/\s+/g, '_')}` : `site_asg_${key.replace(/\s+/g, '_')}`,
+        site: cleanName,
+        siteName: cleanName,
+        siteAddress: resolvedSite?.address || asgDoc?.siteAddress || asgDoc?.address || '',
+        address: resolvedSite?.address || asgDoc?.siteAddress || asgDoc?.address || '',
+        latitude: resolvedSite?.latitude,
+        longitude: resolvedSite?.longitude,
+        geofenceRadius: resolvedSite?.radius || 200,
+        shift: composedShift,
+        status: status,
+        priority: priority,
+        assignDate: asgDate,
+        isVirtualFromProfile: isVirtual,
+      };
+
+      gatheredSites.push({
+        id: cardAsg.id,
+        siteName: cleanName,
+        address: resolvedSite?.address || 'Registered Worksite Address',
+        radius: resolvedSite?.radius || 200,
+        latitude: resolvedSite?.latitude,
+        longitude: resolvedSite?.longitude,
+        shift: composedShift,
+        date: asgDate,
+        priority: priority,
+        status: status,
+        assignment: cardAsg,
+        site: resolvedSite,
+      });
+    };
+
+    // 1. Process matching assignment docs
+    if (empAsg.length > 0) {
+      for (const asg of empAsg) {
+        if (Array.isArray(asg.assignedSites) && asg.assignedSites.length > 0) {
+          asg.assignedSites.forEach(s => addSiteItem(s, asg));
+        } else if (asg.site && asg.site.includes(',')) {
+          asg.site.split(',').forEach(s => addSiteItem(s, asg));
+        } else if (asg.site || asg.siteName) {
+          addSiteItem(asg.site || asg.siteName, asg);
+        }
       }
     }
 
-    // Fallback: ONLY if employee has NO explicit assignment records in the database,
-    // use the employee's assignedSite configured on their profile by admin.
-    // If the employee had an assignment but its date passed, do NOT synthesize an active assignment!
-    const hasEmployeeAssignmentsInDb = asgDocs.some(a => isAssignmentForEmployee(a, emp, emailToUse, currentUserName));
+    // 2. Loose fallback if empAsg was empty
+    if (gatheredSites.length === 0 && cleanDocs.length > 0) {
+      const looseMatch = cleanDocs.find(a => {
+        const asgSite = (a.site || a.siteName || '').trim().toLowerCase();
+        const empSite = (emp?.assignedSite || emp?.site || '').trim().toLowerCase();
+        if (asgSite && empSite && (asgSite === empSite || asgSite.includes(empSite) || empSite.includes(asgSite))) return true;
 
-    if (!selectedAsg && emp && !hasEmployeeAssignmentsInDb) {
-      const profileSite = (emp.assignedSite || emp.site || emp.assignedSiteName || '').trim();
-      if (profileSite && profileSite.toLowerCase() !== 'unassigned' && profileSite.toLowerCase() !== 'none') {
-        selectedAsg = {
-          id: `profile_site_${emp.id || 'emp'}`,
-          assignmentId: `profile_site_${emp.id || 'emp'}`,
-          site: profileSite,
-          siteName: profileSite,
-          siteId: emp.assignedSiteId || emp.siteId || 'site-active',
-          siteAddress: emp.assignedSiteAddress || emp.address || '',
-          shift: emp.shift || '08:00 AM - 05:00 PM',
-          status: 'Active',
-          geofenceRadius: emp.geofenceRadius || 200,
-          employeeName: emp.name || currentUserName || 'Employee',
-          employeeEmail: emp.email || emailToUse || '',
-          employeeId: emp.id || emp.idNum || '',
-          assignDate: new Date().toISOString().split('T')[0],
-          isVirtualFromProfile: true
-        };
+        const aName = (a.employeeName || a.empName || a.assignedTo || '').toLowerCase();
+        const eName = (emp?.name || currentUserName || '').toLowerCase();
+        if (aName && eName && (aName.includes(eName) || eName.includes(aName))) return true;
+
+        const aEmail = (a.employeeEmail || a.empEmail || a.email || '').toLowerCase();
+        if (aEmail && emailToUse && (aEmail === emailToUse || aEmail.startsWith(emailToUse.split('@')[0]))) return true;
+
+        return false;
+      });
+
+      if (looseMatch) {
+        if (Array.isArray(looseMatch.assignedSites) && looseMatch.assignedSites.length > 0) {
+          looseMatch.assignedSites.forEach(s => addSiteItem(s, looseMatch));
+        } else if (looseMatch.site && looseMatch.site.includes(',')) {
+          looseMatch.site.split(',').forEach(s => addSiteItem(s, looseMatch));
+        } else if (looseMatch.site || looseMatch.siteName) {
+          addSiteItem(looseMatch.site || looseMatch.siteName, looseMatch);
+        }
       }
     }
 
-    if (selectedAsg) {
-      const composedShift = resolveShift(selectedAsg, emp);
-      selectedAsg = { ...selectedAsg, shift: composedShift };
-      assignmentRef.current = selectedAsg;
-      setAssignment(selectedAsg);
+    // 3. Fallback: ONLY if employee has NO explicit assignment records in the database,
+    // check employee profile assignedSites or assignedSite.
+    const hasEmployeeAssignmentsInDb = cleanDocs.some(a => isAssignmentForEmployee(a, emp, emailToUse, currentUserName));
 
-      const targetSiteName = selectedAsg.site || selectedAsg.siteName || selectedAsg.location || 'Unassigned Site';
-      let matchedSiteObj = null;
-      if (sitesRef.current.length > 0) {
-        const matchedDoc = sitesRef.current.find(s => {
-          const sName = (s.name || '').trim().toLowerCase();
-          const tName = targetSiteName.trim().toLowerCase();
-          return sName === tName || sName.includes(tName) || tName.includes(sName);
-        });
-        if (matchedDoc) matchedSiteObj = matchedDoc;
+    if (gatheredSites.length === 0 && emp && !hasEmployeeAssignmentsInDb) {
+      if (Array.isArray(emp.assignedSites) && emp.assignedSites.length > 0) {
+        emp.assignedSites.forEach(s => addSiteItem(s, null, true));
+      } else if (emp.assignedSite && emp.assignedSite.includes(',')) {
+        emp.assignedSite.split(',').forEach(s => addSiteItem(s, null, true));
+      } else {
+        const profileSite = (emp.assignedSite || emp.site || emp.assignedSiteName || '').trim();
+        if (profileSite && profileSite.toLowerCase() !== 'unassigned' && profileSite.toLowerCase() !== 'none') {
+          addSiteItem(profileSite, null, true);
+        }
       }
+    }
 
-      const resolved = resolveSiteDetails(matchedSiteObj, targetSiteName, selectedAsg);
+    setAssignedSitesList(gatheredSites);
+
+    // Prioritize site selected in navigation route params
+    const routeSiteName = (route?.params?.site?.name || route?.params?.assignment?.site || '').trim().toLowerCase();
+    let chosenSiteItem = null;
+
+    if (routeSiteName) {
+      chosenSiteItem = gatheredSites.find(s => {
+        const sn = s.siteName.toLowerCase();
+        return sn === routeSiteName || sn.includes(routeSiteName) || routeSiteName.includes(sn);
+      });
+    }
+
+    if (!chosenSiteItem && siteRef.current) {
+      const currentName = (siteRef.current.name || '').trim().toLowerCase();
+      chosenSiteItem = gatheredSites.find(s => s.siteName.toLowerCase() === currentName);
+    }
+
+    if (!chosenSiteItem && gatheredSites.length > 0) {
+      chosenSiteItem = gatheredSites[0];
+    }
+
+    if (chosenSiteItem) {
+      const resolved = chosenSiteItem.site;
+      assignmentRef.current = chosenSiteItem.assignment;
+      setAssignment(chosenSiteItem.assignment);
       siteRef.current = resolved;
       setSite(resolved);
 
-      // Push update to Leaflet map
-      if (resolved) {
+      if (resolved && resolved.lat && resolved.lng) {
         const js = `if (window.updateSite) { window.updateSite(${resolved.lat}, ${resolved.lng}, ${resolved.radius}, ${JSON.stringify(resolved.name)}, ${isOnSite}); } true;`;
         webViewRef.current?.injectJavaScript(js);
       }
@@ -487,7 +573,7 @@ export default function MapScreen({ navigation, route, user: propUser }) {
       siteRef.current = null;
       setSite(null);
     }
-  }, [asgDocs, employee, currentEmail]);
+  }, [asgDocs, employee, currentEmail, sitesData]);
 
   // 3. Location Tracking & Distance Calculation
   useEffect(() => {
@@ -672,6 +758,30 @@ export default function MapScreen({ navigation, route, user: propUser }) {
             <TouchableOpacity style={styles.stopNavBtn} onPress={toggleNavigation}>
               <Ionicons name="close-circle" size={24} color="#EF4444" />
             </TouchableOpacity>
+          </View>
+        )}
+
+        {/* Multi-Site Assignment Switcher */}
+        {assignedSitesList && assignedSitesList.length > 1 && (
+          <View style={[styles.siteSwitcherBar, isNavigating ? { top: 90 } : { top: 14 }]}>
+            <ScrollView horizontal showsHorizontalScrollIndicator={false} contentContainerStyle={styles.siteSwitcherScroll}>
+              {assignedSitesList.map((sItem, sIdx) => {
+                const isSelected = (site?.name || '').toLowerCase() === sItem.siteName.toLowerCase();
+                return (
+                  <TouchableOpacity
+                    key={sItem.id || `msite_${sIdx}`}
+                    onPress={() => selectSite(sItem)}
+                    style={[styles.sitePill, isSelected && styles.sitePillActive]}
+                    activeOpacity={0.8}
+                  >
+                    <Ionicons name="location" size={13} color={isSelected ? '#FFFFFF' : '#4F46E5'} />
+                    <Text style={[styles.sitePillText, isSelected && styles.sitePillTextActive]}>
+                      {sItem.siteName}
+                    </Text>
+                  </TouchableOpacity>
+                );
+              })}
+            </ScrollView>
           </View>
         )}
 
@@ -1023,5 +1133,43 @@ const styles = StyleSheet.create({
     backgroundColor: '#EEF2FF',
     justifyContent: 'center',
     alignItems: 'center',
+  },
+  siteSwitcherBar: {
+    position: 'absolute',
+    left: 0,
+    right: 0,
+    zIndex: 30,
+  },
+  siteSwitcherScroll: {
+    paddingHorizontal: 16,
+    gap: 8,
+  },
+  sitePill: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 6,
+    backgroundColor: '#FFFFFF',
+    paddingHorizontal: 12,
+    paddingVertical: 7,
+    borderRadius: 20,
+    borderWidth: 1.5,
+    borderColor: '#E0E7FF',
+    shadowColor: '#000',
+    shadowOffset: { width: 0, height: 2 },
+    shadowOpacity: 0.1,
+    shadowRadius: 4,
+    elevation: 3,
+  },
+  sitePillActive: {
+    backgroundColor: '#4F46E5',
+    borderColor: '#4F46E5',
+  },
+  sitePillText: {
+    fontSize: 12,
+    fontWeight: '700',
+    color: '#374151',
+  },
+  sitePillTextActive: {
+    color: '#FFFFFF',
   },
 });

@@ -10,8 +10,20 @@ import { evaluateGeofence } from '../utils/geo';
  * @param {object} site  { lat, lng, radius?, polygon?, name? }
  * @returns {{ ok:boolean, distanceToBoundary:number, distanceToCenter:number|null, reason:string }}
  */
+/**
+ * @param {number} lat
+ * @param {number} lng
+ * @param {object|Array} site  Single site { lat, lng, radius?, polygon?, name? } or Array of site objects
+ * @returns {{ ok:boolean, distanceToBoundary:number, distanceToCenter:number|null, reason:string, matchedSite?:object }}
+ */
 export function verifyGeofence(lat, lng, site) {
-  if (!site || (site.lat == null && !site.polygon)) {
+  const sitesList = Array.isArray(site)
+    ? site
+    : (site?.assignedSitesList && Array.isArray(site.assignedSitesList) ? site.assignedSitesList : [site]);
+
+  const validSites = sitesList.filter(s => s && (s.lat != null || s.latitude != null || s.polygon));
+
+  if (validSites.length === 0) {
     return {
       ok: false,
       distanceToBoundary: 0,
@@ -19,15 +31,34 @@ export function verifyGeofence(lat, lng, site) {
       reason: 'Your assigned site has no geofence configured. Contact your admin.',
     };
   }
-  const r = evaluateGeofence(lat, lng, site);
-  if (r.inside) {
-    return { ...r, ok: true, reason: `Inside the geofence for "${site.name || 'your site'}".` };
+
+  let bestResult = null;
+
+  for (const s of validSites) {
+    const sObj = {
+      ...s,
+      lat: s.lat != null ? Number(s.lat) : (s.latitude != null ? Number(s.latitude) : null),
+      lng: s.lng != null ? Number(s.lng) : (s.longitude != null ? Number(s.longitude) : null),
+    };
+    const r = evaluateGeofence(lat, lng, sObj);
+    if (r.inside) {
+      return {
+        ...r,
+        ok: true,
+        matchedSite: sObj,
+        reason: `Inside the geofence for "${sObj.name || 'your site'}".`,
+      };
+    }
+    if (!bestResult || r.distanceToBoundary < bestResult.distanceToBoundary) {
+      bestResult = { ...r, siteName: sObj.name || 'your site', matchedSite: sObj };
+    }
   }
+
   return {
-    ...r,
+    ...bestResult,
     ok: false,
-    reason: `You are ${Math.round(r.distanceToBoundary)}m outside the allowed area for "${
-      site.name || 'your site'
+    reason: `You are ${Math.round(bestResult.distanceToBoundary)}m outside the allowed area for "${
+      bestResult.siteName
     }". Move closer and try again.`,
   };
 }
