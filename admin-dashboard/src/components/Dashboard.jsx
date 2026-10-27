@@ -1100,7 +1100,7 @@ export default function Dashboard() {
   const [focusedEmployee, setFocusedEmployee] = useState(null);
 
   // Periodic ticker to re-evaluate presence/heartbeat every 10 seconds
-  const [, setTick] = useState(0);
+  const [tick, setTick] = useState(0);
   useEffect(() => {
     const timer = setInterval(() => setTick(t => t + 1), 10000);
     return () => clearInterval(timer);
