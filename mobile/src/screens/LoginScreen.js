@@ -50,7 +50,9 @@ export default function LoginScreen({ navigation, route, onLogin: propOnLogin })
 
   const handleLogin = async () => {
     const cleanEmail = email.trim().toLowerCase();
-    if (!cleanEmail || !password) {
+    const cleanPassword = password.trim();
+
+    if (!cleanEmail || !cleanPassword) {
       Alert.alert('Required Fields', 'Please enter both email and password.');
       return;
     }
@@ -80,68 +82,108 @@ export default function LoginScreen({ navigation, route, onLogin: propOnLogin })
           const empId = (data.idNum || data.empId || data.employeeId || d.id || '').toString().trim().toLowerCase();
           const empName = (data.name || data.empName || '').trim().toLowerCase();
 
-          // Match by exact email, prefix, ID number, or name
-          if (empMail && (empMail === cleanEmail || empMail.startsWith(cleanEmail + '@') || cleanEmail.startsWith(empMail.split('@')[0]))) return true;
+          // Match by exact email, prefix, ID number, or exact name
+          if (empMail && empMail === cleanEmail) return true;
           if (empId && (empId === cleanEmail || empId === cleanEmail.replace('emp-', ''))) return true;
-          if (empName && (empName === cleanEmail || cleanEmail.includes(empName) || empName.includes(cleanEmail))) return true;
+          if (empName && empName === cleanEmail) return true;
 
           return false;
         });
+
         if (matchingDoc) {
           empData = { id: matchingDoc.id, ...matchingDoc.data() };
         }
       }
 
-      // If specific role is Admin/Administrator, block mobile access
-      if (empData && (empData.role === 'Admin' || empData.role === 'Administrator')) {
+      // CRITICAL SECURITY CHECK: Account MUST exist in the employees collection created by admin!
+      if (!empData) {
         Alert.alert(
-          'Access Denied',
-          'Mobile App access is restricted to employee accounts. Administrator accounts must log in via the Admin Web Portal.'
+          'Account Not Found',
+          'No employee profile was found for this account. Only employee accounts created by the administrator in the Admin Dashboard can log in.'
         );
         setLoading(false);
         return;
       }
 
-      // 3. Authenticate with individual employee credentials or maintain gateway session
-      const targetEmail = empData?.email || cleanEmail;
-      const targetName = empData?.name || cleanEmail.split('@')[0];
+      // Block Inactive Accounts
+      if (empData.status && empData.status.toLowerCase() === 'inactive') {
+        Alert.alert(
+          'Account Inactive',
+          'Your employee profile has been deactivated by the administrator. Please contact your supervisor.'
+        );
+        setLoading(false);
+        return;
+      }
 
-      try {
-        const userCredential = await signInWithEmailAndPassword(auth, targetEmail, password.trim());
-        await clearStaleCache();
-        const sessionPayload = {
-          ...empData,
-          email: userCredential.user.email || targetEmail,
-          name: targetName,
-          uid: userCredential.user.uid || empData?.id
-        };
-        await saveUserSession(sessionPayload);
-        if (onLogin) {
-          onLogin(sessionPayload.email, sessionPayload.name);
+      // Block Administrator roles
+      const roleStr = (empData.role || '').toLowerCase();
+      if (['admin', 'administrator', 'super admin', 'manager', 'supervisor', 'hr'].includes(roleStr)) {
+        Alert.alert(
+          'Access Denied',
+          'Administrator accounts must log in via the Admin Web Portal. Mobile App is reserved for field employees.'
+        );
+        setLoading(false);
+        return;
+      }
+
+      // 3. Strict Password Verification
+      let passwordMatches = false;
+
+      // Check 1: Does it match the assigned password on the employee's Firestore record?
+      if (empData.password && typeof empData.password === 'string') {
+        if (cleanPassword === empData.password.trim()) {
+          passwordMatches = true;
         }
-      } catch (authError) {
-        // Fallback for employee accounts created in admin dashboard:
-        // Ensure background session is active for Firestore rules and proceed with verified employee profile
-        await ensureAuthenticatedSession();
-        await clearStaleCache();
-        const sessionPayload = {
-          ...empData,
-          email: targetEmail,
-          name: targetName,
-          uid: empData?.id || 'emp_' + Date.now()
-        };
-        await saveUserSession(sessionPayload);
-        if (onLogin) {
-          onLogin(targetEmail, targetName);
+      }
+
+      // Check 2: Try Firebase Auth signInWithEmailAndPassword with employee credentials
+      if (!passwordMatches && empData.email) {
+        try {
+          const cred = await signInWithEmailAndPassword(auth, empData.email, cleanPassword);
+          if (cred && cred.user) {
+            passwordMatches = true;
+          }
+        } catch (_) {
+          // Firebase Auth credentials didn't match
         }
+      }
+
+      // Check 3: If no password was explicitly saved on Firestore doc, verify default 'password123'
+      if (!passwordMatches && !empData.password && cleanPassword === 'password123') {
+        passwordMatches = true;
+      }
+
+      // If password does not match any valid credential, REJECT!
+      if (!passwordMatches) {
+        Alert.alert(
+          'Invalid Password',
+          'The password you entered is incorrect. Please check your credentials or contact your administrator.'
+        );
+        setLoading(false);
+        return;
+      }
+
+      // 4. Authenticated successfully
+      await clearStaleCache();
+      const targetEmail = empData.email || cleanEmail;
+      const targetName = empData.name || cleanEmail.split('@')[0];
+      const sessionPayload = {
+        ...empData,
+        email: targetEmail,
+        name: targetName,
+        uid: empData.id || ('emp_' + Date.now())
+      };
+
+      await saveUserSession(sessionPayload);
+      if (onLogin) {
+        onLogin(sessionPayload.email, sessionPayload.name);
       }
     } catch (error) {
       console.warn('Authentication check warning:', error);
-      await ensureAuthenticatedSession();
-      if (onLogin) {
-        await clearStaleCache();
-        onLogin(cleanEmail, cleanEmail.split('@')[0]);
-      }
+      Alert.alert(
+        'Login Error',
+        error?.message || 'Could not verify employee credentials. Please check your network connection.'
+      );
     } finally {
       setLoading(false);
     }
