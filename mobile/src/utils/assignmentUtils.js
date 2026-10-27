@@ -235,3 +235,47 @@ export function deduplicateAssignments(assignments) {
   }
   return Array.from(map.values());
 }
+
+/**
+ * Checks if an employee is a Mobile Field Employee who does not have an assigned site.
+ * Mobile Field Employees cannot check in or check out if they do not have at least one assigned site.
+ *
+ * @param {object} emp Employee profile object
+ * @param {object} [asg] Active assignment object (optional)
+ * @param {object} [site] Active site object (optional)
+ * @returns {boolean} true if employee is Mobile Field Employee and has NO assigned sites
+ */
+export function isMobileFieldWithoutSite(emp, asg, site) {
+  if (!emp) return false;
+  
+  const wt = (emp.workType || emp.employeeType || emp.role || '').toString().trim().toLowerCase();
+  const isMobile = wt === 'mobile field employee' || wt.includes('mobile');
+  if (!isMobile) return false;
+
+  // 1. Check assignedSites array
+  if (Array.isArray(emp.assignedSites) && emp.assignedSites.length > 0) {
+    const valid = emp.assignedSites.filter(s => s && typeof s === 'string' && s.trim() && s.trim().toLowerCase() !== 'unassigned' && s.trim().toLowerCase() !== 'none');
+    if (valid.length > 0) return false;
+  }
+
+  // 2. Check assignedDestinations array
+  if (Array.isArray(emp.assignedDestinations) && emp.assignedDestinations.length > 0) {
+    const valid = emp.assignedDestinations.filter(s => s && typeof s === 'string' && s.trim() && s.trim().toLowerCase() !== 'unassigned' && s.trim().toLowerCase() !== 'none');
+    if (valid.length > 0) return false;
+  }
+
+  // 3. Check assignedSite string
+  const rawSite = (emp.assignedSite || emp.site || emp.assignedSiteName || '').toString().trim();
+  if (rawSite && rawSite.toLowerCase() !== 'unassigned' && rawSite.toLowerCase() !== 'none') {
+    return false;
+  }
+
+  // 4. Check active assignment
+  const asgSite = (asg?.site || asg?.siteName || site?.name || '').toString().trim();
+  if (asgSite && asgSite.toLowerCase() !== 'unassigned' && asgSite.toLowerCase() !== 'none') {
+    return false;
+  }
+
+  return true;
+}
+

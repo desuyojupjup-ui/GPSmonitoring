@@ -37,7 +37,7 @@ import SecurityWarningModal from '../components/SecurityWarningModal';
 import { runPreAttendanceChecks } from '../services/securityService';
 import { getDeviceId } from '../services/deviceInfo';
 import { getPendingSyncCount, syncOfflineRecords, clearOfflineQueue } from '../services/offlineSyncService';
-import { isAssignmentDatePassed, resolveShift, isAssignmentForEmployee, deduplicateAssignments } from '../utils/assignmentUtils';
+import { isAssignmentDatePassed, resolveShift, isAssignmentForEmployee, deduplicateAssignments, isMobileFieldWithoutSite } from '../utils/assignmentUtils';
 import {
   startSession as schedulerStart,
   stopSession as schedulerStop,
@@ -521,6 +521,16 @@ export default function HomeScreen({ navigation, route, user: propUser }) {
       return;
     }
 
+    // Mobile field employees cannot check in without assigned worksites
+    if (isMobileFieldWithoutSite(employee, assignment, site)) {
+      Alert.alert(
+        'Check-In Blocked',
+        'You are registered as a Mobile Field Employee, but have no assigned worksite or patrol route. You cannot check in until an administrator assigns you at least one worksite.',
+        [{ text: 'OK' }]
+      );
+      return;
+    }
+
     setChecking(true);
     try {
       const { status } = await Location.requestForegroundPermissionsAsync();
@@ -637,6 +647,16 @@ export default function HomeScreen({ navigation, route, user: propUser }) {
   };
 
   const handleCheckOut = async () => {
+    // Mobile field employees cannot check out without assigned worksites
+    if (isMobileFieldWithoutSite(employee, assignment, site)) {
+      Alert.alert(
+        'Check-Out Blocked',
+        'You are registered as a Mobile Field Employee with no assigned worksite. Check-out cannot be performed.',
+        [{ text: 'OK' }]
+      );
+      return;
+    }
+
     if (!attendance || !attendance.id) {
       Alert.alert('Error', 'No active check-in record found for today.');
       return;
@@ -890,11 +910,37 @@ export default function HomeScreen({ navigation, route, user: propUser }) {
             <Ionicons name="chevron-forward" size={16} color="#9CA3AF" />
           </TouchableOpacity>
 
+          {/* Warning Banner if Mobile Field Employee has no assigned site */}
+          {isMobileFieldWithoutSite(employee, assignment, site) && (
+            <View style={{
+              flexDirection: 'row',
+              alignItems: 'center',
+              backgroundColor: '#FEF2F2',
+              borderWidth: 1,
+              borderColor: '#FCA5A5',
+              borderRadius: 12,
+              padding: 12,
+              marginBottom: 12,
+              gap: 8
+            }}>
+              <Ionicons name="alert-circle" size={20} color="#DC2626" />
+              <View style={{ flex: 1 }}>
+                <Text style={{ fontSize: 13, fontWeight: '700', color: '#991B1B' }}>Check-In & Check-Out Locked</Text>
+                <Text style={{ fontSize: 11, color: '#B91C1C', marginTop: 2 }}>
+                  Mobile Field Employees must have at least one assigned worksite before checking in or out. Contact your administrator.
+                </Text>
+              </View>
+            </View>
+          )}
+
           {/* Attendance Action Buttons */}
           <View style={styles.actionRow}>
             {!isCheckedIn ? (
               <TouchableOpacity
-                style={[styles.checkInBtn, checking && { opacity: 0.7 }]}
+                style={[
+                  styles.checkInBtn, 
+                  (checking || isMobileFieldWithoutSite(employee, assignment, site)) && { opacity: 0.6, backgroundColor: isMobileFieldWithoutSite(employee, assignment, site) ? '#94A3B8' : styles.checkInBtn.backgroundColor }
+                ]}
                 onPress={handleCheckIn}
                 disabled={checking}
               >
@@ -907,7 +953,10 @@ export default function HomeScreen({ navigation, route, user: propUser }) {
               </TouchableOpacity>
             ) : (
               <TouchableOpacity
-                style={[styles.checkOutBtn, (isCheckedOut || checking) && { opacity: 0.7 }]}
+                style={[
+                  styles.checkOutBtn, 
+                  (isCheckedOut || checking || isMobileFieldWithoutSite(employee, assignment, site)) && { opacity: 0.6, backgroundColor: isMobileFieldWithoutSite(employee, assignment, site) ? '#94A3B8' : styles.checkOutBtn.backgroundColor }
+                ]}
                 onPress={handleCheckOut}
                 disabled={isCheckedOut || checking}
               >
