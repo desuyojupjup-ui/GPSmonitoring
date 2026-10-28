@@ -89,8 +89,13 @@ export function evaluateGeofence(lat, lng, site) {
     };
   }
   // Circular fallback (existing site shape).
-  const radius = parseRadius(site?.radius);
-  const distanceToCenter = getDistanceMeters(lat, lng, site.lat, site.lng);
+  const radius = parseRadius(site?.radius ?? site?.geofenceRadius);
+  const sLat = site?.lat ?? site?.latitude;
+  const sLng = site?.lng ?? site?.longitude;
+  if (sLat == null || sLng == null || isNaN(Number(sLat)) || isNaN(Number(sLng))) {
+    return { inside: true, distanceToBoundary: 0, distanceToCenter: 0 };
+  }
+  const distanceToCenter = getDistanceMeters(lat, lng, Number(sLat), Number(sLng));
   return {
     inside: distanceToCenter <= radius,
     distanceToBoundary: Math.abs(distanceToCenter - radius),

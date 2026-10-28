@@ -12,6 +12,7 @@ import { AppState, NativeModules } from 'react-native';
 import AsyncStorage from '@react-native-async-storage/async-storage';
 import * as Location from 'expo-location';
 import { db, doc, updateDoc, collection, getDocs, serverTimestamp, ensureAuthenticatedSession } from '../firebase';
+import locationLogService from './locationLogService';
 
 let expoConstantsObj = null;
 try {
@@ -239,6 +240,13 @@ class PresenceService {
       payload.latitude = loc.lat;
       payload.longitude = loc.lng;
       payload.locationAccuracy = loc.accuracy || 10;
+
+      // Continuous shift geofence perimeter check
+      try {
+        if (locationLogService.isPeriodicLoggingActive()) {
+          locationLogService.onLocationUpdate(loc);
+        }
+      } catch (_) {}
     }
 
     // 1. Update Firestore employee doc if canonical ID is known
