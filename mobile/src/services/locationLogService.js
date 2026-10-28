@@ -53,6 +53,7 @@ class LocationLogService {
     this.lastOutOfFenceState = false;
     this.cachedSiteGeofence = null;
     this.lastSavedLogTime = 0;
+    this.lastShiftOvertimeAlertTime = 0;
   }
 
   /**
@@ -283,6 +284,75 @@ class LocationLogService {
 
       return { breached: false, distance: 0, site: siteGeofence };
     }
+  }
+
+  /**
+   * Continuous shift monitoring: detects if the employee is still clocked in or
+   * performing activities beyond their scheduled shift hours.
+   */
+  async checkShiftOvertimeBreach() {
+    if (!this.isRecording || !this.activeSession) return null;
+    const { employee, assignment, attendanceId } = this.activeSession;
+
+    // Resolve shift time window
+    let shiftStr = assignment?.shift || assignment?.shiftTime || assignment?.shiftEnd || '';
+    if (!shiftStr) {
+      shiftStr = '08:00 AM - 05:00 PM';
+    }
+
+    const parts = shiftStr.split(/\s*[-~]|(?:\s+to\s+)\s*/i).filter(Boolean);
+    const endStr = parts.length >= 2 ? parts[1].trim() : (parts.length === 1 ? parts[0].trim() : '05:00 PM');
+
+    const now = new Date();
+    const endMatch = endStr.match(/(\d{1,2}):(\d{2})(?:\s*([AP]M))?/i);
+    if (!endMatch) return null;
+
+    let endHour = parseInt(endMatch[1], 10);
+    const endMin = parseInt(endMatch[2], 10);
+    const ampm = endMatch[3] ? endMatch[3].toUpperCase() : null;
+    if (ampm === 'PM' && endHour < 12) endHour += 12;
+    if (ampm === 'AM' && endHour === 12) endHour = 0;
+
+    const shiftEndDate = new Date(now.getFullYear(), now.getMonth(), now.getDate(), endHour, endMin, 0);
+
+    // If shift end time has elapsed (e.g., current time is past shift end time)
+    if (now.getTime() > shiftEndDate.getTime()) {
+      const elapsedMinutes = Math.max(1, Math.round((now.getTime() - shiftEndDate.getTime()) / 60000));
+      const shouldTrigger = (!this.lastShiftOvertimeAlertTime || (now.getTime() - this.lastShiftOvertimeAlertTime) > 30 * 60 * 1000);
+
+      if (shouldTrigger && elapsedMinutes >= 1) {
+        this.lastShiftOvertimeAlertTime = now.getTime();
+        const detailMsg = `Shift ended at ${endStr}; still active ${elapsedMinutes}m past shift end`;
+
+        try {
+          await writeSecurityEvent({
+            eventType: 'OVERTIME_SHIFT_EXCEEDED',
+            employee: {
+              id: employee?.id,
+              name: employee?.name,
+              email: employee?.email,
+              workType: employee?.workType || 'Employee',
+            },
+            assignment: {
+              id: assignment?.id,
+              name: assignment?.name || 'Scheduled Shift',
+              siteName: assignment?.siteName || assignment?.site || 'Assigned Site',
+            },
+            coords: {},
+            relatedAttendanceId: attendanceId || null,
+            extra: { details: detailMsg },
+          });
+
+          console.log(`[locationLogService] OVERTIME_SHIFT_EXCEEDED alert triggered: ${detailMsg}`);
+        } catch (err) {
+          console.warn('[locationLogService] Error triggering shift overtime alert:', err?.message);
+        }
+      }
+
+      return { exceeded: true, elapsedMinutes, endStr };
+    }
+
+    return { exceeded: false };
   }
 
   /**
@@ -549,7 +619,7 @@ class LocationLogService {
     this.intervalId = setInterval(async () => {
       if (!this.isRecording || !this.activeSession) return;
 
-      console.log('[locationLogService] 60s shift monitor tick, verifying geofence boundary...');
+      console.log('[locationLogService] 60s shift monitor tick, verifying geofence boundary & shift overtime...');
       await this.captureAndSaveCurrentLocation({
         employee: this.activeSession.employee,
         site: this.activeSession.site,
@@ -557,6 +627,9 @@ class LocationLogService {
         attendanceId: this.activeSession.attendanceId,
         trigger: 'periodic_shift_check',
       });
+
+      // Check for unscheduled overtime / beyond shift hours
+      await this.checkShiftOvertimeBreach();
     }, PERIODIC_TIMER_MS);
   }
 

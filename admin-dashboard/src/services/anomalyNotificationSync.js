@@ -296,6 +296,66 @@ export function startAnomalyNotificationSync(onNewAlert) {
               }).catch(() => {});
             }
           }
+
+          // ── Check Beyond Scheduled Shift Hours ──
+          if (isOnDuty) {
+            const shiftStr = emp.shift || emp.shiftTime || emp.scheduledShift || '';
+            if (shiftStr) {
+              const parts = shiftStr.split(/\s*[-~]|(?:\s+to\s+)\s*/i).filter(Boolean);
+              const endStr = parts.length >= 2 ? parts[1].trim() : (parts.length === 1 ? parts[0].trim() : '');
+              const endMatch = endStr.match(/(\d{1,2}):(\d{2})(?:\s*([AP]M))?/i);
+              if (endMatch) {
+                let endH = parseInt(endMatch[1], 10);
+                const endM = parseInt(endMatch[2], 10);
+                const ampm = endMatch[3] ? endMatch[3].toUpperCase() : null;
+                if (ampm === 'PM' && endH < 12) endH += 12;
+                if (ampm === 'AM' && endH === 12) endH = 0;
+
+                const now = new Date();
+                const shiftEndDt = new Date(now.getFullYear(), now.getMonth(), now.getDate(), endH, endM, 0);
+
+                if (now.getTime() > shiftEndDt.getTime()) {
+                  const elapsedMin = Math.round((now.getTime() - shiftEndDt.getTime()) / 60000);
+                  const lastOvertimeAlert = lastAdminGeofenceAlertTime.get(`overtime_${emp.id}`) || 0;
+
+                  if (elapsedMin >= 5 && (now.getTime() - lastOvertimeAlert > 30 * 60 * 1000)) {
+                    lastAdminGeofenceAlertTime.set(`overtime_${emp.id}`, now.getTime());
+
+                    const hasRecentOt = (anomalies || []).some(
+                      (a) =>
+                        (a.employeeId === emp.id || a.employeeName === emp.name) &&
+                        (a.eventType === 'OVERTIME_SHIFT_EXCEEDED' || (a.type || '').includes('Overtime')) &&
+                        now.getTime() - toMillis(a.timestamp || a.createdAt) < 30 * 60 * 1000
+                    );
+
+                    if (!hasRecentOt) {
+                      const otDesc = `Employee is still clocked in beyond scheduled shift hours (Shift ended at ${endStr}; +${elapsedMin}m overtime).`;
+                      const otPayload = {
+                        employeeId: emp.id,
+                        employeeName: emp.name || 'Employee',
+                        employeeEmail: emp.email || null,
+                        employeeType: emp.workType || 'Employee',
+                        type: 'Unscheduled Overtime / Shift Exceeded',
+                        eventType: 'OVERTIME_SHIFT_EXCEEDED',
+                        severity: 'Medium',
+                        confidence: '96%',
+                        status: 'Active',
+                        description: otDesc,
+                        location: site?.name || emp.assignedSite || 'Scheduled Post',
+                        siteId: site?.id || null,
+                        siteName: site?.name || emp.assignedSite || 'Scheduled Post',
+                        source: 'admin_live_monitor',
+                        createdAt: serverTimestamp(),
+                        timestamp: serverTimestamp(),
+                      };
+
+                      addDoc(collection(db, 'ai_analysis'), otPayload).catch(() => {});
+                    }
+                  }
+                }
+              }
+            }
+          }
         });
       },
       () => {}

@@ -33,6 +33,7 @@ const VOICE_COMMANDS = [
   { id: 'vc4', label: 'Show my attendance count', icon: 'stats-chart-outline', query: 'How many attendances?' },
   { id: 'vc5', label: 'What is my current status?', icon: 'person-outline', query: 'What is my status?' },
   { id: 'vc6', label: 'Report delay or roadblock', icon: 'warning-outline', query: 'How to report delay?' },
+  { id: 'vc7', label: 'Do I have any anomalies?', icon: 'shield-alert-outline', query: 'Do I have any anomalies?' },
 ];
 
 const QUICK_ACTIONS = [
@@ -41,6 +42,7 @@ const QUICK_ACTIONS = [
   { id: 'qa3', label: 'Time In', icon: 'time-outline', query: 'What time did I check in?' },
   { id: 'qa4', label: 'Attendance', icon: 'stats-chart-outline', query: 'How many attendances?' },
   { id: 'qa5', label: 'My Status', icon: 'person-outline', query: 'What is my status?' },
+  { id: 'qa6', label: 'Anomalies', icon: 'shield-alert-outline', query: 'Do I have any anomalies?' },
 ];
 
 export default function FloatingChatButton({ user: propUser }) {
@@ -381,7 +383,58 @@ export default function FloatingChatButton({ user: propUser }) {
         return "To report a delay or roadblock, tap the 'Report Incident / Delay' button on your Home screen to notify your supervisor.";
       }
 
-      return "I can assist you with Voice Commands:\n\n• What is my assignment?\n• Where is my site location?\n• What time did I check in?\n• Show my attendance count\n• What is my status?\n\nTap the microphone icon anytime to speak a command.";
+      // Keyword: Anomaly / Geofence / Shift Overtime / Alert / Violation
+      if (
+        text.includes('anomaly') ||
+        text.includes('alert') ||
+        text.includes('violation') ||
+        text.includes('geofence') ||
+        text.includes('outside') ||
+        text.includes('overtime') ||
+        text.includes('shift') ||
+        text.includes('flagged')
+      ) {
+        let userAnomalies = [];
+        try {
+          const snap = await getDocs(collection(db, 'ai_analysis'));
+          userAnomalies = snap.docs
+            .map(d => ({ id: d.id, ...d.data() }))
+            .filter(a => {
+              const aId = (a.employeeId || '').toLowerCase();
+              const aName = (a.employeeName || '').toLowerCase();
+              const aEmail = (a.employeeEmail || '').toLowerCase();
+              const myId = (employee.id || '').toLowerCase();
+              const myName = (employee.name || '').toLowerCase();
+              const myEmail = (email || '').toLowerCase();
+              return (
+                (myId && aId === myId) ||
+                (myName && (aName === myName || aName.includes(myName))) ||
+                (myEmail && aEmail === myEmail)
+              );
+            });
+        } catch (_) {}
+
+        const activeUserAnoms = userAnomalies.filter(a => a.status !== 'Resolved' && a.status !== 'Dismissed');
+
+        if (activeUserAnoms.length === 0) {
+          return "✅ All clear! You have no active anomaly alerts. Your GPS telemetry, geofence perimeter standing, and shift hours are all in normal status.";
+        }
+
+        const latest = activeUserAnoms[0];
+        let explanation = `⚠️ Active Anomaly Alert Detected:\n\nType: ${latest.type || 'Security Alert'}\nDetails: ${latest.description || 'Telemetry variance flagged'}\nSeverity: ${latest.severity || 'Medium'}\n\n`;
+
+        if (latest.eventType === 'UNAUTHORIZED_LOCATION' || (latest.type || '').includes('Geofence')) {
+          explanation += "💡 AI Explanation:\nYou were detected outside your assigned worksite geofence perimeter.\n\n🎯 Recommended Actions:\n1. If this was an authorized errand, task, or GPS drift, tap 'Anomaly Alerts' on your Home screen to submit an explanation.\n2. Return within the site perimeter to clear the boundary flag.";
+        } else if (latest.eventType === 'OVERTIME_SHIFT_EXCEEDED' || (latest.type || '').includes('Overtime')) {
+          explanation += "💡 AI Explanation:\nYour scheduled shift end time has elapsed, but you are still clocked in.\n\n🎯 Recommended Actions:\n1. If your shift is completed, please proceed to the Attendance screen and tap 'Check Out Now'.\n2. If authorized for overtime, inform your supervisor to approve the extension.";
+        } else {
+          explanation += "💡 Recommended Actions:\nOpen the Anomaly Alerts screen on your Home dashboard to review the alert and submit a dispute explanation with photo proof.";
+        }
+
+        return explanation;
+      }
+
+      return "I can assist you with Voice Commands:\n\n• What is my assignment?\n• Where is my site location?\n• What time did I check in?\n• Show my attendance count\n• What is my status?\n• Do I have any anomalies?\n\nTap the microphone icon anytime to speak a command.";
     } catch (e) {
       return "An error occurred while fetching your data. Please try again.";
     }

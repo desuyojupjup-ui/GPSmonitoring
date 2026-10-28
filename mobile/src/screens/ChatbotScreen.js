@@ -22,6 +22,7 @@ const VOICE_COMMANDS = [
   { id: 'vc3', label: 'What time did I check in?', query: 'What time did I check in?' },
   { id: 'vc4', label: 'Show my attendance', query: 'How many attendances?' },
   { id: 'vc5', label: 'What is my status?', query: 'What is my status?' },
+  { id: 'vc6', label: 'Check my anomaly alerts', query: 'Do I have any anomalies?' },
 ];
 
 export default function ChatbotScreen({ route, user: propUser }) {
@@ -226,7 +227,58 @@ export default function ChatbotScreen({ route, user: propUser }) {
         return `Employee Status: ${employee.status || 'On Duty'}\nDepartment: ${employee.org || 'Technical'}\nRole: ${employee.type || 'Field Specialist'}`;
       }
 
-      return "I can assist you with voice commands:\n\n• What is my assignment?\n• Where is my site location?\n• What time did I check in?\n• Show my attendance count\n• What is my status?\n\nTap the microphone icon anytime to speak a command.";
+      // Keyword: Anomaly / Geofence / Shift Overtime / Alert / Violation
+      if (
+        text.includes('anomaly') ||
+        text.includes('alert') ||
+        text.includes('violation') ||
+        text.includes('geofence') ||
+        text.includes('outside') ||
+        text.includes('overtime') ||
+        text.includes('shift') ||
+        text.includes('flagged')
+      ) {
+        let userAnomalies = [];
+        try {
+          const snap = await getDocs(collection(db, 'ai_analysis'));
+          userAnomalies = snap.docs
+            .map(d => ({ id: d.id, ...d.data() }))
+            .filter(a => {
+              const aId = (a.employeeId || '').toLowerCase();
+              const aName = (a.employeeName || '').toLowerCase();
+              const aEmail = (a.employeeEmail || '').toLowerCase();
+              const myId = (employee.id || '').toLowerCase();
+              const myName = (employee.name || '').toLowerCase();
+              const myEmail = (email || '').toLowerCase();
+              return (
+                (myId && aId === myId) ||
+                (myName && (aName === myName || aName.includes(myName))) ||
+                (myEmail && aEmail === myEmail)
+              );
+            });
+        } catch (_) {}
+
+        const activeUserAnoms = userAnomalies.filter(a => a.status !== 'Resolved' && a.status !== 'Dismissed');
+
+        if (activeUserAnoms.length === 0) {
+          return "All clear! You have no active anomaly alerts. Your GPS telemetry, geofence status, and shift schedule are in good standing.";
+        }
+
+        const latest = activeUserAnoms[0];
+        let explanation = `Active Anomaly Alert:\n\nType: ${latest.type || 'Security Alert'}\nDetails: ${latest.description || 'Variance flagged'}\n\n`;
+
+        if (latest.eventType === 'UNAUTHORIZED_LOCATION' || (latest.type || '').includes('Geofence')) {
+          explanation += "Explanation: You were detected outside your assigned site geofence perimeter.\n\nRecommended Action: Tap Anomaly Alerts on your Home screen to submit an explanation or return within the site boundaries.";
+        } else if (latest.eventType === 'OVERTIME_SHIFT_EXCEEDED' || (latest.type || '').includes('Overtime')) {
+          explanation += "Explanation: Your scheduled shift has ended, but you are still clocked in.\n\nRecommended Action: Please proceed to the Attendance screen to Check Out, or notify your supervisor if authorized for overtime.";
+        } else {
+          explanation += "Recommended Action: Open Anomaly Alerts on your Home dashboard to review and submit an explanation.";
+        }
+
+        return explanation;
+      }
+
+      return "I can assist you with voice commands:\n\n• What is my assignment?\n• Where is my site location?\n• What time did I check in?\n• Show my attendance count\n• What is my status?\n• Check my anomaly alerts\n\nTap the microphone icon anytime to speak a command.";
     } catch (e) {
       return "An error occurred while fetching your data.";
     }
