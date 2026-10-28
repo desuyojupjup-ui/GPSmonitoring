@@ -240,6 +240,13 @@ export default function TopNav({ user, onLogout, onMenuToggle }) {
     setNotifications(updated);
     safeLocalStorageSet('subai_store_notifications', JSON.stringify(updated));
     try {
+      await fetch('/api/sync', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ path: 'notifications', items: updated, fullReplace: true })
+      });
+    } catch (e) {}
+    try {
       await Promise.all(notifications.filter(n => n.status === 'Unread' || n.read === false).map(n => 
         updateDoc(doc(db, 'notifications', String(n.id)), { status: 'Read', read: true }).catch(() => {})
       ));
@@ -253,6 +260,13 @@ export default function TopNav({ user, onLogout, onMenuToggle }) {
       const updated = notifications.map(n => String(n.id) === String(notif.id) ? { ...n, status: 'Read', read: true } : n);
       setNotifications(updated);
       safeLocalStorageSet('subai_store_notifications', JSON.stringify(updated));
+      try {
+        await fetch('/api/sync', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ path: 'notifications', items: updated, fullReplace: true })
+        });
+      } catch (e) {}
       try {
         await updateDoc(doc(db, 'notifications', String(notif.id)), { status: 'Read', read: true }).catch(() => {});
       } catch (e) {}

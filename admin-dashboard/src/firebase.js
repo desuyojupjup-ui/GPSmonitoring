@@ -1322,6 +1322,29 @@ const fetchHttpSyncAdmin = async () => {
             current.forEach(i => { if (i && i.id && !isMockItem('attendance', i)) attMap.set(i.id, i); });
             remoteItems.forEach(i => { if (i && i.id && !isMockItem('attendance', i)) attMap.set(i.id, { ...attMap.get(i.id), ...i }); });
             merged = Array.from(attMap.values());
+          } else if (colKey === 'notifications') {
+            const notifMap = new Map();
+            remoteItems.forEach(i => {
+              if (i && (i.id || i.reportId)) notifMap.set(i.id || i.reportId, i);
+            });
+            current.forEach(i => {
+              const id = i && (i.id || i.reportId);
+              if (id) {
+                const existing = notifMap.get(id);
+                notifMap.set(id, {
+                  ...(existing || {}),
+                  ...i,
+                  read: i.read === true || (existing && existing.read === true),
+                  status: (i.status === 'Read' || (existing && existing.status === 'Read')) ? 'Read' : (i.status || existing?.status || 'Unread')
+                });
+              }
+            });
+            const rawStored = localStorage.getItem('subai_store_notifications');
+            if (rawStored === '[]') {
+              merged = [];
+            } else {
+              merged = Array.from(notifMap.values());
+            }
           } else {
             const mergedMap = new Map();
             current.forEach(i => { if (i && (i.id || i.reportId) && !isMockItem(colKey, i)) mergedMap.set(i.id || i.reportId, i); });
@@ -1438,7 +1461,13 @@ export const addDoc = async (_col, _data) => {
 };
 
 export const updateDoc = async (_docRef, _data) => {
-  if (isRealFirebaseConfigured) return await realUpdateDoc(_docRef, _data);
+  if (isRealFirebaseConfigured) {
+    try {
+      await realUpdateDoc(_docRef, _data);
+    } catch (err) {
+      // Continue to local storage fallback
+    }
+  }
   const path = _docRef?.path || _docRef?.colPath || 'delay_reports';
   const id = _docRef?.id;
   const collectionsToCheck = Array.from(new Set([path, 'Assignments', 'assignments', 'employees', 'Sites', 'delay_reports', 'incident_reports', 'tracking_logs', 'ActivityLogs', 'facial_verifications', 'notifications', 'security_events', 'fraud_reports']));
@@ -1467,7 +1496,13 @@ export const updateDoc = async (_docRef, _data) => {
 };
 
 export const setDoc = async (_docRef, _data, _options = {}) => {
-  if (isRealFirebaseConfigured) return await realSetDoc(_docRef, _data, _options);
+  if (isRealFirebaseConfigured) {
+    try {
+      await realSetDoc(_docRef, _data, _options);
+    } catch (err) {
+      // Continue to local storage fallback
+    }
+  }
   const path = _docRef?.path || _docRef?.colPath || 'default';
   const id = _docRef?.id || _data.id || ('doc_' + Date.now());
   const items = getLocalCollection(path);
@@ -1487,14 +1522,20 @@ export const setDoc = async (_docRef, _data, _options = {}) => {
 };
 
 export const deleteDoc = async (_docRef) => {
-  if (isRealFirebaseConfigured) return await realDeleteDoc(_docRef);
+  if (isRealFirebaseConfigured) {
+    try {
+      await realDeleteDoc(_docRef);
+    } catch (err) {
+      // Continue to local storage fallback
+    }
+  }
   const path = _docRef?.path || _docRef?.colPath || 'delay_reports';
   const id = _docRef?.id;
   const collectionsToCheck = Array.from(new Set([
     path,
     'Assignments', 'assignments', 'employees', 'Sites',
     'delay_reports', 'incident_reports', 'tracking_logs', 'ActivityLogs',
-    'facial_verifications', 'security_events', 'fraud_reports'
+    'facial_verifications', 'security_events', 'fraud_reports', 'notifications'
   ]));
 
   collectionsToCheck.forEach(colKey => {

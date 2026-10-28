@@ -167,6 +167,15 @@ function syncApiPlugin() {
                 return;
               }
 
+              // Explicit Clear All Notifications Action
+              if (action === 'clear_notifications') {
+                sharedStore.notifications = [];
+                res.statusCode = 200;
+                res.setHeader('Content-Type', 'application/json');
+                res.end(JSON.stringify({ success: true, message: 'Notifications purged', store: sharedStore }));
+                return;
+              }
+
               // Explicit Delete Action
               if (action === 'delete' || payload.deleteIds) {
                 const targetIds = new Set([...(payload.ids || []), ...(payload.deleteIds || []), payload.id].filter(Boolean));

@@ -68,9 +68,9 @@ export default function NotificationsPage() {
   const loadStoredNotifications = () => {
     try {
       const raw = localStorage.getItem('subai_store_notifications');
-      if (raw) {
+      if (raw !== null) {
         const parsed = JSON.parse(raw);
-        if (Array.isArray(parsed) && parsed.length > 0) return parsed;
+        if (Array.isArray(parsed)) return parsed;
       }
     } catch (e) {}
     return [];
@@ -88,9 +88,13 @@ export default function NotificationsPage() {
           setNotifs(live);
           localStorage.setItem('subai_store_notifications', JSON.stringify(live));
         } else {
-          const initial = sortNotifs(loadStoredNotifications());
-          setNotifs(initial);
-          localStorage.setItem('subai_store_notifications', JSON.stringify(initial));
+          const raw = localStorage.getItem('subai_store_notifications');
+          if (raw === '[]') {
+            setNotifs([]);
+          } else {
+            const initial = sortNotifs(loadStoredNotifications());
+            setNotifs(initial);
+          }
         }
         setLoading(false);
       }, () => {
@@ -164,6 +168,14 @@ export default function NotificationsPage() {
     localStorage.setItem('subai_store_notifications', JSON.stringify(updated));
 
     try {
+      await fetch('/api/sync', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ path: 'notifications', items: updated, fullReplace: true })
+      });
+    } catch (e) {}
+
+    try {
       await updateDoc(doc(db, 'notifications', String(id)), { status: 'Read', read: true });
     } catch (e) {}
 
@@ -177,6 +189,14 @@ export default function NotificationsPage() {
     localStorage.setItem('subai_store_notifications', JSON.stringify(updated));
 
     try {
+      await fetch('/api/sync', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ path: 'notifications', items: updated, fullReplace: true })
+      });
+    } catch (e) {}
+
+    try {
       await updateDoc(doc(db, 'notifications', String(id)), { status: 'Unread', read: false });
     } catch (e) {}
 
@@ -188,6 +208,14 @@ export default function NotificationsPage() {
     const updated = notifs.map(n => ({ ...n, status: 'Read', read: true }));
     setNotifs(updated);
     localStorage.setItem('subai_store_notifications', JSON.stringify(updated));
+
+    try {
+      await fetch('/api/sync', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ path: 'notifications', items: updated, fullReplace: true })
+      });
+    } catch (e) {}
 
     try {
       await Promise.all(notifs.filter(n => n.status === 'Unread' || n.read === false).map(n =>
@@ -206,6 +234,14 @@ export default function NotificationsPage() {
       const updated = notifs.filter(n => String(n.id) !== String(id));
       setNotifs(updated);
       localStorage.setItem('subai_store_notifications', JSON.stringify(updated));
+
+      try {
+        await fetch('/api/sync', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ path: 'notifications', items: updated, fullReplace: true, action: 'delete', id: String(id) })
+        });
+      } catch (e) {}
 
       try {
         await deleteDoc(doc(db, 'notifications', String(id)));
@@ -245,6 +281,14 @@ export default function NotificationsPage() {
       localStorage.setItem('subai_store_notifications', JSON.stringify(updated));
 
       try {
+        await fetch('/api/sync', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ path: 'notifications', items: updated, fullReplace: true, action: 'delete', ids: selectedIds.map(String) })
+        });
+      } catch (e) {}
+
+      try {
         await Promise.all(selectedIds.map(id => deleteDoc(doc(db, 'notifications', String(id))).catch(() => {})));
       } catch (e) {}
 
@@ -262,6 +306,14 @@ export default function NotificationsPage() {
     localStorage.setItem('subai_store_notifications', JSON.stringify(updated));
 
     try {
+      await fetch('/api/sync', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ path: 'notifications', items: updated, fullReplace: true })
+      });
+    } catch (e) {}
+
+    try {
       await Promise.all(selectedIds.map(id => updateDoc(doc(db, 'notifications', String(id)), { status: 'Read', read: true }).catch(() => {})));
     } catch (e) {}
 
@@ -276,15 +328,22 @@ export default function NotificationsPage() {
       'Warning: This will remove all notifications from the dispatch center. Proceed?'
     );
     if (confirmed) {
+      const toDelete = [...notifs];
       setNotifs([]);
       localStorage.setItem('subai_store_notifications', JSON.stringify([]));
+
       try {
         await fetch('/api/sync', {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ path: 'notifications', items: [], fullReplace: true })
+          body: JSON.stringify({ path: 'notifications', items: [], fullReplace: true, action: 'clear_notifications' })
         });
       } catch (e) {}
+
+      try {
+        await Promise.all(toDelete.map(n => deleteDoc(doc(db, 'notifications', String(n.id))).catch(() => {})));
+      } catch (e) {}
+
       window.dispatchEvent(new CustomEvent('subai_notifications_updated'));
       setSelectedIds([]);
       showToast('Notifications Cleared', 'All notification records have been removed.', 'success');
