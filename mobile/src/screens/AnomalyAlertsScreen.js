@@ -48,6 +48,14 @@ const GEOFENCE_PRESET_REASONS = [
   'Device battery saver / location accuracy degradation',
 ];
 
+const SHIFT_PRESET_REASONS = [
+  'Severe traffic congestion on transit to worksite',
+  'Sudden medical emergency / sickness reported to supervisor',
+  'Emergency client field dispatch before shift start',
+  'Mobile app login / network cellular failure',
+  'Shift schedule change / rescheduling requested with supervisor',
+];
+
 export default function AnomalyAlertsScreen({ navigation, route, user: propUser }) {
   const insets = useSafeAreaInsets();
   const [alerts, setAlerts] = useState([]);
@@ -62,13 +70,37 @@ export default function AnomalyAlertsScreen({ navigation, route, user: propUser 
   const [responsePhoto, setResponsePhoto] = useState(null);
   const [submitting, setSubmitting] = useState(false);
 
-  const currentEmail = getCleanEmployeeEmail(propUser, route?.params?.user, auth.currentUser);
+  const empParam = route?.params?.employee || employeeRecord || propUser || {};
+
+  const cleanAuthEmail = (auth.currentUser?.email || '').toLowerCase();
+  const rawEmpEmail = (empParam?.email || route?.params?.user?.email || propUser?.email || '').toLowerCase();
+  const currentEmail = rawEmpEmail || (cleanAuthEmail && !cleanAuthEmail.includes('admin@') ? cleanAuthEmail : (cleanAuthEmail || ''));
+
   const currentUserName = (
-    auth.currentUser?.displayName ||
-    propUser?.name ||
+    empParam?.name ||
+    empParam?.displayName ||
     route?.params?.user?.name ||
+    propUser?.name ||
+    auth.currentUser?.displayName ||
     ''
   ).trim().toLowerCase();
+
+  const empIds = [
+    empParam?.id,
+    empParam?.idNum,
+    empParam?.empId,
+    empParam?.employeeId,
+    empParam?.uid,
+    route?.params?.user?.id,
+    propUser?.id,
+    auth.currentUser?.uid,
+  ].filter(x => x !== undefined && x !== null && String(x).trim() !== '' && String(x).trim() !== 'emp_fallback')
+   .map(x => String(x).trim().toLowerCase());
+
+  const emailPrefixes = [currentEmail, cleanAuthEmail]
+    .filter(Boolean)
+    .map(e => e.split('@')[0].trim().toLowerCase())
+    .filter(Boolean);
 
   // ── Sync Employee Work Type (Fixed Site vs Mobile Field) ──
   useEffect(() => {
@@ -78,15 +110,16 @@ export default function AnomalyAlertsScreen({ navigation, route, user: propUser 
       snap.forEach((d) => {
         const data = d.data();
         const dEmail = (data.email || '').toLowerCase();
-        if ((d.id && d.id.toLowerCase() === uid) || (dEmail && dEmail === emailLower)) {
+        const dId = (d.id || '').toLowerCase();
+        if (dId === uid || empIds.includes(dId) || (dEmail && (dEmail === emailLower || emailPrefixes.includes(dEmail.split('@')[0])))) {
           setEmployeeRecord({ id: d.id, ...data });
         }
       });
     }, () => {});
     return () => unsub();
-  }, [currentEmail]);
+  }, [currentEmail, empIds.join(',')]);
 
-  const empWorkType = (employeeRecord?.workType || employeeRecord?.employeeType || employeeRecord?.type || '').toString().toLowerCase();
+  const empWorkType = (employeeRecord?.workType || employeeRecord?.employeeType || employeeRecord?.type || empParam?.workType || '').toString().toLowerCase();
   const isFieldEmployee = empWorkType.includes('mobile') || empWorkType.includes('field');
 
   // Helper: detect outside geofence alerts
@@ -117,17 +150,62 @@ export default function AnomalyAlertsScreen({ navigation, route, user: propUser 
 
     const matchesEmployee = (item) => {
       if (!item) return false;
-      const targetEmail = (currentEmail || '').toLowerCase();
-      const targetName = currentUserName;
 
-      const itemEmail = (item.employeeEmail || item.email || item.empEmail || '').toLowerCase();
-      const itemName = (item.employeeName || item.empName || item.user || '').toLowerCase();
-      const itemUid = (item.employeeId || item.employee_id || item.employeeUid || '').toLowerCase();
-      const myUid = (auth.currentUser?.uid || '').toLowerCase();
+      // 1. Match by Employee ID (e.g., "102", UID, empId)
+      const itemIds = [
+        item.employeeId,
+        item.employee_id,
+        item.employeeUid,
+        item.empId,
+        item.userId,
+        item.userUid,
+        item.guardId,
+        item.uid,
+      ].filter(x => x !== undefined && x !== null && String(x).trim() !== '')
+       .map(x => String(x).trim().toLowerCase());
 
-      if (targetEmail && itemEmail && (targetEmail === itemEmail || itemEmail.startsWith(targetEmail.split('@')[0]))) return true;
-      if (myUid && itemUid && myUid === itemUid) return true;
-      if (targetName && itemName && (targetName === itemName || itemName.includes(targetName) || targetName.includes(itemName))) return true;
+      if (empIds.length > 0 && itemIds.some(id => empIds.includes(id))) {
+        return true;
+      }
+
+      // 2. Match by Email or Email prefix
+      const itemEmails = [
+        item.employeeEmail,
+        item.email,
+        item.empEmail,
+        item.userEmail,
+      ].filter(Boolean).map(e => String(e).trim().toLowerCase());
+
+      for (const iEmail of itemEmails) {
+        if (currentEmail && iEmail === currentEmail) return true;
+        const iPrefix = iEmail.split('@')[0].trim();
+        if (iPrefix && emailPrefixes.includes(iPrefix)) return true;
+      }
+
+      // 3. Match by Name (exact, substring, or token overlap)
+      const itemNames = [
+        item.employeeName,
+        item.empName,
+        item.name,
+        item.userName,
+        item.user,
+        item.guard,
+        item.assignedTo,
+      ].filter(Boolean).map(n => String(n).trim().toLowerCase());
+
+      if (currentUserName && currentUserName.length >= 2) {
+        for (const iName of itemNames) {
+          if (iName === currentUserName) return true;
+          if (iName.includes(currentUserName) || currentUserName.includes(iName)) return true;
+
+          const stopWords = new Set(['employee', 'user', 'guard', 'staff', 'admin', 'officer']);
+          const myTokens = currentUserName.split(/\s+/).filter(t => t.length >= 3 && !stopWords.has(t));
+          const itemTokens = iName.split(/\s+/).filter(t => t.length >= 3 && !stopWords.has(t));
+          if (myTokens.length > 0 && itemTokens.length > 0) {
+            if (myTokens.some(mt => itemTokens.includes(mt))) return true;
+          }
+        }
+      }
 
       return false;
     };
@@ -139,16 +217,10 @@ export default function AnomalyAlertsScreen({ navigation, route, user: propUser 
       aiDocs.forEach((d) => {
         if (!matchesEmployee(d)) return;
 
-        // CRITICAL RULE: Outside assigned geofence is ONLY for Fixed Site Employees.
-        // Mobile Field Employees travel across worksites and field locations, so geofence alerts are excluded for them.
-        if (isFieldEmployee && isOutsideGeofenceAlert(d)) {
-          return;
-        }
-
         const id = d.id;
-        const type = d.type || d.eventType || 'Security Anomaly';
+        const type = d.type || d.eventType || d.title || 'Security Anomaly';
         const severity = d.severity === 'Critical' ? 'High' : (d.severity || 'Medium');
-        const status = d.employeeResponse ? (d.status === 'Resolved' ? 'Resolved' : 'Responded') : (d.status || 'Pending Response');
+        const status = d.employeeResponse ? (d.status === 'Resolved' ? 'Resolved' : 'Responded') : (d.status || 'Active');
 
         map.set(id, {
           id,
@@ -172,8 +244,6 @@ export default function AnomalyAlertsScreen({ navigation, route, user: propUser 
       // 2. Process ActivityLogs with anomaly status or security types
       logDocs.forEach((d) => {
         if (!matchesEmployee(d)) return;
-        // Outside assigned geofence is for Fixed Site Employees only
-        if (isFieldEmployee && isOutsideGeofenceAlert(d)) return;
 
         const isAnomaly = d.type === 'Security Anomaly' || d.type === 'Anomaly' || d.status === 'Warning' || d.status === 'Error' || (d.action && (d.action.includes('Anomaly') || d.action.includes('Failed') || d.action.includes('Flagged')));
         if (!isAnomaly) return;
@@ -181,10 +251,10 @@ export default function AnomalyAlertsScreen({ navigation, route, user: propUser 
         const id = d.anomalyId || d.id;
         if (!map.has(id)) {
           const type = d.title || d.action || 'Telemetry Discrepancy';
-          const status = d.employeeResponse ? (d.status === 'Resolved' ? 'Resolved' : 'Responded') : 'Pending Response';
+          const status = d.employeeResponse ? (d.status === 'Resolved' ? 'Resolved' : 'Responded') : (d.status || 'Active');
           map.set(id, {
             id,
-            title: d.action || 'Security Anomaly',
+            title: d.title || d.action || 'Security Anomaly',
             type,
             category: categorizeAnomaly(type),
             severity: d.severity || 'Medium',
@@ -212,7 +282,7 @@ export default function AnomalyAlertsScreen({ navigation, route, user: propUser 
         if (!map.has(id)) {
           const isMissed = d.verificationResult === 'missed' || d.verificationStatus === 'missed';
           const title = isMissed ? 'Missed Selfie Verification' : 'Selfie Verification Discrepancy';
-          const status = d.employeeResponse ? (d.status === 'Resolved' ? 'Resolved' : 'Responded') : 'Pending Response';
+          const status = d.employeeResponse ? (d.status === 'Resolved' ? 'Resolved' : 'Responded') : (d.status || 'Active');
 
           map.set(id, {
             id,
@@ -263,7 +333,7 @@ export default function AnomalyAlertsScreen({ navigation, route, user: propUser 
       unsubLogs();
       unsubFacial();
     };
-  }, [currentEmail, currentUserName, isFieldEmployee]);
+  }, [currentEmail, currentUserName, empIds.join(','), employeeRecord]);
 
   // ── Record view timestamp so unread badge is cleared while preserving all alert data ──
   useEffect(() => {
@@ -345,8 +415,8 @@ export default function AnomalyAlertsScreen({ navigation, route, user: propUser 
         anomalyTitle: selectedAlert.title,
         anomalyType: selectedAlert.type,
         employeeEmail: currentEmail,
-        employeeName: auth.currentUser?.displayName || currentUserName || 'Employee',
-        employeeId: auth.currentUser?.uid || 'emp_user',
+        employeeName: empParam?.name || empParam?.displayName || currentUserName || auth.currentUser?.displayName || 'Employee',
+        employeeId: empParam?.id || empParam?.idNum || auth.currentUser?.uid || 'emp_user',
         explanation: responseText.trim(),
         photo: responsePhoto || null,
         timestamp: serverTimestamp(),
@@ -357,10 +427,10 @@ export default function AnomalyAlertsScreen({ navigation, route, user: propUser 
       await addDoc(collection(db, 'notifications'), {
         type: 'admin',
         title: 'Employee Responded to Anomaly Alert',
-        message: `${auth.currentUser?.displayName || 'Employee'} responded to "${selectedAlert.title}": "${responseText.trim().slice(0, 80)}"`,
+        message: `${empParam?.name || auth.currentUser?.displayName || 'Employee'} responded to "${selectedAlert.title}": "${responseText.trim().slice(0, 80)}"`,
         anomalyId: alertId,
         employeeEmail: currentEmail,
-        employeeName: auth.currentUser?.displayName || currentUserName || 'Employee',
+        employeeName: empParam?.name || empParam?.displayName || auth.currentUser?.displayName || 'Employee',
         timestamp: serverTimestamp(),
         read: false,
       }).catch(() => {});
@@ -380,15 +450,8 @@ export default function AnomalyAlertsScreen({ navigation, route, user: propUser 
 
   // ── Filtered Alerts ──
   const applicableAlerts = useMemo(() => {
-    return alerts.filter((alert) => {
-      // Outside assigned geofence is strictly for Fixed Site Employees.
-      // If employee is a Mobile Field Employee, completely exclude geofence alerts!
-      if (isFieldEmployee && isOutsideGeofenceAlert(alert)) {
-        return false;
-      }
-      return true;
-    });
-  }, [alerts, isFieldEmployee]);
+    return alerts;
+  }, [alerts]);
 
   const filteredAlerts = useMemo(() => {
     if (activeFilter === 'pending') {
@@ -622,7 +685,13 @@ export default function AnomalyAlertsScreen({ navigation, route, user: propUser 
               {/* Preset Reasons */}
               <Text style={styles.inputSectionLabel}>Select or Tap a Quick Reason:</Text>
               <View style={styles.presetChipWrap}>
-                {(selectedAlert?.category === 'Fixed Geofence Boundary Breach' ? GEOFENCE_PRESET_REASONS : GENERAL_PRESET_REASONS).map((reason, i) => (
+                {(
+                  selectedAlert?.category === 'Fixed Geofence Boundary Breach'
+                    ? GEOFENCE_PRESET_REASONS
+                    : (selectedAlert?.category === 'Shift & Attendance Anomaly'
+                        ? SHIFT_PRESET_REASONS
+                        : GENERAL_PRESET_REASONS)
+                ).map((reason, i) => (
                   <TouchableOpacity
                     key={i}
                     style={styles.presetChip}
@@ -701,9 +770,10 @@ export default function AnomalyAlertsScreen({ navigation, route, user: propUser 
 function categorizeAnomaly(type = '') {
   const t = type.toLowerCase();
   if (t.includes('selfie') || t.includes('facial') || t.includes('verification')) return 'Missed Selfie Verification';
-  if (t.includes('geofence') || t.includes('unauthorized') || t.includes('boundary')) return 'Fixed Geofence Boundary Breach';
-  if (t.includes('location') || t.includes('jump')) return 'Location Discrepancy';
-  if (t.includes('attendance') || t.includes('time') || t.includes('speed') || t.includes('clock')) return 'Suspicious Attendance';
+  if (t.includes('missed shift') || t.includes('missing check-out') || t.includes('no shift check-in') || t.includes('check-in') || t.includes('check in') || t.includes('attendance') || t.includes('shift') || t.includes('time') || t.includes('clock')) return 'Shift & Attendance Anomaly';
+  if (t.includes('geofence') || t.includes('unauthorized') || t.includes('boundary') || t.includes('perimeter')) return 'Fixed Geofence Boundary Breach';
+  if (t.includes('location') || t.includes('jump') || t.includes('mock') || t.includes('spoof')) return 'Location Discrepancy';
+  if (t.includes('vpn') || t.includes('proxy') || t.includes('root') || t.includes('jailbreak')) return 'Device Security Alert';
   return 'Security Telemetry Signal';
 }
 
@@ -711,12 +781,14 @@ function getCategoryMeta(category = '') {
   switch (category) {
     case 'Missed Selfie Verification':
       return { icon: 'scan-circle', color: '#EF4444' };
+    case 'Shift & Attendance Anomaly':
+      return { icon: 'time', color: '#DC2626' };
     case 'Fixed Geofence Boundary Breach':
       return { icon: 'business', color: '#D97706' };
     case 'Location Discrepancy':
       return { icon: 'location', color: '#F59E0B' };
-    case 'Suspicious Attendance':
-      return { icon: 'time', color: '#8B5CF6' };
+    case 'Device Security Alert':
+      return { icon: 'shield-half', color: '#DC2626' };
     default:
       return { icon: 'shield-alert', color: '#4F46E5' };
   }
