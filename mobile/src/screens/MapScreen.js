@@ -264,6 +264,7 @@ function generateLeafletHtml(initialUserLat, initialUserLng, siteLat, siteLng, s
 
 export default function MapScreen({ navigation, route, user: propUser }) {
   const insets = useSafeAreaInsets();
+  const bottomCardOffset = Math.max(insets?.bottom || 0, 10) + 78;
   const [location, setLocation] = useState(null);
   const [locationError, setLocationError] = useState(null);
   const routeAsg = route?.params?.assignment;
@@ -835,7 +836,7 @@ export default function MapScreen({ navigation, route, user: propUser }) {
 
         {/* Modern Bottom Card */}
         {site ? (
-          <View style={styles.bottomCard}>
+          <View style={[styles.bottomCard, { bottom: bottomCardOffset }]}>
             <View style={styles.cardHeader}>
               <View style={{ flex: 1 }}>
                 <Text style={styles.siteName}>{typeof site?.name === 'string' ? site.name : (typeof assignment?.site === 'string' ? assignment.site : 'Assigned Site')}</Text>
@@ -878,7 +879,7 @@ export default function MapScreen({ navigation, route, user: propUser }) {
             </View>
           </View>
         ) : (
-          <View style={styles.bottomCard}>
+          <View style={[styles.bottomCard, { bottom: bottomCardOffset }]}>
             <View style={{ alignItems: 'center', paddingVertical: 12 }}>
               <Ionicons name="information-circle-outline" size={32} color="#9CA3AF" />
               <Text style={{ fontSize: 15, fontWeight: '700', color: '#374151', marginTop: 6 }}>No Active Site Assignment</Text>
@@ -1041,7 +1042,7 @@ const styles = StyleSheet.create({
   },
   bottomCard: {
     position: 'absolute',
-    bottom: 24,
+    bottom: 84,
     left: 16,
     right: 16,
     backgroundColor: '#FFFFFF',
