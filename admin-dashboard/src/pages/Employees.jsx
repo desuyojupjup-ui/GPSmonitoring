@@ -1,8 +1,8 @@
 import React, { useState, useEffect } from 'react';
 import { useLocation } from 'react-router-dom';
-import { Search, Plus, Edit2, Trash2, X, Maximize, Download, UserCheck, Clock, AlertTriangle, UserX, MapPin, Navigation, Building2, Truck, ShieldAlert, Database, RefreshCw, Users, PieChart as PieIcon, BarChart3, Activity, UserPlus, User, Mail, Lock, IdCard, Briefcase, Shield, Sliders, Check, ChevronRight, ChevronLeft } from 'lucide-react';
+import { Search, Plus, Edit2, Trash2, X, Maximize, Download, UserCheck, Clock, AlertTriangle, UserX, MapPin, Navigation, Building2, Truck, ShieldAlert, Database, RefreshCw, Users, PieChart as PieIcon, BarChart3, Activity, UserPlus, User, Mail, Lock, IdCard, Briefcase, Shield, Sliders, Check, ChevronRight, ChevronLeft, Eye, EyeOff, AlertCircle, CheckCircle2 } from 'lucide-react';
 import Swal from 'sweetalert2';
-import { db, collection, onSnapshot, addDoc, updateDoc, deleteDoc, doc, query } from '../firebase';
+import { db, collection, onSnapshot, addDoc, updateDoc, deleteDoc, doc, query, createSecondaryAuthUser } from '../firebase';
 import { showToast, showConfirmDelete } from '../utils/toast';
 import { ResponsiveContainer, PieChart, Pie, Cell, BarChart, Bar, XAxis, YAxis, Tooltip, CartesianGrid } from 'recharts';
 
@@ -142,6 +142,25 @@ const EMPTY = {
   geofenceRadius: 100,
   assignedRoute: '',
   assignedDestinations: [],
+};
+
+export const calculatePasswordStrength = (pass) => {
+  if (!pass) return { score: 0, label: '', color: '#E2E8F0', pct: 0, hint: '' };
+  let score = 0;
+  if (pass.length >= 6) score += 1;
+  if (pass.length >= 8) score += 1;
+  if (/[0-9]/.test(pass)) score += 1;
+  if (/[a-z]/.test(pass) && (/[A-Z]/.test(pass) || /[^A-Za-z0-9]/.test(pass))) score += 1;
+
+  if (score <= 1) {
+    return { score: 1, label: 'Weak', color: '#EF4444', pct: 25, hint: 'At least 6 chars; mix letters & numbers' };
+  } else if (score === 2) {
+    return { score: 2, label: 'Fair', color: '#F59E0B', pct: 50, hint: 'Add uppercase letters or symbols' };
+  } else if (score === 3) {
+    return { score: 3, label: 'Good', color: '#3B82F6', pct: 75, hint: 'Good password security' };
+  } else {
+    return { score: 4, label: 'Strong', color: '#10B981', pct: 100, hint: 'Excellent password strength!' };
+  }
 };
 
 export default function Employees() {
@@ -304,12 +323,60 @@ export default function Employees() {
 
   // Modal Tab state ('info' | 'assignment' | 'all')
   const [modalTab, setModalTab]   = useState('info');
+  const [showPassword, setShowPassword] = useState(false);
+
+  // Real-time validations for Add/Edit Employee Modal
+  const cleanIdNum = (form.idNum || '').trim();
+  const duplicateIdEmployee = cleanIdNum
+    ? employees.find(e => e.id !== editId && (e.idNum || '').trim().toLowerCase() === cleanIdNum.toLowerCase())
+    : null;
+
+  const cleanEmail = (form.email || '').trim().toLowerCase();
+  const isValidEmail = /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(cleanEmail);
+  const duplicateEmailEmployee = cleanEmail
+    ? employees.find(e => e.id !== editId && (e.email || '').trim().toLowerCase() === cleanEmail)
+    : null;
+
+  const pwdStrength = calculatePasswordStrength(form.password || '');
+
+  const validateStep1 = () => {
+    const trimmedName = (form.name || '').trim();
+    if (!trimmedName) return 'Full Name is required.';
+
+    if (!cleanEmail) return 'Email Address is required.';
+    if (!isValidEmail) return 'Please enter a valid email address (e.g. employee@gmail.com).';
+    if (duplicateEmailEmployee) {
+      return `Email "${cleanEmail}" is already registered to ${duplicateEmailEmployee.name || 'another employee'}.`;
+    }
+
+    if (cleanIdNum && duplicateIdEmployee) {
+      return `ID Number "${cleanIdNum}" is already assigned to ${duplicateIdEmployee.name || 'another employee'}. Please use a unique ID.`;
+    }
+
+    if (form.password && form.password.length < 6) {
+      return 'Account Password must be at least 6 characters.';
+    }
+
+    return null;
+  };
+
+  const handleTabClick = (targetTab) => {
+    if (modalTab === 'info' && (targetTab === 'assignment' || targetTab === 'all')) {
+      const err = validateStep1();
+      if (err) {
+        showToast('Validation Error', err, 'error');
+        return;
+      }
+    }
+    setModalTab(targetTab);
+  };
 
   const location = useLocation();
 
   const openAdd  = () => { 
     setForm({ ...EMPTY, assignedSites: [] }); 
     setEditId(null); 
+    setShowPassword(false);
     setModalTab('info'); 
     setModal(true); 
   };
@@ -327,6 +394,7 @@ export default function Employees() {
       assignedSites: sitesArr 
     }); 
     setEditId(emp.id); 
+    setShowPassword(false);
     setModalTab('info'); 
     setModal(true); 
   };
@@ -365,17 +433,32 @@ export default function Employees() {
   };
 
   const handleSave = async () => {
-    if (!form.name || !form.email) return showToast('Validation Error', 'Name and Email are required.', 'error');
+    const step1Err = validateStep1();
+    if (step1Err) {
+      setModalTab('info');
+      return showToast('Validation Error', step1Err, 'error');
+    }
+
     setIsSaving(true);
     try {
       const isMobile = form.workType === 'Mobile Field Employee';
       const existing = editId ? employees.find(e => e.id === editId) : null;
       const dataToSave = {
         ...form,
+        name: (form.name || '').trim(),
+        email: cleanEmail,
+        idNum: cleanIdNum,
         assignedSites: isMobile ? (existing?.assignedSites || []) : (form.assignedSite ? [form.assignedSite] : []),
         assignedSite: isMobile ? (existing?.assignedSite || '') : (form.assignedSite || ''),
         assignedDestinations: isMobile ? (existing?.assignedDestinations || []) : []
       };
+
+      if (form.password && cleanEmail) {
+        try {
+          await createSecondaryAuthUser(cleanEmail, form.password);
+        } catch (_) {}
+      }
+
       if (editId) {
         await updateDoc(doc(db, 'employees', editId), dataToSave);
         showToast('Employee Updated', 'Record saved successfully.', 'success');
@@ -1022,7 +1105,7 @@ export default function Employees() {
                 
                 {/* Step 1 Badge */}
                 <div
-                  onClick={() => setModalTab('info')}
+                  onClick={() => handleTabClick('info')}
                   style={{ display: 'flex', alignItems: 'center', gap: 10, cursor: 'pointer' }}
                 >
                   <div style={{
@@ -1052,7 +1135,7 @@ export default function Employees() {
 
                 {/* Step 2 Badge */}
                 <div
-                  onClick={() => setModalTab('assignment')}
+                  onClick={() => handleTabClick('assignment')}
                   style={{ display: 'flex', alignItems: 'center', gap: 10, cursor: 'pointer' }}
                 >
                   <div style={{
@@ -1083,7 +1166,7 @@ export default function Employees() {
 
                 {/* Step 3 Badge */}
                 <div
-                  onClick={() => setModalTab('all')}
+                  onClick={() => handleTabClick('all')}
                   style={{ display: 'flex', alignItems: 'center', gap: 10, cursor: 'pointer' }}
                 >
                   <div style={{
@@ -1115,7 +1198,8 @@ export default function Employees() {
             {/* Modal Body Form Fields - Optimized for Scrolldown-Free Display */}
             <div style={{ padding: '24px 28px' }}>
               {modalTab === 'info' && (
-                <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 16 }}>
+                <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '16px 20px', alignItems: 'start' }}>
+                  {/* Full Name */}
                   <div>
                     <label style={{ fontSize: 11, fontWeight: 700, color: '#475569', display: 'block', marginBottom: 6 }}>Full Name *</label>
                     <div style={{ position: 'relative' }}>
@@ -1130,20 +1214,62 @@ export default function Employees() {
                     </div>
                   </div>
 
+                  {/* ID Number with Duplicate Check */}
                   <div>
-                    <label style={{ fontSize: 11, fontWeight: 700, color: '#475569', display: 'block', marginBottom: 6 }}>ID Number</label>
+                    <label style={{ fontSize: 11, fontWeight: 700, color: '#475569', display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: 6 }}>
+                      <span>ID Number</span>
+                      {duplicateIdEmployee && (
+                        <span style={{ fontSize: 10, color: '#EF4444', fontWeight: 700, display: 'flex', alignItems: 'center', gap: 3 }}>
+                          <AlertCircle size={11} color="#EF4444" /> Duplicate ID
+                        </span>
+                      )}
+                      {!duplicateIdEmployee && cleanIdNum && (
+                        <span style={{ fontSize: 10, color: '#10B981', fontWeight: 700, display: 'flex', alignItems: 'center', gap: 3 }}>
+                          <CheckCircle2 size={11} color="#10B981" /> Available
+                        </span>
+                      )}
+                    </label>
                     <div style={{ position: 'relative' }}>
-                      <IdCard size={15} color="#94A3B8" style={{ position: 'absolute', left: 12, top: 12 }} />
+                      <IdCard size={15} color={duplicateIdEmployee ? '#EF4444' : '#94A3B8'} style={{ position: 'absolute', left: 12, top: 12 }} />
                       <input
                         type="text"
                         value={form.idNum || ''}
                         onChange={e => setForm(p => ({ ...p, idNum: e.target.value }))}
                         placeholder="e.g. EMP-1001"
-                        style={{ width: '100%', padding: '10px 14px 10px 38px', borderRadius: 12, border: '1.5px solid #E2E8F0', fontSize: 13, outline: 'none', background: '#FFFFFF', fontFamily: 'Inter, sans-serif', boxSizing: 'border-box', color: '#0F172A', fontWeight: 500 }}
+                        style={{
+                          width: '100%',
+                          padding: '10px 14px 10px 38px',
+                          borderRadius: 12,
+                          border: duplicateIdEmployee ? '1.5px solid #EF4444' : (cleanIdNum ? '1.5px solid #10B981' : '1.5px solid #E2E8F0'),
+                          fontSize: 13,
+                          outline: 'none',
+                          background: duplicateIdEmployee ? '#FEF2F2' : '#FFFFFF',
+                          fontFamily: 'Inter, sans-serif',
+                          boxSizing: 'border-box',
+                          color: '#0F172A',
+                          fontWeight: 500,
+                          transition: 'all 0.15s ease'
+                        }}
                       />
                     </div>
+                    {duplicateIdEmployee ? (
+                      <div style={{ marginTop: 4, fontSize: 11, color: '#DC2626', fontWeight: 600, display: 'flex', alignItems: 'center', gap: 4 }}>
+                        <AlertCircle size={12} color="#DC2626" />
+                        Already used by {duplicateIdEmployee.name || 'another employee'}
+                      </div>
+                    ) : cleanIdNum ? (
+                      <div style={{ marginTop: 4, fontSize: 11, color: '#059669', fontWeight: 500, display: 'flex', alignItems: 'center', gap: 4 }}>
+                        <CheckCircle2 size={12} color="#10B981" />
+                        ID Number is unique and available
+                      </div>
+                    ) : (
+                      <div style={{ marginTop: 4, fontSize: 10.5, color: '#94A3B8' }}>
+                        Workforce ID number (cannot be duplicate)
+                      </div>
+                    )}
                   </div>
 
+                  {/* Department / Org */}
                   <div>
                     <label style={{ fontSize: 11, fontWeight: 700, color: '#475569', display: 'block', marginBottom: 6 }}>Department / Org</label>
                     <div style={{ position: 'relative' }}>
@@ -1158,6 +1284,7 @@ export default function Employees() {
                     </div>
                   </div>
 
+                  {/* Role / Job Title */}
                   <div>
                     <label style={{ fontSize: 11, fontWeight: 700, color: '#475569', display: 'block', marginBottom: 6 }}>Role / Job Title</label>
                     <div style={{ position: 'relative' }}>
@@ -1172,32 +1299,149 @@ export default function Employees() {
                     </div>
                   </div>
 
+                  {/* Email Address with @gmail.com & Required Validation */}
                   <div>
-                    <label style={{ fontSize: 11, fontWeight: 700, color: '#475569', display: 'block', marginBottom: 6 }}>Email Address *</label>
+                    <label style={{ fontSize: 11, fontWeight: 700, color: '#475569', display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: 6 }}>
+                      <span>Email Address *</span>
+                      {duplicateEmailEmployee && (
+                        <span style={{ fontSize: 10, color: '#EF4444', fontWeight: 700 }}>Already registered</span>
+                      )}
+                      {!duplicateEmailEmployee && isValidEmail && (
+                        <span style={{ fontSize: 10, color: '#10B981', fontWeight: 700, display: 'flex', alignItems: 'center', gap: 3 }}>
+                          <CheckCircle2 size={11} color="#10B981" /> Valid Email
+                        </span>
+                      )}
+                    </label>
                     <div style={{ position: 'relative' }}>
-                      <Mail size={15} color="#94A3B8" style={{ position: 'absolute', left: 12, top: 12 }} />
+                      <Mail size={15} color={duplicateEmailEmployee ? '#EF4444' : '#94A3B8'} style={{ position: 'absolute', left: 12, top: 12 }} />
                       <input
                         type="email"
                         value={form.email || ''}
                         onChange={e => setForm(p => ({ ...p, email: e.target.value }))}
-                        placeholder="e.g. johndoe@subai.com"
-                        style={{ width: '100%', padding: '10px 14px 10px 38px', borderRadius: 12, border: '1.5px solid #E2E8F0', fontSize: 13, outline: 'none', background: '#FFFFFF', fontFamily: 'Inter, sans-serif', boxSizing: 'border-box', color: '#0F172A', fontWeight: 500 }}
+                        placeholder="e.g. employee@gmail.com"
+                        style={{
+                          width: '100%',
+                          padding: '10px 14px 10px 38px',
+                          borderRadius: 12,
+                          border: duplicateEmailEmployee ? '1.5px solid #EF4444' : (cleanEmail && !isValidEmail ? '1.5px solid #F59E0B' : (isValidEmail ? '1.5px solid #10B981' : '1.5px solid #E2E8F0')),
+                          fontSize: 13,
+                          outline: 'none',
+                          background: duplicateEmailEmployee ? '#FEF2F2' : '#FFFFFF',
+                          fontFamily: 'Inter, sans-serif',
+                          boxSizing: 'border-box',
+                          color: '#0F172A',
+                          fontWeight: 500,
+                          transition: 'all 0.15s ease'
+                        }}
                       />
                     </div>
+                    {duplicateEmailEmployee ? (
+                      <div style={{ marginTop: 4, fontSize: 11, color: '#DC2626', fontWeight: 600, display: 'flex', alignItems: 'center', gap: 4 }}>
+                        <AlertCircle size={12} color="#DC2626" />
+                        Email registered to {duplicateEmailEmployee.name || 'another employee'}
+                      </div>
+                    ) : cleanEmail && !isValidEmail ? (
+                      <div style={{ marginTop: 4, fontSize: 11, color: '#D97706', fontWeight: 500, display: 'flex', alignItems: 'center', gap: 4 }}>
+                        <AlertCircle size={12} color="#D97706" />
+                        Must be valid format (e.g. employee@gmail.com)
+                      </div>
+                    ) : isValidEmail ? (
+                      <div style={{ marginTop: 4, fontSize: 11, color: '#059669', fontWeight: 500, display: 'flex', alignItems: 'center', gap: 4 }}>
+                        <CheckCircle2 size={12} color="#10B981" />
+                        Ready for mobile login ({cleanEmail.includes('@gmail.com') ? '@gmail.com' : 'Valid email'})
+                      </div>
+                    ) : (
+                      <div style={{ marginTop: 4, fontSize: 10.5, color: '#94A3B8' }}>
+                        Required for login (supports @gmail.com & work emails)
+                      </div>
+                    )}
                   </div>
 
+                  {/* Account Password with Password Strength Indicator */}
                   <div>
-                    <label style={{ fontSize: 11, fontWeight: 700, color: '#475569', display: 'block', marginBottom: 6 }}>Account Password</label>
+                    <label style={{ fontSize: 11, fontWeight: 700, color: '#475569', display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: 6 }}>
+                      <span>Account Password</span>
+                      {form.password && (
+                        <span style={{ fontSize: 10.5, fontWeight: 800, color: pwdStrength.color }}>
+                          {pwdStrength.label}
+                        </span>
+                      )}
+                    </label>
                     <div style={{ position: 'relative' }}>
                       <Lock size={15} color="#94A3B8" style={{ position: 'absolute', left: 12, top: 12 }} />
                       <input
-                        type="password"
+                        type={showPassword ? 'text' : 'password'}
                         value={form.password || ''}
                         onChange={e => setForm(p => ({ ...p, password: e.target.value }))}
                         placeholder="Enter secure password"
-                        style={{ width: '100%', padding: '10px 14px 10px 38px', borderRadius: 12, border: '1.5px solid #E2E8F0', fontSize: 13, outline: 'none', background: '#FFFFFF', fontFamily: 'Inter, sans-serif', boxSizing: 'border-box', color: '#0F172A', fontWeight: 500 }}
+                        style={{
+                          width: '100%',
+                          padding: '10px 38px 10px 38px',
+                          borderRadius: 12,
+                          border: form.password ? `1.5px solid ${pwdStrength.color}` : '1.5px solid #E2E8F0',
+                          fontSize: 13,
+                          outline: 'none',
+                          background: '#FFFFFF',
+                          fontFamily: 'Inter, sans-serif',
+                          boxSizing: 'border-box',
+                          color: '#0F172A',
+                          fontWeight: 500,
+                          transition: 'all 0.15s ease'
+                        }}
                       />
+                      <button
+                        type="button"
+                        onClick={() => setShowPassword(!showPassword)}
+                        style={{
+                          position: 'absolute',
+                          right: 10,
+                          top: 10,
+                          background: 'transparent',
+                          border: 'none',
+                          cursor: 'pointer',
+                          padding: 2,
+                          color: '#94A3B8',
+                          display: 'flex',
+                          alignItems: 'center',
+                          justifyContent: 'center'
+                        }}
+                        title={showPassword ? 'Hide password' : 'Show password'}
+                      >
+                        {showPassword ? <EyeOff size={16} /> : <Eye size={16} />}
+                      </button>
                     </div>
+
+                    {/* Password Strength Meter */}
+                    {form.password ? (
+                      <div style={{ marginTop: 6 }}>
+                        <div style={{ display: 'flex', gap: 4, height: 4, borderRadius: 2, overflow: 'hidden', marginBottom: 4 }}>
+                          {[1, 2, 3, 4].map(step => (
+                            <div
+                              key={step}
+                              style={{
+                                flex: 1,
+                                height: '100%',
+                                background: step <= pwdStrength.score ? pwdStrength.color : '#E2E8F0',
+                                borderRadius: 2,
+                                transition: 'all 0.25s ease'
+                              }}
+                            />
+                          ))}
+                        </div>
+                        <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+                          <span style={{ fontSize: 10.5, fontWeight: 700, color: pwdStrength.color }}>
+                            Strength: {pwdStrength.label}
+                          </span>
+                          <span style={{ fontSize: 10, color: '#64748B' }}>
+                            {pwdStrength.hint}
+                          </span>
+                        </div>
+                      </div>
+                    ) : (
+                      <div style={{ marginTop: 4, fontSize: 10.5, color: '#94A3B8' }}>
+                        Min. 6 characters. Letters, numbers & symbols recommended.
+                      </div>
+                    )}
                   </div>
                 </div>
               )}
@@ -1352,9 +1596,24 @@ export default function Employees() {
                       <div style={{ fontSize: 13, fontWeight: 600, color: '#0F172A', wordBreak: 'break-all' }}>{form.email || '—'}</div>
                     </div>
 
+                    <div style={{ background: '#FFFFFF', padding: '10px 14px', borderRadius: 10, border: duplicateIdEmployee ? '1.5px solid #EF4444' : '1px solid #E2E8F0' }}>
+                      <div style={{ fontSize: 10, fontWeight: 700, color: duplicateIdEmployee ? '#EF4444' : '#64748B', textTransform: 'uppercase', letterSpacing: '0.04em', marginBottom: 3, display: 'flex', alignItems: 'center', justifyContent: 'space-between' }}>
+                        <span>ID Number</span>
+                        {duplicateIdEmployee && <span style={{ color: '#EF4444' }}>Duplicate!</span>}
+                      </div>
+                      <div style={{ fontSize: 13, fontWeight: 600, color: duplicateIdEmployee ? '#EF4444' : '#0F172A' }}>{form.idNum || '—'}</div>
+                    </div>
+
                     <div style={{ background: '#FFFFFF', padding: '10px 14px', borderRadius: 10, border: '1px solid #E2E8F0' }}>
-                      <div style={{ fontSize: 10, fontWeight: 700, color: '#64748B', textTransform: 'uppercase', letterSpacing: '0.04em', marginBottom: 3 }}>ID Number</div>
-                      <div style={{ fontSize: 13, fontWeight: 600, color: '#0F172A' }}>{form.idNum || '—'}</div>
+                      <div style={{ fontSize: 10, fontWeight: 700, color: '#64748B', textTransform: 'uppercase', letterSpacing: '0.04em', marginBottom: 3 }}>Account Password</div>
+                      <div style={{ fontSize: 13, fontWeight: 600, color: '#0F172A', display: 'flex', alignItems: 'center', gap: 6 }}>
+                        <span>{form.password ? '••••••••' : '(Not set)'}</span>
+                        {form.password && (
+                          <span style={{ fontSize: 10, fontWeight: 700, color: pwdStrength.color, background: `${pwdStrength.color}15`, padding: '1px 6px', borderRadius: 6 }}>
+                            {pwdStrength.label}
+                          </span>
+                        )}
+                      </div>
                     </div>
 
                     <div style={{ background: '#FFFFFF', padding: '10px 14px', borderRadius: 10, border: '1px solid #E2E8F0' }}>
@@ -1462,7 +1721,17 @@ export default function Employees() {
               <div style={{ display: 'flex', gap: 12 }}>
                 {modalTab !== 'all' ? (
                   <button
-                    onClick={() => setModalTab(modalTab === 'info' ? 'assignment' : 'all')}
+                    onClick={() => {
+                      if (modalTab === 'info') {
+                        const err = validateStep1();
+                        if (err) {
+                          return showToast('Validation Error', err, 'error');
+                        }
+                        setModalTab('assignment');
+                      } else {
+                        setModalTab('all');
+                      }
+                    }}
                     style={{
                       padding: '9px 20px',
                       borderRadius: 12,
