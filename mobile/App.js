@@ -4,6 +4,9 @@ import { createNativeStackNavigator } from '@react-navigation/native-stack';
 import { createBottomTabNavigator } from '@react-navigation/bottom-tabs';
 import { View, Text, Image, ActivityIndicator } from 'react-native';
 import { Ionicons } from '@expo/vector-icons';
+import * as SplashScreen from 'expo-splash-screen';
+
+SplashScreen.preventAutoHideAsync().catch(() => {});
 
 import { auth, onAuthStateChanged, signOut, loadUserSession, saveUserSession, subscribeToLogout, performGlobalLogout } from './src/firebase';
 import LoginScreen from './src/screens/LoginScreen';
@@ -77,6 +80,12 @@ export default function App() {
   // During cold start Firebase takes a moment to restore the persisted token;
   // we must NOT treat that transient null as "logged out".
   const authInitialized = React.useRef(false);
+
+  useEffect(() => {
+    if (!loading) {
+      SplashScreen.hideAsync().catch(() => {});
+    }
+  }, [loading]);
 
   useEffect(() => {
     let unsubscribe = () => {};

@@ -10,12 +10,6 @@
 // Returns { active: boolean, reason: string, ip: string|null, provider: string|null, country: string|null }.
 // ──────────────────────────────────────────────────────────────────────────
 
-let RNVPNDetector = null;
-try {
-  const mod = require('react-native-vpn-detector');
-  RNVPNDetector = mod?.default || mod;
-} catch { /* not available in Expo Go */ }
-
 let Network = null;
 try { Network = require('expo-network'); } catch { /* not available */ }
 
@@ -28,19 +22,7 @@ let _lastCheckTime = 0;
 const CACHE_TTL_MS = 5000;
 
 async function nativeVpnActive() {
-  const mod = RNVPNDetector;
-  try {
-    if (mod?.isVpnActive) {
-      const v = mod.isVpnActive();
-      return await Promise.resolve(v);
-    }
-    if (mod?.default?.isVpnActive) {
-      return await Promise.resolve(mod.default.isVpnActive());
-    }
-  } catch {
-    /* ignore */
-  }
-  return null; // unknown / not in bare build
+  return null;
 }
 
 async function fetchWithTimeout(url, timeoutMs = 4000) {
