@@ -1147,7 +1147,15 @@ export default function Assignments() {
         supervisorName: form.supervisorName || empToUpdate?.supervisorName || 'Operations Supervisor',
         supervisorContact: form.supervisorContact || empToUpdate?.supervisorContact || '+63 917 123 4567',
         priority: form.priority || 'Medium',
-        status: form.status || 'Active',
+        status: resolveAssignmentStatus({
+          assignDate: form.assignDate || new Date().toISOString().split('T')[0],
+          scheduleDate: form.assignDate || new Date().toISOString().split('T')[0],
+          shiftStart: sStartFormatted,
+          shiftEnd: sEndFormatted,
+          shift: computedShift,
+          shiftTime: computedShift,
+          status: (editId && form.status === 'Cancelled') ? 'Cancelled' : (form.status || 'Active')
+        }, attendance),
         updatedAt: Date.now(),
       };
 
@@ -2125,66 +2133,34 @@ export default function Assignments() {
                 </div>
               </div>
 
-              {/* Priority & Status Dropdowns */}
-              <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 14 }}>
-                <div>
-                  <label style={{ fontSize: 11, fontWeight: 700, color: '#475569', display: 'block', marginBottom: 6 }}>
-                    Priority Level
-                  </label>
-                  <div style={{ position: 'relative' }}>
-                    <Flag size={15} color="#94A3B8" style={{ position: 'absolute', left: 12, top: 12 }} />
-                    <select
-                      value={form.priority}
-                      onChange={e => setForm(p => ({ ...p, priority: e.target.value }))}
-                      style={{
-                        width: '100%',
-                        padding: '10px 14px 10px 38px',
-                        borderRadius: 12,
-                        border: '1.5px solid #E2E8F0',
-                        fontSize: 13,
-                        outline: 'none',
-                        background: '#FFFFFF',
-                        boxSizing: 'border-box',
-                        color: '#0F172A',
-                        fontWeight: 600,
-                        cursor: 'pointer'
-                      }}
-                    >
-                      {['High', 'Medium', 'Low'].map(p => (
-                        <option key={p} value={p}>{p} Priority</option>
-                      ))}
-                    </select>
-                  </div>
-                </div>
-
-                <div>
-                  <label style={{ fontSize: 11, fontWeight: 700, color: '#475569', display: 'block', marginBottom: 6 }}>
-                    Assignment Status
-                  </label>
-                  <div style={{ position: 'relative' }}>
-                    <CheckCircle size={15} color="#94A3B8" style={{ position: 'absolute', left: 12, top: 12 }} />
-                    <select
-                      value={form.status}
-                      onChange={e => setForm(p => ({ ...p, status: e.target.value }))}
-                      style={{
-                        width: '100%',
-                        padding: '10px 14px 10px 38px',
-                        borderRadius: 12,
-                        border: '1.5px solid #E2E8F0',
-                        fontSize: 13,
-                        outline: 'none',
-                        background: '#FFFFFF',
-                        boxSizing: 'border-box',
-                        color: '#0F172A',
-                        fontWeight: 600,
-                        cursor: 'pointer'
-                      }}
-                    >
-                      {['Active', 'Upcoming', 'Completed', 'Missed Shift', 'Missing Check-Out', 'Cancelled'].map(s => (
-                        <option key={s} value={s}>{s}</option>
-                      ))}
-                    </select>
-                  </div>
+              {/* Priority Level */}
+              <div>
+                <label style={{ fontSize: 11, fontWeight: 700, color: '#475569', display: 'block', marginBottom: 6 }}>
+                  Priority Level
+                </label>
+                <div style={{ position: 'relative' }}>
+                  <Flag size={15} color="#94A3B8" style={{ position: 'absolute', left: 12, top: 12 }} />
+                  <select
+                    value={form.priority}
+                    onChange={e => setForm(p => ({ ...p, priority: e.target.value }))}
+                    style={{
+                      width: '100%',
+                      padding: '10px 14px 10px 38px',
+                      borderRadius: 12,
+                      border: '1.5px solid #E2E8F0',
+                      fontSize: 13,
+                      outline: 'none',
+                      background: '#FFFFFF',
+                      boxSizing: 'border-box',
+                      color: '#0F172A',
+                      fontWeight: 600,
+                      cursor: 'pointer'
+                    }}
+                  >
+                    {['High', 'Medium', 'Low'].map(p => (
+                      <option key={p} value={p}>{p} Priority</option>
+                    ))}
+                  </select>
                 </div>
               </div>
 
@@ -2200,7 +2176,7 @@ export default function Assignments() {
               alignItems: 'center'
             }}>
               <div style={{ fontSize: 11, color: '#64748B', fontWeight: 500 }}>
-                * All scheduled assignments sync in real-time
+                * All scheduled assignments and statuses sync automatically in real-time
               </div>
 
               <div style={{ display: 'flex', gap: 12 }}>
