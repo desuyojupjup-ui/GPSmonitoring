@@ -278,12 +278,14 @@ export function startAnomalyNotificationSync(onNewAlert) {
                   })
                   .catch((err) => console.warn('Admin anomaly write error:', err));
 
-                updateDoc(doc(db, 'employees', emp.id), {
-                  geofenceStatus: 'Outside Assigned Site',
-                  inFence: false,
-                  lastOutOfFenceDistance: distOutside,
-                  lastOutOfFenceAt: serverTimestamp(),
-                }).catch(() => {});
+                if (emp.geofenceStatus !== 'Outside Assigned Site') {
+                  updateDoc(doc(db, 'employees', emp.id), {
+                    geofenceStatus: 'Outside Assigned Site',
+                    inFence: false,
+                    lastOutOfFenceDistance: distOutside,
+                    lastOutOfFenceAt: serverTimestamp(),
+                  }).catch(() => {});
+                }
               }
             }
           } else {

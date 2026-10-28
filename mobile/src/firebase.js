@@ -507,8 +507,8 @@ const initialSyncMobileToAdmin = async () => {
   } catch (e) {}
 };
 
-setTimeout(initialSyncMobileToAdmin, 500);
-setInterval(initialSyncMobileToAdmin, 1500);
+setTimeout(initialSyncMobileToAdmin, 1500);
+setInterval(initialSyncMobileToAdmin, 30000);
 
 const notifyListeners = async (path) => {
   const callbacks = listenersMap.get(path) || [];

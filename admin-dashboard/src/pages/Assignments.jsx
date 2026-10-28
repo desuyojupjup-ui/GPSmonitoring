@@ -517,11 +517,21 @@ export default function Assignments() {
     }
   }, []);
 
-  const [, setTick] = useState(0);
+  const [tick, setTick] = useState(0);
   useEffect(() => {
-    const timer = setInterval(() => setTick(t => t + 1), 10000);
+    const timer = setInterval(() => setTick(t => t + 1), 30000);
     return () => clearInterval(timer);
   }, []);
+
+  const dataRef = useRef(data);
+  dataRef.current = data;
+  const attendanceRef = useRef(attendance);
+  attendanceRef.current = attendance;
+
+  const syncedMissedAttRef = useRef(new Set());
+  const syncedAsgStatusRef = useRef(new Map());
+  const syncedAlertsRef = useRef(new Set());
+  const resolvedAlertsRef = useRef(new Set());
 
   // Background auto-sync & AI Anomaly Detection:
   // Evaluates assignments whose shift schedule has passed or is ongoing.
@@ -529,16 +539,18 @@ export default function Assignments() {
   // 2. If employee checked in but did NOT check out after shift ended: Status is 'Missing Check-Out', generates Medium severity Anomaly Alert.
   // 3. Only if checked in AND checked out: Status is 'Completed'.
   useEffect(() => {
-    if (!data.length) return;
+    const currentData = dataRef.current;
+    const currentAttendance = attendanceRef.current;
+    if (!currentData || !currentData.length) return;
     const now = new Date();
 
-    data.forEach(async (asg) => {
+    currentData.forEach(async (asg) => {
       try {
         if (!asg || !asg.id) return;
         const rawStatus = (asg.status || '').toLowerCase();
         if (rawStatus === 'cancelled') return;
 
-        const attInfo = getAssignmentAttendanceInfo(asg, attendance);
+        const attInfo = getAssignmentAttendanceInfo(asg, currentAttendance);
         const ended = isAssignmentEnded(asg, now);
         const upcoming = isAssignmentUpcoming(asg, now);
 
@@ -561,41 +573,46 @@ export default function Assignments() {
             targetStatus = 'Missing Check-Out';
           }
 
-          // If Missed Shift, also create / sync record in Attendance collection
+          // If Missed Shift, create record in Attendance only once
           if (targetStatus === 'Missed Shift') {
             const missedAttId = `att_missed_${asg.id}`;
-            const missedAttDoc = {
-              id: missedAttId,
-              attendanceId: missedAttId,
-              assignmentId: asg.id,
-              employee_name: empName,
-              employeeName: empName,
-              employee_id: empId,
-              employeeId: empId,
-              email: empEmail,
-              site_name: siteName,
-              siteName: siteName,
-              site: siteName,
-              date: dateStr,
-              check_in: 'Missed (No Check-in)',
-              check_out: '—',
-              timeIn: null,
-              timeOut: null,
-              duration: '0m',
-              status: 'Missed Shift',
-              verification: 'No Show',
-              shift: shiftStr,
-              inFence: false,
-              isMissedShift: true,
-              createdAt: asg.createdAt || Date.now(),
-              updatedAt: Date.now()
-            };
-            setDoc(doc(db, 'Attendance', missedAttId), missedAttDoc, { merge: true }).catch(() => {});
-            setDoc(doc(db, 'attendance', missedAttId), missedAttDoc, { merge: true }).catch(() => {});
+            const alreadyInAttendance = currentAttendance.some(a => a && (a.id === missedAttId || a.attendanceId === missedAttId || (a.assignmentId === asg.id && a.isMissedShift)));
+            if (!alreadyInAttendance && !syncedMissedAttRef.current.has(missedAttId)) {
+              syncedMissedAttRef.current.add(missedAttId);
+              const missedAttDoc = {
+                id: missedAttId,
+                attendanceId: missedAttId,
+                assignmentId: asg.id,
+                employee_name: empName,
+                employeeName: empName,
+                employee_id: empId,
+                employeeId: empId,
+                email: empEmail,
+                site_name: siteName,
+                siteName: siteName,
+                site: siteName,
+                date: dateStr,
+                check_in: 'Missed (No Check-in)',
+                check_out: '—',
+                timeIn: null,
+                timeOut: null,
+                duration: '0m',
+                status: 'Missed Shift',
+                verification: 'No Show',
+                shift: shiftStr,
+                inFence: false,
+                isMissedShift: true,
+                createdAt: asg.createdAt || Date.now(),
+                updatedAt: Date.now()
+              };
+              setDoc(doc(db, 'Attendance', missedAttId), missedAttDoc, { merge: true }).catch(() => {});
+              setDoc(doc(db, 'attendance', missedAttId), missedAttDoc, { merge: true }).catch(() => {});
+            }
           }
 
-          // Persistently sync status in Firestore if needed
-          if (asg.status !== targetStatus) {
+          // Persistently sync status in Firestore if needed (guarded against duplicate writes)
+          if (asg.status !== targetStatus && syncedAsgStatusRef.current.get(asg.id) !== targetStatus) {
+            syncedAsgStatusRef.current.set(asg.id, targetStatus);
             await updateDoc(doc(db, 'Assignments', asg.id), {
               status: targetStatus,
               hasCheckIn: attInfo.hasCheckIn,
@@ -610,7 +627,7 @@ export default function Assignments() {
             }).catch(() => {});
 
             // If employee has no other active assignment, clear assigned sites from profile
-            const hasOtherActiveAsg = data.some(other => {
+            const hasOtherActiveAsg = currentData.some(other => {
               if (!other || other.id === asg.id) return false;
               if (other.status === 'Cancelled' || other.status === 'Completed' || other.status === 'Missed Shift') return false;
               if (isAssignmentEnded(other, now)) return false;
@@ -649,78 +666,8 @@ export default function Assignments() {
           // AI Anomaly Alert: No Shift Check-In Detected
           if (!attInfo.hasCheckIn && dateStr) {
             const alertId = `anomaly_no_checkin_${asg.id}_${dateStr}`;
-            const anomalyDoc = {
-              id: alertId,
-              anomalyId: alertId,
-              type: 'Missed Shift Check-In',
-              eventType: 'MISSED_CHECK_IN',
-              category: 'Attendance Anomaly',
-              title: 'AI Anomaly: No Shift Check-In Detected',
-              description: `Employee ${empName} did not check in for assigned shift (${shiftStr}) on ${dateStr} at ${siteName} within the shift schedule.`,
-              employeeName: empName,
-              employeeId: empId,
-              employeeEmail: empEmail,
-              siteName: siteName,
-              location: siteName,
-              shift: shiftStr,
-              date: dateStr,
-              assignmentId: asg.id,
-              severity: 'High',
-              confidence: '96%',
-              status: 'Active',
-              createdAt: Date.now(),
-              timestamp: new Date().toISOString(),
-              sourceCollection: 'ai_analysis'
-            };
-            await setDoc(doc(db, 'ai_analysis', alertId), anomalyDoc, { merge: true }).catch(() => {});
-            await setDoc(doc(db, 'ActivityLogs', alertId), {
-              ...anomalyDoc,
-              action: 'Anomaly Detected',
-              type: 'Security Anomaly'
-            }, { merge: true }).catch(() => {});
-          }
-
-          // AI Anomaly Alert: Missing Shift Check-Out
-          if (attInfo.hasCheckIn && !attInfo.hasCheckOut && dateStr) {
-            const alertId = `anomaly_no_checkout_${asg.id}_${dateStr}`;
-            const anomalyDoc = {
-              id: alertId,
-              anomalyId: alertId,
-              type: 'Missing Shift Check-Out',
-              eventType: 'MISSING_CHECK_OUT',
-              category: 'Attendance Anomaly',
-              title: 'AI Anomaly: Missing Shift Check-Out',
-              description: `Employee ${empName} checked in but failed to check out after assigned shift (${shiftStr}) ended on ${dateStr} at ${siteName}.`,
-              employeeName: empName,
-              employeeId: empId,
-              employeeEmail: empEmail,
-              siteName: siteName,
-              location: siteName,
-              shift: shiftStr,
-              date: dateStr,
-              assignmentId: asg.id,
-              severity: 'Medium',
-              confidence: '95%',
-              status: 'Active',
-              createdAt: Date.now(),
-              timestamp: new Date().toISOString(),
-              sourceCollection: 'ai_analysis'
-            };
-            await setDoc(doc(db, 'ai_analysis', alertId), anomalyDoc, { merge: true }).catch(() => {});
-            await setDoc(doc(db, 'ActivityLogs', alertId), {
-              ...anomalyDoc,
-              action: 'Anomaly Detected',
-              type: 'Security Anomaly'
-            }, { merge: true }).catch(() => {});
-          }
-        } else if (!upcoming) {
-          // ── 2. Shift is ONGOING (past start time) ──
-          const shiftTimes = getAssignmentShiftTimes(asg);
-          if (shiftTimes.start && dateObj) {
-            const startDateTime = new Date(dateObj.year, dateObj.month, dateObj.day, shiftTimes.start.hours, shiftTimes.start.minutes, 0, 0);
-            const gracePeriodMs = 15 * 60 * 1000; // 15 minutes
-            if (now.getTime() > startDateTime.getTime() + gracePeriodMs && !attInfo.hasCheckIn && dateStr) {
-              const alertId = `anomaly_no_checkin_${asg.id}_${dateStr}`;
+            if (!syncedAlertsRef.current.has(alertId)) {
+              syncedAlertsRef.current.add(alertId);
               const anomalyDoc = {
                 id: alertId,
                 anomalyId: alertId,
@@ -728,7 +675,7 @@ export default function Assignments() {
                 eventType: 'MISSED_CHECK_IN',
                 category: 'Attendance Anomaly',
                 title: 'AI Anomaly: No Shift Check-In Detected',
-                description: `Employee ${empName} has not checked in for assigned shift (${shiftStr}) on ${dateStr} at ${siteName} within the scheduled start time.`,
+                description: `Employee ${empName} did not check in for assigned shift (${shiftStr}) on ${dateStr} at ${siteName} within the shift schedule.`,
                 employeeName: empName,
                 employeeId: empId,
                 employeeEmail: empEmail,
@@ -738,7 +685,7 @@ export default function Assignments() {
                 date: dateStr,
                 assignmentId: asg.id,
                 severity: 'High',
-                confidence: '94%',
+                confidence: '96%',
                 status: 'Active',
                 createdAt: Date.now(),
                 timestamp: new Date().toISOString(),
@@ -752,30 +699,115 @@ export default function Assignments() {
               }, { merge: true }).catch(() => {});
             }
           }
+
+          // AI Anomaly Alert: Missing Shift Check-Out
+          if (attInfo.hasCheckIn && !attInfo.hasCheckOut && dateStr) {
+            const alertId = `anomaly_no_checkout_${asg.id}_${dateStr}`;
+            if (!syncedAlertsRef.current.has(alertId)) {
+              syncedAlertsRef.current.add(alertId);
+              const anomalyDoc = {
+                id: alertId,
+                anomalyId: alertId,
+                type: 'Missing Shift Check-Out',
+                eventType: 'MISSING_CHECK_OUT',
+                category: 'Attendance Anomaly',
+                title: 'AI Anomaly: Missing Shift Check-Out',
+                description: `Employee ${empName} checked in but failed to check out after assigned shift (${shiftStr}) ended on ${dateStr} at ${siteName}.`,
+                employeeName: empName,
+                employeeId: empId,
+                employeeEmail: empEmail,
+                siteName: siteName,
+                location: siteName,
+                shift: shiftStr,
+                date: dateStr,
+                assignmentId: asg.id,
+                severity: 'Medium',
+                confidence: '95%',
+                status: 'Active',
+                createdAt: Date.now(),
+                timestamp: new Date().toISOString(),
+                sourceCollection: 'ai_analysis'
+              };
+              await setDoc(doc(db, 'ai_analysis', alertId), anomalyDoc, { merge: true }).catch(() => {});
+              await setDoc(doc(db, 'ActivityLogs', alertId), {
+                ...anomalyDoc,
+                action: 'Anomaly Detected',
+                type: 'Security Anomaly'
+              }, { merge: true }).catch(() => {});
+            }
+          }
+        } else if (!upcoming) {
+          // ── 2. Shift is ONGOING (past start time) ──
+          const shiftTimes = getAssignmentShiftTimes(asg);
+          if (shiftTimes.start && dateObj) {
+            const startDateTime = new Date(dateObj.year, dateObj.month, dateObj.day, shiftTimes.start.hours, shiftTimes.start.minutes, 0, 0);
+            const gracePeriodMs = 15 * 60 * 1000; // 15 minutes
+            if (now.getTime() > startDateTime.getTime() + gracePeriodMs && !attInfo.hasCheckIn && dateStr) {
+              const alertId = `anomaly_no_checkin_${asg.id}_${dateStr}`;
+              if (!syncedAlertsRef.current.has(alertId)) {
+                syncedAlertsRef.current.add(alertId);
+                const anomalyDoc = {
+                  id: alertId,
+                  anomalyId: alertId,
+                  type: 'Missed Shift Check-In',
+                  eventType: 'MISSED_CHECK_IN',
+                  category: 'Attendance Anomaly',
+                  title: 'AI Anomaly: No Shift Check-In Detected',
+                  description: `Employee ${empName} has not checked in for assigned shift (${shiftStr}) on ${dateStr} at ${siteName} within the scheduled start time.`,
+                  employeeName: empName,
+                  employeeId: empId,
+                  employeeEmail: empEmail,
+                  siteName: siteName,
+                  location: siteName,
+                  shift: shiftStr,
+                  date: dateStr,
+                  assignmentId: asg.id,
+                  severity: 'High',
+                  confidence: '94%',
+                  status: 'Active',
+                  createdAt: Date.now(),
+                  timestamp: new Date().toISOString(),
+                  sourceCollection: 'ai_analysis'
+                };
+                await setDoc(doc(db, 'ai_analysis', alertId), anomalyDoc, { merge: true }).catch(() => {});
+                await setDoc(doc(db, 'ActivityLogs', alertId), {
+                  ...anomalyDoc,
+                  action: 'Anomaly Detected',
+                  type: 'Security Anomaly'
+                }, { merge: true }).catch(() => {});
+              }
+            }
+          }
         }
 
         // ── 3. Auto-resolve anomalies if employee checks in / checks out ──
         if (attInfo.hasCheckIn && dateStr) {
           const checkInAlertId = `anomaly_no_checkin_${asg.id}_${dateStr}`;
-          updateDoc(doc(db, 'ai_analysis', checkInAlertId), {
-            status: 'Resolved',
-            resolvedAt: Date.now(),
-            resolutionNote: 'Check-in recorded'
-          }).catch(() => {});
+          if (syncedAlertsRef.current.has(checkInAlertId) && !resolvedAlertsRef.current.has(checkInAlertId)) {
+            resolvedAlertsRef.current.add(checkInAlertId);
+            updateDoc(doc(db, 'ai_analysis', checkInAlertId), {
+              status: 'Resolved',
+              resolvedAt: Date.now(),
+              resolutionNote: 'Check-in recorded'
+            }).catch(() => {});
+          }
         }
         if (attInfo.hasCheckOut && dateStr) {
           const checkOutAlertId = `anomaly_no_checkout_${asg.id}_${dateStr}`;
-          updateDoc(doc(db, 'ai_analysis', checkOutAlertId), {
-            status: 'Resolved',
-            resolvedAt: Date.now(),
-            resolutionNote: 'Check-out recorded'
-          }).catch(() => {});
+          if (syncedAlertsRef.current.has(checkOutAlertId) && !resolvedAlertsRef.current.has(checkOutAlertId)) {
+            resolvedAlertsRef.current.add(checkOutAlertId);
+            updateDoc(doc(db, 'ai_analysis', checkOutAlertId), {
+              status: 'Resolved',
+              resolvedAt: Date.now(),
+              resolutionNote: 'Check-out recorded'
+            }).catch(() => {});
+          }
         }
       } catch (err) {
         console.warn('Assignment anomaly check error:', err);
       }
     });
-  }, [data, attendance]);
+  }, [tick, data.length]);
 
   const totalAssignments = data.length || 1;
 
