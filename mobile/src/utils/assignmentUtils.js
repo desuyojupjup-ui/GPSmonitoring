@@ -27,23 +27,8 @@ function parseTimeToHoursMinutes(timeStr) {
   return null;
 }
 
-/**
- * Returns true if the assignment is expired/done and should NOT be shown to the employee.
- * Checks both the scheduled assignment date and shift end time (e.g. 05:00 PM).
- */
-export function isAssignmentDatePassed(asg) {
-  if (!asg) return true;
-  const status = (asg.status || '').toString().trim().toLowerCase();
-  
-  // Explicitly terminated statuses
-  if (status === 'completed' || status === 'cancelled' || status === 'archived' || status === 'expired' || status === 'inactive' || status === 'missed shift' || status === 'missing check-out' || status === 'unattended' || status === 'incomplete') {
-    return true;
-  }
-
-  // Check scheduled assignment date and shift end time
-  const rawDate = asg.assignDate || asg.scheduleDate || asg.date || asg.assignmentDate || asg.scheduledDate || asg.endDate;
-  if (!rawDate) return false;
-
+export function extractAssignmentDateParts(rawDate) {
+  if (!rawDate) return null;
   let y, m, d;
   if (rawDate?.toDate && typeof rawDate.toDate === 'function') {
     try { const dt = rawDate.toDate(); y = dt.getFullYear(); m = dt.getMonth(); d = dt.getDate(); } catch (_) {}
@@ -68,43 +53,113 @@ export function isAssignmentDatePassed(asg) {
     }
   }
 
-  if (y === undefined || m === undefined || d === undefined) return false;
+  if (y === undefined || m === undefined || d === undefined) return null;
+  return { year: y, month: m, day: d };
+}
 
-  // Resolve shift times
-  let startStr = asg.shiftStart || asg.startTime || '';
-  let endStr = asg.shiftEnd || asg.endTime || '';
-
-  if ((!startStr || !endStr) && (asg.shift || asg.shiftTime)) {
-    const shiftStr = asg.shift || asg.shiftTime || '';
-    const parts = shiftStr.split(/\s*[-~]|(?:\s+to\s+)\s*/i).filter(Boolean);
-    if (parts.length >= 2) {
-      if (!startStr) startStr = parts[0].trim();
-      if (!endStr) endStr = parts[1].trim();
-    } else if (parts.length === 1 && !endStr) {
-      endStr = parts[0].trim();
-    }
+/**
+ * Returns true if the assignment is expired/done and should NOT be shown to the employee.
+ * Checks terminated statuses, past calendar dates, and shift end times.
+ */
+export function isAssignmentDatePassed(asg) {
+  if (!asg) return true;
+  const status = (asg.status || '').toString().trim().toLowerCase();
+  
+  // Explicitly terminated or completed/missed statuses
+  if (
+    status === 'completed' || 
+    status === 'cancelled' || 
+    status === 'archived' || 
+    status === 'expired' || 
+    status === 'inactive' || 
+    status === 'missed shift' || 
+    status === 'missing check-out' || 
+    status === 'unattended' || 
+    status === 'incomplete' ||
+    status.includes('missed') ||
+    status.includes('completed') ||
+    status.includes('cancel') ||
+    status.includes('expired')
+  ) {
+    return true;
   }
 
-  const startParsed = parseTimeToHoursMinutes(startStr);
-  const endParsed = parseTimeToHoursMinutes(endStr);
+  // Check scheduled assignment date and shift end time
+  const rawDate = asg.assignDate || asg.scheduleDate || asg.date || asg.assignmentDate || asg.scheduledDate || asg.endDate || asg.assignedOn || asg.assignedAt;
+  if (!rawDate) return false;
 
-  let endHour = 23;
-  let endMin = 59;
-  let endSec = 59;
-  let isNextDay = false;
+  const dtParts = extractAssignmentDateParts(rawDate);
+  if (!dtParts) return false;
 
-  if (endParsed) {
-    endHour = endParsed.hours;
-    endMin = endParsed.minutes;
-    endSec = endParsed.seconds || 0;
+  const { year: y, month: m, day: d } = dtParts;
+  const now = new Date();
+  const nowY = now.getFullYear();
+  const nowM = now.getMonth();
+  const nowD = now.getDate();
 
-    if (startParsed && endParsed.hours < startParsed.hours) {
-      isNextDay = true;
+  // 1. If scheduled assignment date is strictly before today's calendar date, it has PASSED
+  if (y < nowY) return true;
+  if (y === nowY && m < nowM) return true;
+  if (y === nowY && m === nowM && d < nowD) return true;
+
+  // 2. If scheduled for today, check if shift end time has already elapsed
+  if (y === nowY && m === nowM && d === nowD) {
+    let startStr = asg.shiftStart || asg.startTime || '';
+    let endStr = asg.shiftEnd || asg.endTime || '';
+
+    if ((!startStr || !endStr) && (asg.shift || asg.shiftTime)) {
+      const shiftStr = asg.shift || asg.shiftTime || '';
+      const parts = shiftStr.split(/\s*[-~]|(?:\s+to\s+)\s*/i).filter(Boolean);
+      if (parts.length >= 2) {
+        if (!startStr) startStr = parts[0].trim();
+        if (!endStr) endStr = parts[1].trim();
+      } else if (parts.length === 1 && !endStr) {
+        endStr = parts[0].trim();
+      }
     }
+
+    const startParsed = parseTimeToHoursMinutes(startStr);
+    const endParsed = parseTimeToHoursMinutes(endStr);
+
+    let endHour = 23;
+    let endMin = 59;
+    let endSec = 59;
+    let isNextDay = false;
+
+    if (endParsed) {
+      endHour = endParsed.hours;
+      endMin = endParsed.minutes;
+      endSec = endParsed.seconds || 0;
+
+      if (startParsed && endParsed.hours < startParsed.hours) {
+        isNextDay = true;
+      }
+    }
+
+    const endDateTime = new Date(y, m, isNextDay ? d + 1 : d, endHour, endMin, endSec, 999);
+    return now.getTime() >= endDateTime.getTime();
   }
 
-  const endDateTime = new Date(y, m, isNextDay ? d + 1 : d, endHour, endMin, endSec, 999);
-  return Date.now() >= endDateTime.getTime();
+  // Future scheduled assignment
+  return false;
+}
+
+/**
+ * Returns true if the assignment is scheduled and currently active for TODAY.
+ * If the date is passed, or shift ended, or status is completed/missed, returns false.
+ */
+export function isAssignmentActiveToday(asg) {
+  if (!asg) return false;
+  if (isAssignmentDatePassed(asg)) return false;
+
+  const rawDate = asg.assignDate || asg.scheduleDate || asg.date || asg.assignmentDate || asg.scheduledDate || asg.endDate || asg.assignedOn || asg.assignedAt;
+  if (!rawDate) return true;
+
+  const dtParts = extractAssignmentDateParts(rawDate);
+  if (!dtParts) return true;
+
+  const now = new Date();
+  return dtParts.year === now.getFullYear() && dtParts.month === now.getMonth() && dtParts.day === now.getDate();
 }
 
 /**
@@ -308,41 +363,29 @@ export function isMobileFieldWithoutSite(emp, asg, site) {
   const isMobile = wt === 'mobile field employee' || wt.includes('mobile');
   if (!isMobile) return false;
 
-  // 1. Check assignedSites array on employee
-  if (Array.isArray(emp.assignedSites) && emp.assignedSites.length > 0) {
-    const valid = emp.assignedSites.filter(s => s && typeof s === 'string' && s.trim() && s.trim().toLowerCase() !== 'unassigned' && s.trim().toLowerCase() !== 'none');
-    if (valid.length > 0) return false;
+  // If the assignment is passed, completed, or missed, it does NOT count as an active worksite
+  if (asg && isAssignmentDatePassed(asg)) {
+    return true;
   }
 
-  // 2. Check assignedDestinations array on employee
-  if (Array.isArray(emp.assignedDestinations) && emp.assignedDestinations.length > 0) {
-    const valid = emp.assignedDestinations.filter(s => s && typeof s === 'string' && s.trim() && s.trim().toLowerCase() !== 'unassigned' && s.trim().toLowerCase() !== 'none');
-    if (valid.length > 0) return false;
-  }
-
-  // 3. Check assignedSite string on employee
-  const rawSite = (emp.assignedSite || emp.site || emp.assignedSiteName || '').toString().trim();
-  if (rawSite && rawSite.toLowerCase() !== 'unassigned' && rawSite.toLowerCase() !== 'none') {
-    return false;
-  }
-
-  // 4. Check assignedSites array on active assignment
+  // 1. Check assignedSites array on active assignment
   if (Array.isArray(asg?.assignedSites) && asg.assignedSites.length > 0) {
     const valid = asg.assignedSites.filter(s => s && typeof s === 'string' && s.trim() && s.trim().toLowerCase() !== 'unassigned' && s.trim().toLowerCase() !== 'none');
     if (valid.length > 0) return false;
   }
 
-  // 5. Check active assignment site string or site object
+  // 2. Check active assignment site string or site object
   const asgSite = (asg?.site || asg?.siteName || site?.name || '').toString().trim();
   if (asgSite && asgSite.toLowerCase() !== 'unassigned' && asgSite.toLowerCase() !== 'none') {
     return false;
   }
 
-  // 6. Check site array
+  // 3. Check site array
   if (Array.isArray(site) && site.length > 0) {
     return false;
   }
 
+  // If no active valid assignment or site is currently scheduled, mobile field employee is blocked
   return true;
 }
 

@@ -5,7 +5,7 @@ import { WebView } from 'react-native-webview';
 import * as Location from 'expo-location';
 import { auth, db, collection, addDoc, serverTimestamp, getDocs, onSnapshot, ensureAuthenticatedSession, getCleanEmployeeEmail } from '../firebase';
 import { Ionicons } from '@expo/vector-icons';
-import { isAssignmentDatePassed, resolveShift, isAssignmentForEmployee, deduplicateAssignments } from '../utils/assignmentUtils';
+import { isAssignmentDatePassed, isAssignmentActiveToday, resolveShift, isAssignmentForEmployee, deduplicateAssignments } from '../utils/assignmentUtils';
 
 function resolveSiteDetails(siteObj, targetSiteName, selectedAsg) {
   if (!siteObj && !selectedAsg && (!targetSiteName || targetSiteName === 'Unassigned Site' || targetSiteName === 'Unassigned')) {
@@ -413,7 +413,7 @@ export default function MapScreen({ navigation, route, user: propUser }) {
       return 0;
     };
 
-    const cleanDocs = asgDocs.filter(a => a && a.id !== 'asg1' && !isAssignmentDatePassed(a));
+    const cleanDocs = asgDocs.filter(a => a && a.id !== 'asg1' && !isAssignmentDatePassed(a) && isAssignmentActiveToday(a));
     const empAsg = cleanDocs.length > 0 ? cleanDocs.filter(a => isAssignmentForEmployee(a, emp, emailToUse, currentUserName)) : [];
     empAsg.sort((a, b) => getTs(b) - getTs(a));
 
@@ -519,7 +519,8 @@ export default function MapScreen({ navigation, route, user: propUser }) {
 
     // 3. Fallback: ONLY if employee has NO explicit assignment records in the database,
     // check employee profile assignedSites or assignedSite.
-    const hasEmployeeAssignmentsInDb = cleanDocs.some(a => isAssignmentForEmployee(a, emp, emailToUse, currentUserName));
+    // Must check all asgDocs so completed/missed assignments don't trigger profile fallbacks!
+    const hasEmployeeAssignmentsInDb = asgDocs.some(a => isAssignmentForEmployee(a, emp, emailToUse, currentUserName));
 
     if (gatheredSites.length === 0 && emp && !hasEmployeeAssignmentsInDb) {
       if (Array.isArray(emp.assignedSites) && emp.assignedSites.length > 0) {

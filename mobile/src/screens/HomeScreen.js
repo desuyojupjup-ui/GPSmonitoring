@@ -38,7 +38,7 @@ import SecurityWarningModal from '../components/SecurityWarningModal';
 import { runPreAttendanceChecks } from '../services/securityService';
 import { getDeviceId } from '../services/deviceInfo';
 import { getPendingSyncCount, syncOfflineRecords, clearOfflineQueue } from '../services/offlineSyncService';
-import { isAssignmentDatePassed, resolveShift, isAssignmentForEmployee, deduplicateAssignments, isMobileFieldWithoutSite } from '../utils/assignmentUtils';
+import { isAssignmentDatePassed, isAssignmentActiveToday, resolveShift, isAssignmentForEmployee, deduplicateAssignments, isMobileFieldWithoutSite } from '../utils/assignmentUtils';
 import {
   startSession as schedulerStart,
   stopSession as schedulerStop,
@@ -486,7 +486,7 @@ export default function HomeScreen({ navigation, route, user: propUser }) {
       return 0;
     };
 
-    const cleanDocs = asgDocs.filter(a => a && a.id !== 'asg1' && !isAssignmentDatePassed(a));
+    const cleanDocs = asgDocs.filter(a => a && a.id !== 'asg1' && !isAssignmentDatePassed(a) && isAssignmentActiveToday(a));
     const empAsg = cleanDocs.length > 0 ? cleanDocs.filter(a => isAssignmentForEmployee(a, emp, emailToUse, currentUserName)) : [];
     empAsg.sort((a, b) => getTs(b) - getTs(a));
 
@@ -592,7 +592,8 @@ export default function HomeScreen({ navigation, route, user: propUser }) {
 
     // 3. Fallback: ONLY if employee has NO explicit assignment records in the database,
     // check employee profile assignedSites or assignedSite.
-    const hasEmployeeAssignmentsInDb = cleanDocs.some(a => isAssignmentForEmployee(a, emp, emailToUse, currentUserName));
+    // Must check all asgDocs (including completed/missed) so expired or missed shifts do not resurrect profile sites!
+    const hasEmployeeAssignmentsInDb = asgDocs.some(a => isAssignmentForEmployee(a, emp, emailToUse, currentUserName));
 
     if (gatheredSites.length === 0 && emp && !hasEmployeeAssignmentsInDb) {
       if (Array.isArray(emp.assignedSites) && emp.assignedSites.length > 0) {
@@ -727,6 +728,15 @@ export default function HomeScreen({ navigation, route, user: propUser }) {
   const handleCheckIn = async () => {
     if (!employee) {
       Alert.alert('Error', 'Employee profile loading...');
+      return;
+    }
+
+    if (!assignment || assignedSitesList.length === 0 || isAssignmentDatePassed(assignment)) {
+      Alert.alert(
+        'Check-In Blocked',
+        'You have no active worksite assignment scheduled for today. Past shifts that have ended or were missed cannot be checked into.',
+        [{ text: 'OK' }]
+      );
       return;
     }
 
@@ -1177,9 +1187,9 @@ export default function HomeScreen({ navigation, route, user: propUser }) {
                 Status: <Text style={{ fontWeight: '700', color: statusColor }}>{displayStatus}</Text>
               </Text>
             </View>
-            <View style={[styles.shiftBadge, !assignment && { backgroundColor: '#F3F4F6' }]}>
-              <Text style={[styles.shiftText, !assignment && { color: '#6B7280' }]}>
-                {assignment ? resolveShift(assignment, employee) : 'Unassigned'}
+            <View style={[styles.shiftBadge, (!assignment || assignedSitesList.length === 0) && { backgroundColor: '#F3F4F6' }]}>
+              <Text style={[styles.shiftText, (!assignment || assignedSitesList.length === 0) && { color: '#6B7280' }]}>
+                {assignment && assignedSitesList.length > 0 ? resolveShift(assignment, employee) : 'No Shift Scheduled'}
               </Text>
             </View>
           </View>
@@ -1226,14 +1236,37 @@ export default function HomeScreen({ navigation, route, user: propUser }) {
               <Ionicons name="location-sharp" size={18} color="#9CA3AF" />
               <View style={{ flex: 1, marginLeft: 8 }}>
                 <Text style={styles.siteName}>No Active Site Assignment</Text>
-                <Text style={styles.siteAddress}>No active site assigned by administrator</Text>
+                <Text style={styles.siteAddress}>No active worksite assigned for today</Text>
               </View>
               <Ionicons name="chevron-forward" size={16} color="#9CA3AF" />
             </TouchableOpacity>
           )}
 
+          {/* Warning Banner if No Active Shift Today */}
+          {(!assignment || assignedSitesList.length === 0) && (
+            <View style={{
+              flexDirection: 'row',
+              alignItems: 'center',
+              backgroundColor: '#FEF2F2',
+              borderWidth: 1,
+              borderColor: '#FCA5A5',
+              borderRadius: 12,
+              padding: 12,
+              marginBottom: 12,
+              gap: 8
+            }}>
+              <Ionicons name="alert-circle" size={20} color="#DC2626" />
+              <View style={{ flex: 1 }}>
+                <Text style={{ fontSize: 13, fontWeight: '700', color: '#991B1B' }}>Check-In & Check-Out Locked</Text>
+                <Text style={{ fontSize: 11, color: '#B91C1C', marginTop: 2 }}>
+                  You have no active worksite assignment for today. Shifts whose date has passed or are missed/completed are automatically removed.
+                </Text>
+              </View>
+            </View>
+          )}
+
           {/* Warning Banner if Mobile Field Employee has no assigned site */}
-          {isMobileFieldWithoutSite(employee, assignment, site) && (
+          {assignment && assignedSitesList.length > 0 && isMobileFieldWithoutSite(employee, assignment, site) && (
             <View style={{
               flexDirection: 'row',
               alignItems: 'center',
@@ -1261,15 +1294,20 @@ export default function HomeScreen({ navigation, route, user: propUser }) {
               <TouchableOpacity
                 style={[
                   styles.checkInBtn, 
-                  (checking || isMobileFieldWithoutSite(employee, assignment, site)) && { opacity: 0.6, backgroundColor: isMobileFieldWithoutSite(employee, assignment, site) ? '#94A3B8' : styles.checkInBtn.backgroundColor }
+                  (checking || !assignment || assignedSitesList.length === 0 || isAssignmentDatePassed(assignment) || isMobileFieldWithoutSite(employee, assignment, site)) && { 
+                    opacity: 0.6, 
+                    backgroundColor: '#94A3B8' 
+                  }
                 ]}
                 onPress={handleCheckIn}
-                disabled={checking}
+                disabled={checking || !assignment || assignedSitesList.length === 0 || isAssignmentDatePassed(assignment)}
               >
                 {checking ? <ActivityIndicator color="#fff" /> : (
                   <>
                     <Ionicons name="log-in-outline" size={20} color="white" />
-                    <Text style={styles.btnText}>Check In</Text>
+                    <Text style={styles.btnText}>
+                      {(!assignment || assignedSitesList.length === 0 || isAssignmentDatePassed(assignment)) ? 'Check-In Unavailable' : 'Check In'}
+                    </Text>
                   </>
                 )}
               </TouchableOpacity>
@@ -1429,9 +1467,9 @@ export default function HomeScreen({ navigation, route, user: propUser }) {
             <View style={{ width: 56, height: 56, borderRadius: 28, backgroundColor: '#F3F4F6', justifyContent: 'center', alignItems: 'center', marginBottom: 12 }}>
               <Ionicons name="briefcase-outline" size={26} color="#9CA3AF" />
             </View>
-            <Text style={{ fontSize: 15, fontWeight: '700', color: '#374151', marginBottom: 4 }}>No Active Assignment</Text>
+            <Text style={{ fontSize: 15, fontWeight: '700', color: '#374151', marginBottom: 4 }}>No Active Worksites</Text>
             <Text style={{ fontSize: 13, color: '#9CA3AF', textAlign: 'center', lineHeight: 18 }}>
-              Your admin has not assigned a site to you yet.
+              No active worksites scheduled for today.{'\n'}Missed, completed, or expired shifts are automatically removed.
             </Text>
           </View>
         )}

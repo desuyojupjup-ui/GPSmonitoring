@@ -575,6 +575,42 @@ export default function Assignments() {
               hasCheckOut: attInfo.hasCheckOut,
               updatedAt: Date.now()
             }).catch(() => {});
+
+            // If employee has no other active assignment, clear assigned sites from profile
+            const hasOtherActiveAsg = data.some(other => {
+              if (!other || other.id === asg.id) return false;
+              if (other.status === 'Cancelled' || other.status === 'Completed' || other.status === 'Missed Shift') return false;
+              if (isAssignmentEnded(other, now)) return false;
+              return matchesAssignmentEmployee(asg, other);
+            });
+
+            if (!hasOtherActiveAsg && (empId || empEmail || empName)) {
+              try {
+                const empSnap = await getDocs(collection(db, 'employees')).catch(() => null);
+                if (empSnap && !empSnap.empty) {
+                  for (const empDoc of empSnap.docs) {
+                    const eData = empDoc.data();
+                    const eMail = (eData.email || '').toLowerCase();
+                    const eName = (eData.name || '').toLowerCase();
+                    const eId = (eData.idNum || eData.id || empDoc.id || '').toString().toLowerCase();
+
+                    const isMatch = (empId && eId && eId === empId.toString().toLowerCase()) ||
+                                    (empEmail && eMail && eMail === empEmail.toLowerCase()) ||
+                                    (empName && eName && (eName === empName.toLowerCase() || eName.includes(empName.toLowerCase())));
+
+                    if (isMatch) {
+                      await updateDoc(doc(db, 'employees', empDoc.id), {
+                        assignedSite: 'Unassigned',
+                        assignedSiteId: '',
+                        assignedSites: [],
+                        assignedDestinations: [],
+                        updatedAt: Date.now()
+                      }).catch(() => {});
+                    }
+                  }
+                }
+              } catch (_) {}
+            }
           }
 
           // AI Anomaly Alert: No Shift Check-In Detected
