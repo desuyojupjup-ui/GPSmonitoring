@@ -81,6 +81,11 @@ export default function App() {
   useEffect(() => {
     let unsubscribe = () => {};
 
+    // Safety timer: ensure the loading splash screen is dismissed within 1.5s
+    const safetyTimer = setTimeout(() => {
+      setLoading(false);
+    }, 1500);
+
     // First restore our own AsyncStorage session so the splash screen
     // can show the cached user while Firebase catches up.
     loadUserSession().then((cachedUser) => {
@@ -93,6 +98,7 @@ export default function App() {
       }
 
       unsubscribe = onAuthStateChanged(auth, (authUser) => {
+        clearTimeout(safetyTimer);
         authInitialized.current = true;
         // CRITICAL: We only adopt authUser if it is a real employee and NOT the internal admin gateway account
         if (authUser && !authUser.email?.toLowerCase().includes('admin@')) {
@@ -110,11 +116,13 @@ export default function App() {
         setLoading(false);
       });
     }).catch(() => {
+      clearTimeout(safetyTimer);
       authInitialized.current = true;
       setLoading(false);
     });
 
     return () => {
+      clearTimeout(safetyTimer);
       unsubscribe();
       presenceService.stopPresence();
     };

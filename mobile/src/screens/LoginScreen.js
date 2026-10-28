@@ -12,8 +12,7 @@ import {
   Platform,
   Dimensions,
   ScrollView,
-  StatusBar,
-  ImageBackground
+  StatusBar
 } from 'react-native';
 import { Ionicons } from '@expo/vector-icons';
 import { 
@@ -45,21 +44,7 @@ const clearStaleCache = async () => {
 };
 
 const { width } = Dimensions.get('window');
-
-// ── CUSTOMIZE LOGIN CARD SIZE HERE ───────────────────────────────
-// login card.png is tightly cropped (850 x 1243), so the card is sized from
-// its real aspect ratio. Change CARD_WIDTH only; height follows automatically.
-const CARD_ASPECT = 850 / 1243;
-export const CARD_WIDTH = Math.min(width * 0.98, 420);
-export const CARD_HEIGHT = CARD_WIDTH / CARD_ASPECT;
-
-// Safe area of the white card body (as % of the card image), measured to
-// avoid the side tabs and the chamfered corners.
-const INSET_TOP = CARD_HEIGHT * 0.068;
-const INSET_BOTTOM = CARD_HEIGHT * 0.16;
-const INSET_LEFT = CARD_WIDTH * 0.127;
-const INSET_RIGHT = CARD_WIDTH * 0.134;
-// ─────────────────────────────────────────────────────────────────
+export const CARD_WIDTH = Math.min(width * 0.92, 400);
 
 export default function LoginScreen({ navigation, route, onLogin: propOnLogin }) {
   const onLogin = propOnLogin || route?.params?.onLogin;
@@ -254,135 +239,121 @@ export default function LoginScreen({ navigation, route, onLogin: propOnLogin })
 
   return (
     <View style={styles.mainContainer}>
-      <StatusBar barStyle="dark-content" backgroundColor="transparent" translucent />
-      <ImageBackground
-        source={require('../../assets/login_background.jpg')}
-        style={styles.bgContainer}
-        resizeMode="cover"
+      <StatusBar barStyle="dark-content" backgroundColor="#F8FAFC" />
+      <KeyboardAvoidingView
+        style={{ flex: 1 }}
+        behavior={Platform.OS === 'ios' ? 'padding' : undefined}
       >
-        <KeyboardAvoidingView
-          style={{ flex: 1 }}
-          behavior={Platform.OS === 'ios' ? 'padding' : undefined}
+        <ScrollView
+          contentContainerStyle={styles.scrollContent}
+          keyboardShouldPersistTaps="handled"
+          showsVerticalScrollIndicator={false}
         >
-          <ScrollView
-            contentContainerStyle={styles.scrollContent}
-            keyboardShouldPersistTaps="handled"
-            showsVerticalScrollIndicator={false}
-          >
-            {/* ── Custom Cyber Login Card ── */}
-            <View style={styles.cardContainer}>
-              <ImageBackground
-                source={require('../../assets/login card.png')}
-                style={styles.cardImageBg}
-                resizeMode="stretch"
-              >
-                <View style={styles.cardContent}>
-                  {/* Brand Logo Header */}
-                  <View style={styles.brandRow}>
-                    <Image
-                      source={require('../../assets/logo.png')}
-                      style={styles.logo}
-                      resizeMode="contain"
+          {/* ── Native Modern Login Card ── */}
+          <View style={styles.card}>
+            {/* Brand Logo Header */}
+            <View style={styles.brandRow}>
+              <Image
+                source={require('../../assets/logo.png')}
+                style={styles.logo}
+                resizeMode="contain"
+              />
+            </View>
+
+            {/* Title & Subtitle */}
+            <Text style={styles.title}>Login</Text>
+            <Text style={styles.subtitle}>
+              Enter your assigned employee credentials to access presence tracking and field operations.
+            </Text>
+
+            {/* Divider line */}
+            <View style={styles.divider} />
+
+            {/* Input Form */}
+            <View style={styles.formContainer}>
+              {/* Email */}
+              <Text style={styles.inputLabel}>Email</Text>
+              <View style={styles.inputBox}>
+                <Ionicons name="mail-outline" size={18} color="#64748B" style={styles.fieldIcon} />
+                <TextInput
+                  style={styles.input}
+                  placeholder="Enter your email"
+                  placeholderTextColor="#94A3B8"
+                  value={email}
+                  onChangeText={setEmail}
+                  autoCapitalize="none"
+                  keyboardType="email-address"
+                  autoCorrect={false}
+                />
+              </View>
+
+              {/* Password */}
+              <Text style={styles.inputLabel}>Password</Text>
+              <View style={styles.inputBox}>
+                <Ionicons name="lock-closed-outline" size={18} color="#64748B" style={styles.fieldIcon} />
+                <TextInput
+                  style={styles.input}
+                  placeholder="Enter your password"
+                  placeholderTextColor="#94A3B8"
+                  value={password}
+                  onChangeText={setPassword}
+                  secureTextEntry={!showPassword}
+                />
+                {/* Eye icon only appears once a password is being typed */}
+                {password.length > 0 && (
+                  <TouchableOpacity
+                    onPress={() => setShowPassword(!showPassword)}
+                    style={styles.eyeBtn}
+                    activeOpacity={0.7}
+                    hitSlop={{ top: 8, bottom: 8, left: 8, right: 8 }}
+                  >
+                    <Ionicons
+                      name={showPassword ? 'eye-outline' : 'eye-off-outline'}
+                      size={18}
+                      color="#64748B"
                     />
-                  </View>
+                  </TouchableOpacity>
+                )}
+              </View>
 
-                  {/* Title & Subtitle */}
-                  <Text style={styles.title}>Login</Text>
-                  <Text style={styles.subtitle}>
-                    Enter your assigned employee credentials to access presence tracking and field operations.
-                  </Text>
+              {/* Remember Me Toggle */}
+              <TouchableOpacity
+                style={styles.rememberMeRow}
+                onPress={() => setRememberMe(!rememberMe)}
+                activeOpacity={0.7}
+              >
+                <Ionicons
+                  name={rememberMe ? 'checkbox' : 'square-outline'}
+                  size={20}
+                  color={rememberMe ? '#1D68EE' : '#94A3B8'}
+                />
+                <Text style={styles.rememberMeText}>Remember me</Text>
+              </TouchableOpacity>
 
-                  {/* Divider line as in design */}
-                  <View style={styles.divider} />
-
-                  {/* Input Form */}
-                  <View style={styles.formContainer}>
-                    {/* Email */}
-                    <Text style={styles.inputLabel}>Email</Text>
-                    <View style={styles.inputBox}>
-                      <Ionicons name="mail-outline" size={18} color="#64748B" style={styles.fieldIcon} />
-                      <TextInput
-                        style={styles.input}
-                        placeholder="Enter your email"
-                        placeholderTextColor="#94A3B8"
-                        value={email}
-                        onChangeText={setEmail}
-                        autoCapitalize="none"
-                        keyboardType="email-address"
-                        autoCorrect={false}
-                      />
-                    </View>
-
-                    {/* Password */}
-                    <Text style={styles.inputLabel}>Password</Text>
-                    <View style={styles.inputBox}>
-                      <Ionicons name="lock-closed-outline" size={18} color="#64748B" style={styles.fieldIcon} />
-                      <TextInput
-                        style={styles.input}
-                        placeholder="Enter your password"
-                        placeholderTextColor="#94A3B8"
-                        value={password}
-                        onChangeText={setPassword}
-                        secureTextEntry={!showPassword}
-                      />
-                      {/* Eye icon only appears once a password is being typed */}
-                      {password.length > 0 && (
-                        <TouchableOpacity
-                          onPress={() => setShowPassword(!showPassword)}
-                          style={styles.eyeBtn}
-                          activeOpacity={0.7}
-                          hitSlop={{ top: 8, bottom: 8, left: 8, right: 8 }}
-                        >
-                          <Ionicons
-                            name={showPassword ? 'eye-outline' : 'eye-off-outline'}
-                            size={18}
-                            color="#64748B"
-                          />
-                        </TouchableOpacity>
-                      )}
-                    </View>
-
-                    {/* Remember Me Toggle */}
-                    <TouchableOpacity
-                      style={styles.rememberMeRow}
-                      onPress={() => setRememberMe(!rememberMe)}
-                      activeOpacity={0.7}
-                    >
-                      <Ionicons
-                        name={rememberMe ? 'checkbox' : 'square-outline'}
-                        size={20}
-                        color={rememberMe ? '#1D68EE' : '#94A3B8'}
-                      />
-                      <Text style={styles.rememberMeText}>Remember me</Text>
-                    </TouchableOpacity>
-
-                    {/* Login Pill Button */}
-                    <TouchableOpacity
-                      style={styles.button}
-                      onPress={handleLogin}
-                      disabled={loading}
-                      activeOpacity={0.85}
-                    >
-                      {loading ? (
-                        <ActivityIndicator color="#FFFFFF" size="small" />
-                      ) : (
-                        <Text style={styles.buttonText}>Login</Text>
-                      )}
-                    </TouchableOpacity>
-                  </View>
-                </View>
-              </ImageBackground>
+              {/* Login Pill Button */}
+              <TouchableOpacity
+                style={styles.button}
+                onPress={handleLogin}
+                disabled={loading}
+                activeOpacity={0.85}
+              >
+                {loading ? (
+                  <ActivityIndicator color="#FFFFFF" size="small" />
+                ) : (
+                  <Text style={styles.buttonText}>Login</Text>
+                )}
+              </TouchableOpacity>
             </View>
+          </View>
 
-            {/* Footer */}
-            <View style={styles.footer}>
-              <Text style={styles.footerText}>
-                Authorized Employee Access • Fixed & Mobile Field Operations
-              </Text>
-            </View>
-          </ScrollView>
-        </KeyboardAvoidingView>
-      </ImageBackground>
+          {/* Footer */}
+          <View style={styles.footer}>
+            <Text style={styles.footerText}>
+              Authorized Employee Access • Fixed & Mobile Field Operations
+            </Text>
+          </View>
+        </ScrollView>
+      </KeyboardAvoidingView>
     </View>
   );
 }
@@ -390,63 +361,55 @@ export default function LoginScreen({ navigation, route, onLogin: propOnLogin })
 const styles = StyleSheet.create({
   mainContainer: {
     flex: 1,
-    backgroundColor: '#F1F5F9',
-  },
-  bgContainer: {
-    flex: 1,
-    width: '100%',
-    height: '100%',
+    backgroundColor: '#F8FAFC',
   },
   scrollContent: {
     flexGrow: 1,
     justifyContent: 'center',
     alignItems: 'center',
-    paddingHorizontal: 4,
-    paddingVertical: 20,
+    paddingHorizontal: 16,
+    paddingVertical: 24,
   },
-  cardContainer: {
+  card: {
     width: CARD_WIDTH,
-    alignItems: 'center',
-    justifyContent: 'center',
-  },
-  cardImageBg: {
-    width: CARD_WIDTH,
-    height: CARD_HEIGHT,
-  },
-  cardContent: {
-    flex: 1,
-    justifyContent: 'center',
-    paddingTop: INSET_TOP,
-    paddingBottom: INSET_BOTTOM,
-    paddingLeft: INSET_LEFT,
-    paddingRight: INSET_RIGHT,
+    backgroundColor: '#FFFFFF',
+    borderRadius: 24,
+    paddingHorizontal: 24,
+    paddingVertical: 28,
+    borderWidth: 1,
+    borderColor: '#E2E8F0',
+    shadowColor: '#0F172A',
+    shadowOffset: { width: 0, height: 6 },
+    shadowOpacity: 0.08,
+    shadowRadius: 16,
+    elevation: 4,
   },
   brandRow: {
     alignItems: 'flex-start',
-    marginBottom: 4,
+    marginBottom: 8,
   },
   logo: {
-    width: 98,
-    height: 31,
+    width: 120,
+    height: 40,
   },
   title: {
     fontSize: 24,
     fontWeight: '800',
     color: '#0F275A',
     marginTop: 4,
-    marginBottom: 2,
+    marginBottom: 4,
     letterSpacing: -0.3,
   },
   subtitle: {
-    fontSize: 11,
+    fontSize: 12,
     color: '#64748B',
-    lineHeight: 15,
-    marginBottom: 10,
+    lineHeight: 17,
+    marginBottom: 16,
   },
   divider: {
     height: 1,
     backgroundColor: '#E2E8F0',
-    marginBottom: 12,
+    marginBottom: 16,
     width: '100%',
   },
   formContainer: {
@@ -456,22 +419,24 @@ const styles = StyleSheet.create({
     fontSize: 12,
     fontWeight: '700',
     color: '#1E293B',
-    marginBottom: 4,
+    marginBottom: 6,
   },
   inputBox: {
     backgroundColor: '#F1F5F9',
     borderRadius: 14,
-    height: 44,
+    height: 46,
     paddingHorizontal: 14,
     flexDirection: 'row',
     alignItems: 'center',
-    marginBottom: 10,
+    marginBottom: 14,
+    borderWidth: 1,
+    borderColor: '#E2E8F0',
   },
   input: {
     flex: 1,
     height: '100%',
     color: '#0F172A',
-    fontSize: 13,
+    fontSize: 14,
   },
   fieldIcon: {
     marginRight: 10,
@@ -483,19 +448,19 @@ const styles = StyleSheet.create({
     flexDirection: 'row',
     alignItems: 'center',
     marginTop: 2,
-    marginBottom: 14,
+    marginBottom: 18,
     alignSelf: 'flex-start',
   },
   rememberMeText: {
     marginLeft: 8,
-    fontSize: 12.5,
+    fontSize: 13,
     fontWeight: '600',
     color: '#475569',
   },
   button: {
     backgroundColor: '#1A6BFF',
-    height: 46,
-    borderRadius: 23,
+    height: 48,
+    borderRadius: 24,
     justifyContent: 'center',
     alignItems: 'center',
     shadowColor: '#1A6BFF',
@@ -511,7 +476,7 @@ const styles = StyleSheet.create({
     letterSpacing: 0.2,
   },
   footer: {
-    marginTop: 14,
+    marginTop: 20,
     alignItems: 'center',
   },
   footerText: {

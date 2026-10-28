@@ -162,11 +162,7 @@ class PresenceService {
 
   async getQuickLocation() {
     try {
-      let { status } = await Location.getForegroundPermissionsAsync();
-      if (status !== 'granted') {
-        const req = await Location.requestForegroundPermissionsAsync();
-        status = req.status;
-      }
+      const { status } = await Location.getForegroundPermissionsAsync();
       if (status !== 'granted') {
         if (!this.lastFix) {
           try {
