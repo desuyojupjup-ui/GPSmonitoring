@@ -96,7 +96,7 @@ export default function AIAssistant() {
         text.includes('who is working')
       ) {
         if (employees.length === 0) return '👥 No employee records found in the database.';
-        const online = employees.filter(isEmployeeOnline);
+        const online = employees.filter(e => isEmployeeOnline(e));
         if (online.length === 0) {
           return `⚠️ **0 employees currently online.**\nAll ${employees.length} registered employee(s) are currently offline/inactive.`;
         }

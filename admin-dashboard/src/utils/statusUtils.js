@@ -1,8 +1,11 @@
 // Real-time Presence Evaluation (Account must be actively open with heartbeat <= 120s)
-export function isEmployeeOnline(emp, now = Date.now()) {
+export function isEmployeeOnline(emp, customNow) {
   if (!emp) return false;
   if (emp.isOnline === false) return false;
   if ((emp.status || '').toString().trim().toLowerCase() === 'offline') return false;
+
+  // Protect against Array.prototype.filter/map/forEach passing (item, index, array)
+  const now = (typeof customNow === 'number' && customNow > 1000000000000) ? customNow : Date.now();
 
   const rawTime = emp.lastActive || emp.lastHeartbeat || emp.lastSeen || emp.lastLocationUpdate || emp.updatedAt;
   if (rawTime) {
@@ -10,7 +13,8 @@ export function isEmployeeOnline(emp, now = Date.now()) {
       ? rawTime
       : (rawTime?.toDate ? rawTime.toDate().getTime() : new Date(rawTime).getTime());
     if (ts && !isNaN(ts)) {
-      return (now - ts) <= 120000; // 2 minutes active heartbeat window
+      const diff = now - ts;
+      return diff >= 0 && diff <= 120000; // 2 minutes active heartbeat window
     }
   }
 
@@ -20,7 +24,8 @@ export function isEmployeeOnline(emp, now = Date.now()) {
       ? emp.lastLogin
       : (emp.lastLogin?.toDate ? emp.lastLogin.toDate().getTime() : new Date(emp.lastLogin).getTime());
     if (loginTs && !isNaN(loginTs)) {
-      return (now - loginTs) <= 120000;
+      const diff = now - loginTs;
+      return diff >= 0 && diff <= 120000;
     }
   }
 
@@ -28,8 +33,9 @@ export function isEmployeeOnline(emp, now = Date.now()) {
 }
 
 // Real-time helper: resolve employee duty status
-export function resolveEmployeeStatus(emp, now = Date.now()) {
+export function resolveEmployeeStatus(emp, customNow) {
   if (!emp) return 'Offline';
+  const now = (typeof customNow === 'number' && customNow > 1000000000000) ? customNow : Date.now();
 
   // CRITICAL: If the employee is not actively online with a valid heartbeat, they are Offline!
   if (!isEmployeeOnline(emp, now)) {

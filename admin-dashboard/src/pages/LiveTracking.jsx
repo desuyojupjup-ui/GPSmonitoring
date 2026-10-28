@@ -22,10 +22,13 @@ const STATUS_BG = {
 };
 
 // Real-time Presence Evaluation (Account must be actively open with heartbeat <= 120s)
-export function isEmployeeOnline(emp, now = Date.now()) {
+export function isEmployeeOnline(emp, customNow) {
   if (!emp) return false;
   if (emp.isOnline === false) return false;
   if ((emp.status || '').toString().trim().toLowerCase() === 'offline') return false;
+
+  // Protect against Array.prototype.filter passing (item, index, array)
+  const now = (typeof customNow === 'number' && customNow > 1000000000000) ? customNow : Date.now();
 
   const rawTime = emp.lastActive || emp.lastHeartbeat || emp.lastSeen || emp.lastLocationUpdate || emp.updatedAt;
   if (rawTime) {
@@ -33,7 +36,8 @@ export function isEmployeeOnline(emp, now = Date.now()) {
       ? rawTime
       : (rawTime?.toDate ? rawTime.toDate().getTime() : new Date(rawTime).getTime());
     if (ts && !isNaN(ts)) {
-      return (now - ts) <= 120000; // 2 minutes active window
+      const diff = now - ts;
+      return diff >= 0 && diff <= 120000; // 2 minutes active window
     }
   }
 
@@ -42,14 +46,16 @@ export function isEmployeeOnline(emp, now = Date.now()) {
       ? emp.lastLogin
       : (emp.lastLogin?.toDate ? emp.lastLogin.toDate().getTime() : new Date(emp.lastLogin).getTime());
     if (loginTs && !isNaN(loginTs)) {
-      return (now - loginTs) <= 120000;
+      const diff = now - loginTs;
+      return diff >= 0 && diff <= 120000;
     }
   }
 
   return false;
 }
 
-export function getEmployeeStatus(emp, now = Date.now()) {
+export function getEmployeeStatus(emp, customNow) {
+  const now = (typeof customNow === 'number' && customNow > 1000000000000) ? customNow : Date.now();
   if (!isEmployeeOnline(emp, now)) return 'Offline';
   return (emp.status && emp.status !== 'Offline') ? emp.status : 'On Duty';
 }
@@ -211,7 +217,8 @@ export default function LiveTracking() {
     }
     return { ...emp, lat, lng };
   }).filter(e => e.lat && e.lng);
-  const onlineCount = employees.filter(isEmployeeOnline).length;
+  const onlineCount = employees.filter(e => isEmployeeOnline(e)).length;
+  const filteredOnlineCount = filtered.filter(e => isEmployeeOnline(e)).length;
 
   // Google Maps Tile Layers
   const tileUrls = {
@@ -483,8 +490,8 @@ export default function LiveTracking() {
               <div style={{ display: 'flex', flexDirection: 'column' }}>
                 <div style={{ padding: '12px 16px', fontSize: 11, fontWeight: 700, color: '#70757A', borderBottom: '1px solid #F1F3F4', letterSpacing: '0.05em', display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
                   <span>ACTIVE WORKFORCE ({filtered.length})</span>
-                  <span style={{ color: onlineCount > 0 ? '#1E8E3E' : '#70757A', fontWeight: 700, fontSize: 11 }}>
-                    {onlineCount} ONLINE
+                  <span style={{ color: filteredOnlineCount > 0 ? '#1E8E3E' : '#70757A', fontWeight: 700, fontSize: 11 }}>
+                    {filteredOnlineCount} ONLINE
                   </span>
                 </div>
                 {filtered.length === 0 ? (

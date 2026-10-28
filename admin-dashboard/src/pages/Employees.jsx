@@ -86,36 +86,41 @@ const STATUS_STYLE = {
   'Offline':    { background: '#F3F4F6', color: '#374151', dot: '#9CA3AF' },
 };
 
-// Real-time Presence Evaluation (Active when heartbeat or online flag is fresh within 120s)
-export function isEmployeeOnline(emp) {
+// Real-time Presence Evaluation (Active when heartbeat is fresh within 120s)
+export function isEmployeeOnline(emp, customNow) {
   if (!emp) return false;
   if (emp.isOnline === false) return false;
+  if ((emp.status || '').toString().trim().toLowerCase() === 'offline') return false;
 
-  const rawTime = emp.lastActive || emp.lastHeartbeat || emp.lastSeen;
+  const now = (typeof customNow === 'number' && customNow > 1000000000000) ? customNow : Date.now();
+
+  const rawTime = emp.lastActive || emp.lastHeartbeat || emp.lastSeen || emp.lastLocationUpdate || emp.updatedAt;
   if (rawTime) {
     const ts = typeof rawTime === 'number'
       ? rawTime
       : (rawTime?.toDate ? rawTime.toDate().getTime() : new Date(rawTime).getTime());
     if (ts && !isNaN(ts)) {
-      return (Date.now() - ts) <= 120000; // 2 minutes active window
+      const diff = now - ts;
+      return diff >= 0 && diff <= 120000; // 2 minutes active window
     }
   }
 
-  if (emp.isOnline === true) {
-    if (emp.lastLogin) {
-      const loginTs = new Date(emp.lastLogin).getTime();
-      if (loginTs && !isNaN(loginTs)) {
-        return (Date.now() - loginTs) <= 120000;
-      }
+  if (emp.lastLogin) {
+    const loginTs = typeof emp.lastLogin === 'number'
+      ? emp.lastLogin
+      : (emp.lastLogin?.toDate ? emp.lastLogin.toDate().getTime() : new Date(emp.lastLogin).getTime());
+    if (loginTs && !isNaN(loginTs)) {
+      const diff = now - loginTs;
+      return diff >= 0 && diff <= 120000;
     }
-    return true;
   }
 
   return false;
 }
 
-export function getEmployeeStatus(emp) {
-  if (!isEmployeeOnline(emp)) return 'Offline';
+export function getEmployeeStatus(emp, customNow) {
+  const now = (typeof customNow === 'number' && customNow > 1000000000000) ? customNow : Date.now();
+  if (!isEmployeeOnline(emp, now)) return 'Offline';
   return (emp.status && emp.status !== 'Offline') ? emp.status : 'Online';
 }
 
