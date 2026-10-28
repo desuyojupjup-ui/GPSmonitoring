@@ -561,6 +561,39 @@ export default function Assignments() {
             targetStatus = 'Missing Check-Out';
           }
 
+          // If Missed Shift, also create / sync record in Attendance collection
+          if (targetStatus === 'Missed Shift') {
+            const missedAttId = `att_missed_${asg.id}`;
+            const missedAttDoc = {
+              id: missedAttId,
+              attendanceId: missedAttId,
+              assignmentId: asg.id,
+              employee_name: empName,
+              employeeName: empName,
+              employee_id: empId,
+              employeeId: empId,
+              email: empEmail,
+              site_name: siteName,
+              siteName: siteName,
+              site: siteName,
+              date: dateStr,
+              check_in: 'Missed (No Check-in)',
+              check_out: '—',
+              timeIn: null,
+              timeOut: null,
+              duration: '0m',
+              status: 'Missed Shift',
+              verification: 'No Show',
+              shift: shiftStr,
+              inFence: false,
+              isMissedShift: true,
+              createdAt: asg.createdAt || Date.now(),
+              updatedAt: Date.now()
+            };
+            setDoc(doc(db, 'Attendance', missedAttId), missedAttDoc, { merge: true }).catch(() => {});
+            setDoc(doc(db, 'attendance', missedAttId), missedAttDoc, { merge: true }).catch(() => {});
+          }
+
           // Persistently sync status in Firestore if needed
           if (asg.status !== targetStatus) {
             await updateDoc(doc(db, 'Assignments', asg.id), {

@@ -44,8 +44,11 @@ function parseDate(ts) {
 
 function formatTime(ts) {
   if (!ts) return '--:--';
-  if (typeof ts === 'string' && /^\d{1,2}:\d{2}(\s?[APap][Mm])?$/.test(ts.trim())) {
-    return ts.trim();
+  if (typeof ts === 'string') {
+    if (ts.toLowerCase().includes('missed')) return 'Missed';
+    if (/^\d{1,2}:\d{2}(\s?[APap][Mm])?$/.test(ts.trim())) {
+      return ts.trim();
+    }
   }
   const d = parseDate(ts);
   if (!d) return '--:--';
@@ -89,6 +92,9 @@ const STATUS_COLOR = {
   'Flagged': { bg: '#FEE2E2', text: '#991B1B', dot: '#EF4444' },
   'Late': { bg: '#FEF3C7', text: '#92400E', dot: '#F59E0B' },
   'Present': { bg: '#DBEAFE', text: '#1E40AF', dot: '#3B82F6' },
+  'Missed Shift': { bg: '#FEE2E2', text: '#991B1B', dot: '#EF4444' },
+  'Absent': { bg: '#FEE2E2', text: '#991B1B', dot: '#EF4444' },
+  'Missed': { bg: '#FEE2E2', text: '#991B1B', dot: '#EF4444' },
 };
 function statusStyle(s) { return STATUS_COLOR[s] || { bg: '#F1F5F9', text: '#475569', dot: '#94A3B8' }; }
 
@@ -105,13 +111,14 @@ function StatBox({ icon, label, value, color }) {
 }
 
 function RecordCard({ record, onCheckOut }) {
+  const isMissed = record.status === 'Missed Shift' || record.status === 'Absent' || record.status === 'Missed';
   const ss = statusStyle(record.status);
   const canCheckOut = record.status === 'On Site' && !record.timeOut;
   return (
     <View style={styles.recordCard}>
       <View style={styles.recordTop}>
         <View style={{ flex: 1 }}>
-          <Text style={styles.recordDate}>{formatDate(record.timeIn || record.date)}</Text>
+          <Text style={styles.recordDate}>{formatDate(record.timeIn || record.date || record.createdAt)}</Text>
           <Text style={styles.recordSite} numberOfLines={1}>
             {record.siteName || record.site_name || record.site || '—'}
           </Text>
@@ -124,10 +131,12 @@ function RecordCard({ record, onCheckOut }) {
 
       <View style={styles.recordTimeline}>
         <View style={styles.timeBlock}>
-          <Ionicons name="log-in-outline" size={14} color="#10B981" />
+          <Ionicons name={isMissed ? "close-circle-outline" : "log-in-outline"} size={14} color={isMissed ? "#EF4444" : "#10B981"} />
           <View>
             <Text style={styles.timeLabel}>Check In</Text>
-            <Text style={styles.timeVal}>{formatTime(record.timeIn || record.checkIn)}</Text>
+            <Text style={[styles.timeVal, isMissed && { color: '#EF4444' }]}>
+              {isMissed ? 'Missed' : formatTime(record.timeIn || record.checkIn)}
+            </Text>
           </View>
         </View>
         <View style={styles.timelineLine} />
@@ -142,7 +151,7 @@ function RecordCard({ record, onCheckOut }) {
           <Ionicons name="time-outline" size={14} color="#6366F1" />
           <View>
             <Text style={styles.timeLabel}>Duration</Text>
-            <Text style={styles.timeVal}>{getDuration(record.timeIn || record.checkIn, record.timeOut)}</Text>
+            <Text style={styles.timeVal}>{isMissed ? '0m' : getDuration(record.timeIn || record.checkIn, record.timeOut)}</Text>
           </View>
         </View>
       </View>
@@ -212,7 +221,7 @@ export default function AttendanceScreen({ navigation, route, user: propUser }) 
       const eid = (emp?.id || uid).toLowerCase();
       const ename = (emp?.name || formattedName).toLowerCase();
 
-      const rid = (r.employee_id || '').toLowerCase();
+      const rid = (r.employee_id || r.employeeId || '').toLowerCase();
       const rname = (r.employeeName || r.employee_name || '').toLowerCase();
       const remail = (r.email || '').toLowerCase();
 
@@ -228,8 +237,8 @@ export default function AttendanceScreen({ navigation, route, user: propUser }) 
     const commit = () => {
       const all = Object.values(records);
       all.sort((a, b) => {
-        const ta = a.timeIn?.toMillis?.() ?? a.timeIn ?? 0;
-        const tb = b.timeIn?.toMillis?.() ?? b.timeIn ?? 0;
+        const ta = a.timeIn?.toMillis?.() ?? a.timeIn ?? a.createdAt ?? 0;
+        const tb = b.timeIn?.toMillis?.() ?? b.timeIn ?? b.createdAt ?? 0;
         return tb - ta;
       });
       const recKey = JSON.stringify(all.map(r => ({ id: r.id, timeIn: r.timeIn, timeOut: r.timeOut, status: r.status })));
@@ -237,7 +246,9 @@ export default function AttendanceScreen({ navigation, route, user: propUser }) 
         lastAttKeyRef.current = recKey;
         setAllRecords(all);
         const today = new Date();
-        setTodayRecord(all.find(r => isSameDay(r.timeIn || r.date, today)) || null);
+        const todays = all.filter(r => isSameDay(r.timeIn || r.date || r.createdAt, today));
+        const activeToday = todays.find(r => r.status !== 'Missed Shift' && r.status !== 'Absent' && r.status !== 'Missed');
+        setTodayRecord(activeToday || todays[0] || null);
       }
       setLoading(false);
     };
@@ -279,7 +290,9 @@ export default function AttendanceScreen({ navigation, route, user: propUser }) 
       return;
     }
 
-    if (todayRecord) return Alert.alert('Already Checked In', 'You have already checked in today.');
+    if (todayRecord && todayRecord.status !== 'Missed Shift' && todayRecord.status !== 'Absent' && todayRecord.status !== 'Missed') {
+      return Alert.alert('Already Checked In', 'You have already checked in today.');
+    }
     setChecking(true);
     try {
       const { status } = await Location.requestForegroundPermissionsAsync();
@@ -397,14 +410,16 @@ export default function AttendanceScreen({ navigation, route, user: propUser }) 
     return dt.getMonth() === now.getMonth() && dt.getFullYear() === now.getFullYear();
   });
 
-  const daysWorked = thisMonthRecs.length;
+  const daysWorked = thisMonthRecs.filter(r => r.status !== 'Missed Shift' && r.status !== 'Absent' && r.status !== 'Missed').length;
+  const missedCount = thisMonthRecs.filter(r => r.status === 'Missed Shift' || r.status === 'Absent' || r.status === 'Missed').length;
   const onTimeCount = thisMonthRecs.filter(r => r.status === 'On Site' || r.status === 'Completed' || r.status === 'Present').length;
   const lateCount = thisMonthRecs.filter(r => r.status === 'Late' || r.status === 'Flagged').length;
-  const monthRate = daysWorked > 0 ? Math.round((onTimeCount / daysWorked) * 100) : 100;
+  const totalShifts = daysWorked + missedCount;
+  const monthRate = totalShifts > 0 ? Math.round((onTimeCount / totalShifts) * 100) : 100;
 
   // Filter records for list
   const filteredRecords = allRecords.filter(r => {
-    if (filterMonth === 'today') return isSameDay(r.timeIn || r.date, now);
+    if (filterMonth === 'today') return isSameDay(r.timeIn || r.date || r.createdAt, now);
     if (filterMonth === 'thisMonth') return thisMonthRecs.includes(r);
     return true;
   });
@@ -415,7 +430,8 @@ export default function AttendanceScreen({ navigation, route, user: propUser }) 
     { key: 'today', label: 'Today' },
   ];
 
-  const checkedIn = !!todayRecord;
+  const isMissedToday = todayRecord && (todayRecord.status === 'Missed Shift' || todayRecord.status === 'Absent' || todayRecord.status === 'Missed');
+  const checkedIn = !!todayRecord && !isMissedToday;
   const checkedOut = checkedIn && !!todayRecord?.timeOut;
 
   if (loading) {
@@ -454,22 +470,27 @@ export default function AttendanceScreen({ navigation, route, user: propUser }) 
               <Text style={styles.todayLabel}>Today's Attendance</Text>
               <Text style={styles.todayDate}>{now.toLocaleDateString('en-US', { weekday: 'long', month: 'long', day: 'numeric' })}</Text>
             </View>
-            {checkedIn && (
+            {isMissedToday ? (
+              <View style={[styles.statusBadge, { backgroundColor: '#FEE2E2' }]}>
+                <View style={[styles.statusDot, { backgroundColor: '#EF4444' }]} />
+                <Text style={[styles.statusText, { color: '#991B1B' }]}>Missed Shift</Text>
+              </View>
+            ) : checkedIn ? (
               <View style={[styles.statusBadge, { backgroundColor: checkedOut ? '#EDE9FE' : '#D1FAE5' }]}>
                 <View style={[styles.statusDot, { backgroundColor: checkedOut ? '#7C3AED' : '#10B981' }]} />
                 <Text style={[styles.statusText, { color: checkedOut ? '#5B21B6' : '#065F46' }]}>
                   {checkedOut ? 'Completed' : 'On Site'}
                 </Text>
               </View>
-            )}
+            ) : null}
           </View>
 
           {/* Time row */}
           <View style={styles.todayTimes}>
             <View style={styles.todayTimeBox}>
               <Text style={styles.todayTimeLabel}>Check In</Text>
-              <Text style={[styles.todayTimeVal, { color: '#10B981' }]}>
-                {checkedIn ? formatTime(todayRecord.timeIn) : '--:--'}
+              <Text style={[styles.todayTimeVal, { color: isMissedToday ? '#EF4444' : '#10B981' }]}>
+                {isMissedToday ? 'Missed' : (checkedIn ? formatTime(todayRecord.timeIn || todayRecord.checkIn) : '--:--')}
               </Text>
             </View>
             <View style={styles.todayDivider} />
@@ -483,13 +504,13 @@ export default function AttendanceScreen({ navigation, route, user: propUser }) 
             <View style={styles.todayTimeBox}>
               <Text style={styles.todayTimeLabel}>Duration</Text>
               <Text style={[styles.todayTimeVal, { color: '#6366F1' }]}>
-                {checkedOut ? getDuration(todayRecord.timeIn, todayRecord.timeOut) : '--'}
+                {isMissedToday ? '0m' : (checkedOut ? getDuration(todayRecord.timeIn, todayRecord.timeOut) : '--')}
               </Text>
             </View>
           </View>
 
           {/* Site Row */}
-          {checkedIn && (
+          {(checkedIn || isMissedToday) && (
             <View style={styles.siteRow}>
               <Ionicons name="location-sharp" size={14} color="#4F46E5" />
               <Text style={styles.siteRowText}>{todayRecord.siteName || todayRecord.site_name || 'Unassigned Site'}</Text>
@@ -521,7 +542,12 @@ export default function AttendanceScreen({ navigation, route, user: propUser }) 
 
           {/* Action Buttons */}
           <View style={styles.todayActions}>
-            {!checkedIn ? (
+            {isMissedToday ? (
+              <View style={styles.doneRow}>
+                <Ionicons name="close-circle" size={18} color="#EF4444" />
+                <Text style={[styles.doneText, { color: '#EF4444' }]}>Shift missed for today</Text>
+              </View>
+            ) : !checkedIn ? (
               <TouchableOpacity
                 style={[
                   styles.actionBtn, 

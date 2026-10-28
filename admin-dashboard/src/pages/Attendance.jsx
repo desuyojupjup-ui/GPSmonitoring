@@ -1,7 +1,8 @@
 import React, { useState, useEffect } from 'react';
 import { useLocation } from 'react-router-dom';
 import { Download, FileText, Calendar, Users, MapPin, CheckCircle, Search, Filter, ChevronDown, Clock, XCircle, StopCircle, RefreshCw, Trash2, Activity, ShieldCheck, TrendingUp, UserCheck, Smile, Award } from 'lucide-react';
-import { db, collection, onSnapshot, query, orderBy, limit, deleteDoc, doc } from '../firebase';
+import { db, collection, onSnapshot, query, orderBy, limit, deleteDoc, doc, setDoc } from '../firebase';
+import { isAssignmentEnded } from './Assignments';
 import { showToast, showConfirmDelete } from '../utils/toast';
 import { ResponsiveContainer, PieChart, Pie, Cell, AreaChart, Area, BarChart, Bar, XAxis, YAxis, Tooltip, CartesianGrid } from 'recharts';
 
@@ -54,14 +55,17 @@ const CustomAreaTooltip = ({ active, payload }) => {
 };
 
 const STATUS_STYLES = {
-  'Completed':  { bg: '#F3E8FF', color: '#7E22CE', dot: '#A855F7' },
-  'On Site':    { bg: '#D1FAE5', color: '#065F46', dot: '#10B981' },
-  'On Duty':    { bg: '#DBEAFE', color: '#1E40AF', dot: '#3B82F6' },
-  'Checked In': { bg: '#DBEAFE', color: '#1E40AF', dot: '#3B82F6' },
-  'In Transit': { bg: '#FEF3C7', color: '#92400E', dot: '#F59E0B' },
-  'Late':       { bg: '#FEF3C7', color: '#92400E', dot: '#F59E0B' },
-  'Absent':     { bg: '#FEE2E2', color: '#991B1B', dot: '#EF4444' },
-  'Offline':    { bg: '#F1F5F9', color: '#475569', dot: '#64748B' },
+  'Completed':         { bg: '#F3E8FF', color: '#7E22CE', dot: '#A855F7' },
+  'On Site':           { bg: '#D1FAE5', color: '#065F46', dot: '#10B981' },
+  'On Duty':           { bg: '#DBEAFE', color: '#1E40AF', dot: '#3B82F6' },
+  'Checked In':        { bg: '#DBEAFE', color: '#1E40AF', dot: '#3B82F6' },
+  'In Transit':        { bg: '#FEF3C7', color: '#92400E', dot: '#F59E0B' },
+  'Late':              { bg: '#FEF3C7', color: '#92400E', dot: '#F59E0B' },
+  'Absent':            { bg: '#FEE2E2', color: '#991B1B', dot: '#EF4444' },
+  'Missed Shift':      { bg: '#FEE2E2', color: '#B91C1C', dot: '#DC2626' },
+  'Missing Check-Out': { bg: '#FEF3C7', color: '#92400E', dot: '#F59E0B' },
+  'Flagged':           { bg: '#FEE2E2', color: '#991B1B', dot: '#EF4444' },
+  'Offline':           { bg: '#F1F5F9', color: '#475569', dot: '#64748B' },
 };
 
 function getInitials(name) {
@@ -71,6 +75,7 @@ function getInitials(name) {
 
 export default function Attendance() {
   const [attendance, setAttendance] = useState([]);
+  const [assignments, setAssignments] = useState([]);
   const [employees, setEmployees] = useState([]);
   const [sites, setSites] = useState([]);
   const [logs, setLogs] = useState([]);
@@ -153,21 +158,23 @@ export default function Attendance() {
       return h > 0 ? `${h}h ${m}m` : `${m}m`;
     };
 
+    const isMissed = raw.status === 'Missed Shift' || raw.isMissedShift;
     const inInfo  = formatTsInfo(raw.timeIn  || raw.checkIn  || raw.check_in  || raw.in);
     const outInfo = formatTsInfo(raw.timeOut || raw.checkOut || raw.check_out || raw.out);
     return {
       id:            raw.id,
+      assignmentId:  raw.assignmentId || null,
       employee_name: raw.employeeName || raw.employee_name || raw.name || raw.emp || '—',
       site_name:     raw.siteName || raw.site_name || raw.site || '—',
-      check_in:      inInfo.full,
-      check_in_time: inInfo.time,
-      check_in_date: inInfo.date,
+      check_in:      isMissed ? 'Missed (No Check-in)' : inInfo.full,
+      check_in_time: isMissed ? 'Missed' : inInfo.time,
+      check_in_date: inInfo.date || (raw.date ? (typeof raw.date === 'string' ? raw.date : formatDate(raw.date)) : ''),
       check_out:     outInfo.full,
       check_out_time: outInfo.time,
       check_out_date: outInfo.date,
-      duration:      raw.duration || getDuration(raw.timeIn || raw.checkIn || raw.check_in, raw.timeOut || raw.checkOut || raw.check_out) || '—',
+      duration:      raw.duration || (isMissed ? '0m' : getDuration(raw.timeIn || raw.checkIn || raw.check_in, raw.timeOut || raw.checkOut || raw.check_out)) || '—',
       status:        raw.status || 'On Site',
-      verification:  raw.verification || (raw.inFence === false ? 'GPS Geofence' : 'Verified'),
+      verification:  raw.verification || (isMissed ? 'No Show' : (raw.inFence === false ? 'GPS Geofence' : 'Verified')),
       _raw:          raw,
     };
   }
@@ -198,6 +205,16 @@ export default function Attendance() {
 
         const attRecords = mergeAttCollections('Attendance') || [];
         const attRecordsLc = mergeAttCollections('attendance') || [];
+        const asgRecords = mergeAttCollections('Assignments') || [];
+        const asgRecordsLc = mergeAttCollections('assignments') || [];
+
+        // Merge assignments from sync server
+        const combinedAsg = new Map();
+        asgRecordsLc.forEach(r => { if (r && r.id) combinedAsg.set(r.id, r); });
+        asgRecords.forEach(r => { if (r && r.id) combinedAsg.set(r.id, r); });
+        if (combinedAsg.size > 0) {
+          setAssignments(Array.from(combinedAsg.values()));
+        }
 
         // Merge both collections into component state directly
         const combined = new Map();
@@ -244,28 +261,176 @@ export default function Attendance() {
       };
       const unsubAtt1 = onSnapshot(query(collection(db, 'attendance')), snap => mergeAndSet('attendance', snap.docs));
       const unsubAtt2 = onSnapshot(query(collection(db, 'Attendance')), snap => mergeAndSet('Attendance', snap.docs));
+      const unsubAsg1 = onSnapshot(query(collection(db, 'Assignments')), snap => setAssignments(snap.docs.map(d => ({ id: d.id, ...d.data() }))));
+      const unsubAsg2 = onSnapshot(query(collection(db, 'assignments')), snap => {
+        setAssignments(prev => {
+          const map = new Map();
+          prev.forEach(a => map.set(a.id, a));
+          snap.docs.forEach(d => map.set(d.id, { id: d.id, ...d.data() }));
+          return Array.from(map.values());
+        });
+      });
       const unsubEmp  = onSnapshot(query(collection(db, 'employees')), snap => setEmployees(snap.docs.map(d => ({ id: d.id, ...d.data() }))));
       const unsubSites = onSnapshot(query(collection(db, 'Sites')), snap => setSites(snap.docs.map(d => ({ id: d.id, ...d.data() }))));
       const unsubLogs  = onSnapshot(query(collection(db, 'tracking_logs'), limit(20)), snap => setLogs(snap.docs.map(d => ({ id: d.id, ...d.data() }))));
-      return () => { clearInterval(directInterval); unsubAtt1(); unsubAtt2(); unsubEmp(); unsubSites(); unsubLogs(); };
+      return () => { clearInterval(directInterval); unsubAtt1(); unsubAtt2(); unsubAsg1(); unsubAsg2(); unsubEmp(); unsubSites(); unsubLogs(); };
     } catch (e) {
       console.warn('Attendance live error:', e);
       return () => clearInterval(directInterval);
     }
   }, []);
 
+  // Background Auto-Sync: Ensure any Missed Shifts are persisted to Firestore Attendance
+  useEffect(() => {
+    if (!assignments.length) return;
+    const now = new Date();
 
-  // Consolidate live Firestore attendance records
+    assignments.forEach(async (asg) => {
+      try {
+        if (!asg || !asg.id) return;
+        const rawStatus = (asg.status || '').trim().toLowerCase();
+        if (rawStatus === 'cancelled') return;
+
+        const ended = isAssignmentEnded(asg, now);
+        const isMissed = rawStatus === 'missed shift' || (ended && !asg.hasCheckIn && rawStatus !== 'completed');
+
+        if (isMissed) {
+          const missedAttId = `att_missed_${asg.id}`;
+          const empName = asg.empName || asg.employeeName || '—';
+          const empId = asg.empId || asg.employeeId || '';
+          const empEmail = asg.empEmail || asg.employeeEmail || '';
+          const siteName = asg.site || asg.siteName || (Array.isArray(asg.assignedSites) ? asg.assignedSites.join(', ') : 'Assigned Site');
+          const shiftStr = asg.shift || asg.shiftTime || '';
+          const dateStr = asg.assignDate || asg.scheduleDate || asg.date || '';
+
+          const exists = attendance.some(a => a.id === missedAttId || (a.assignmentId === asg.id && a.status === 'Missed Shift'));
+          if (!exists) {
+            const missedDoc = {
+              id: missedAttId,
+              attendanceId: missedAttId,
+              assignmentId: asg.id,
+              employee_name: empName,
+              employeeName: empName,
+              employee_id: empId,
+              employeeId: empId,
+              email: empEmail,
+              site_name: siteName,
+              siteName: siteName,
+              site: siteName,
+              date: dateStr,
+              check_in: 'Missed (No Check-in)',
+              check_out: '—',
+              timeIn: null,
+              timeOut: null,
+              duration: '0m',
+              status: 'Missed Shift',
+              verification: 'No Show',
+              shift: shiftStr,
+              inFence: false,
+              isMissedShift: true,
+              createdAt: asg.createdAt || Date.now(),
+              updatedAt: Date.now()
+            };
+            await setDoc(doc(db, 'Attendance', missedAttId), missedDoc, { merge: true }).catch(() => {});
+            await setDoc(doc(db, 'attendance', missedAttId), missedDoc, { merge: true }).catch(() => {});
+          }
+        }
+      } catch (_) {}
+    });
+  }, [assignments, attendance]);
+
+
+  // Consolidate live Firestore attendance records with Missed Shifts and Active Workforce
   const combinedAttendance = React.useMemo(() => {
     const list = [...attendance];
-    const existingEmpNames = new Set(list.map(a => (a.employee_name || '').toLowerCase()));
+    const existingKeys = new Set();
+    list.forEach(a => {
+      const eName = (a.employee_name || a.employeeName || '').toLowerCase().trim();
+      const date = (a.check_in_date || a.date || '').toString().toLowerCase().trim();
+      if (a.assignmentId) existingKeys.add(`asg_${a.assignmentId}`);
+      if (eName && date) existingKeys.add(`${eName}_${date}`);
+      if (a.id) existingKeys.add(a.id);
+    });
 
-    // Include active employees currently On Site / On Duty / In Transit who do not have an explicit attendance log doc yet
+    const now = new Date();
+
+    // 1. Process Missed Shifts from Assignments
+    assignments.forEach(asg => {
+      if (!asg || !asg.id) return;
+      const rawStatus = (asg.status || '').trim().toLowerCase();
+      if (rawStatus === 'cancelled') return;
+
+      let ended = false;
+      try {
+        ended = isAssignmentEnded(asg, now);
+      } catch (_) {}
+
+      const isMissed = rawStatus === 'missed shift' || (ended && !asg.hasCheckIn && rawStatus !== 'completed');
+
+      if (isMissed) {
+        const asgId = asg.id;
+        const eName = (asg.empName || asg.employeeName || '').trim();
+        const eId = asg.empId || asg.employeeId || '';
+        const eMail = asg.empEmail || asg.employeeEmail || '';
+        const siteName = asg.site || asg.siteName || (Array.isArray(asg.assignedSites) ? asg.assignedSites.join(', ') : 'Assigned Site');
+        const rawDate = asg.assignDate || asg.scheduleDate || asg.date || '';
+
+        let formattedDate = rawDate;
+        if (rawDate) {
+          const d = new Date(rawDate);
+          if (!isNaN(d.getTime())) {
+            formattedDate = d.toLocaleDateString('en-US', { month: 'short', day: 'numeric', year: 'numeric' });
+          }
+        }
+
+        const matchKey1 = `asg_${asgId}`;
+        const autoId = `att_missed_${asgId}`;
+
+        // Check if employee already has an active or completed check-in for this assignment
+        const hasExistingCheckIn = list.some(a => {
+          const aStatus = (a.status || '').toLowerCase();
+          const isPresent = ['on site', 'checked in', 'on duty', 'completed', 'present'].includes(aStatus);
+          return (a.assignmentId === asgId || a.id === asgId) && isPresent;
+        });
+
+        if (!hasExistingCheckIn && !existingKeys.has(matchKey1) && !existingKeys.has(autoId)) {
+          existingKeys.add(matchKey1);
+          existingKeys.add(autoId);
+          list.push(normalizeRecord({
+            id: autoId,
+            assignmentId: asgId,
+            employee_name: eName || '—',
+            employeeName: eName || '—',
+            employee_id: eId,
+            employeeId: eId,
+            email: eMail,
+            site_name: siteName,
+            siteName: siteName,
+            site: siteName,
+            check_in: 'Missed (No Check-in)',
+            check_in_time: '—',
+            check_in_date: formattedDate,
+            check_out: '—',
+            check_out_time: '—',
+            check_out_date: '',
+            duration: '0m',
+            status: 'Missed Shift',
+            verification: 'No Show',
+            shift: asg.shift || asg.shiftTime || '',
+            inFence: false,
+            isMissedShift: true,
+            createdAt: asg.createdAt || Date.now()
+          }));
+        }
+      }
+    });
+
+    // 2. Include active employees currently On Site / On Duty / In Transit who do not have an explicit attendance log doc yet
     employees.forEach(emp => {
       if (emp.status && emp.status !== 'Offline') {
         const empNameLower = (emp.name || '').toLowerCase();
-        if (!existingEmpNames.has(empNameLower)) {
-          existingEmpNames.add(empNameLower);
+        if (!existingKeys.has(empNameLower)) {
+          existingKeys.add(empNameLower);
           list.push(normalizeRecord({
             id: `emp_auto_att_${emp.id}`,
             employee_name: emp.name,
@@ -281,7 +446,7 @@ export default function Attendance() {
     });
 
     return list;
-  }, [attendance, employees]);
+  }, [attendance, assignments, employees]);
 
   const filteredAtt = combinedAttendance.filter(a =>
     (a.employee_name || '').toLowerCase().includes(search.toLowerCase()) ||
@@ -340,20 +505,22 @@ export default function Attendance() {
 
   const presentCount = combinedAttendance.filter(a => ['on site', 'checked in', 'on duty', 'completed', 'present'].includes((a.status || '').toLowerCase())).length;
   const lateCount = combinedAttendance.filter(a => (a.status || '').toLowerCase() === 'late').length;
-  const absentCount = combinedAttendance.filter(a => (a.status || '').toLowerCase() === 'absent').length + employees.filter(e => (e.status || '').toLowerCase() === 'absent').length;
+  const absentCount = combinedAttendance.filter(a => ['absent', 'missed shift', 'missed'].includes((a.status || '').toLowerCase())).length + employees.filter(e => (e.status || '').toLowerCase() === 'absent').length;
   const onSiteCount = combinedAttendance.filter(a => ['on site', 'checked in'].includes((a.status || '').toLowerCase())).length;
   const checkedOutCount = combinedAttendance.filter(a => (a.status || '').toLowerCase() === 'completed').length;
 
   const SUMMARY_METRICS = [
     { title: 'Present', value: presentCount, trend: '+0%', isUp: true, color: '#10B981', bg: '#D1FAE5', icon: <CheckCircle size={20}/> },
     { title: 'Late', value: lateCount, trend: '0%', isUp: false, color: '#F59E0B', bg: '#FEF3C7', icon: <Clock size={20}/> },
-    { title: 'Absent', value: absentCount, trend: '0%', isUp: null, color: '#EF4444', bg: '#FEE2E2', icon: <XCircle size={20}/> },
+    { title: 'Absent', value: absentCount, trend: absentCount > 0 ? `${absentCount} Missed` : '0%', isUp: absentCount > 0 ? false : null, color: '#EF4444', bg: '#FEE2E2', icon: <XCircle size={20}/> },
     { title: 'On Site', value: onSiteCount, trend: '+0%', isUp: true, color: '#3B82F6', bg: '#DBEAFE', icon: <MapPin size={20}/> },
     { title: 'Checked Out', value: checkedOutCount, trend: '+0%', isUp: true, color: '#64748B', bg: '#F1F5F9', icon: <StopCircle size={20}/> },
   ];
 
-  const totalEmps = employees.length || 1;
-  const presentRate = employees.length ? Math.round((presentCount / employees.length) * 100) : 0;
+  const totalEvaluated = presentCount + absentCount + lateCount;
+  const presentRate = totalEvaluated > 0
+    ? Math.min(100, Math.round((presentCount / totalEvaluated) * 100))
+    : (employees.length ? 100 : 0);
 
   return (
     <div style={{ padding: 24, display: 'flex', flexDirection: 'column', gap: 24, background: '#F8FAFC', minHeight: '100vh' }}>
@@ -460,7 +627,9 @@ export default function Attendance() {
                         <td style={{ padding: '14px 18px', fontWeight: 600, color: '#0F172A', whiteSpace: 'nowrap' }}>{row.employee_name}</td>
                         <td style={{ padding: '14px 18px', color: '#475569', whiteSpace: 'nowrap' }}>{row.site_name}</td>
                         <td style={{ padding: '12px 18px', whiteSpace: 'nowrap' }}>
-                          <div style={{ color: '#0F172A', fontWeight: 600 }}>{row.check_in_time || row.check_in}</div>
+                          <div style={{ color: row.status === 'Missed Shift' ? '#DC2626' : '#0F172A', fontWeight: 600 }}>
+                            {row.status === 'Missed Shift' ? 'Missed (No Check-in)' : (row.check_in_time || row.check_in)}
+                          </div>
                           {row.check_in_date ? (
                             <div style={{ fontSize: 11, color: '#64748B', fontWeight: 500, marginTop: 2 }}>{row.check_in_date}</div>
                           ) : null}
@@ -479,8 +648,18 @@ export default function Attendance() {
                           </div>
                         </td>
                         <td style={{ padding: '14px 18px', whiteSpace: 'nowrap' }}>
-                          <div style={{ display: 'inline-flex', alignItems: 'center', gap: 4, color: row.verification === 'Verified' ? '#10B981' : '#F59E0B', fontWeight: 600, fontSize: 12 }}>
-                            {row.verification === 'Verified' && <CheckCircle size={14}/>} {row.verification}
+                          <div style={{
+                            display: 'inline-flex',
+                            alignItems: 'center',
+                            gap: 4,
+                            color: row.verification === 'Verified' ? '#10B981' : (['No Show', 'Missed Check-In'].includes(row.verification) ? '#DC2626' : '#F59E0B'),
+                            fontWeight: 600,
+                            fontSize: 12
+                          }}>
+                            {row.verification === 'Verified' && <CheckCircle size={14}/>}
+                            {['No Show', 'Missed Check-In'].includes(row.verification) && <XCircle size={14} color="#DC2626" />}
+                            {row.verification !== 'Verified' && !['No Show', 'Missed Check-In'].includes(row.verification) && <Clock size={14}/>}
+                            {row.verification}
                           </div>
                         </td>
                       </tr>
@@ -617,11 +796,12 @@ export default function Attendance() {
                 <PieChart>
                   <Pie
                     data={(() => {
+                      const totalSlices = presentCount + onSiteCount + lateCount + absentCount || 1;
                       const slices = [
-                        { name: 'Present', value: presentCount, color: '#10B981', pct: totalEmps ? Math.round((presentCount / totalEmps) * 100) : 0 },
-                        { name: 'On Site', value: onSiteCount, color: '#3B82F6', pct: totalEmps ? Math.round((onSiteCount / totalEmps) * 100) : 0 },
-                        { name: 'Late', value: lateCount, color: '#F59E0B', pct: totalEmps ? Math.round((lateCount / totalEmps) * 100) : 0 },
-                        { name: 'Absent', value: absentCount, color: '#EF4444', pct: totalEmps ? Math.round((absentCount / totalEmps) * 100) : 0 }
+                        { name: 'Present', value: presentCount, color: '#10B981', pct: Math.round((presentCount / totalSlices) * 100) },
+                        { name: 'On Site', value: onSiteCount, color: '#3B82F6', pct: Math.round((onSiteCount / totalSlices) * 100) },
+                        { name: 'Late', value: lateCount, color: '#F59E0B', pct: Math.round((lateCount / totalSlices) * 100) },
+                        { name: 'Absent', value: absentCount, color: '#EF4444', pct: Math.round((absentCount / totalSlices) * 100) }
                       ].filter(d => d.value > 0);
                       return slices.length > 0 ? slices : [{ name: 'None', value: 1, color: '#E2E8F0', pct: 0 }];
                     })()}
