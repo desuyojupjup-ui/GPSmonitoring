@@ -518,10 +518,6 @@ export default function FloatingChatButton() {
     );
   };
 
-  const activeAnomalyCount = anomalies.filter(
-    (a) => a.status !== 'Resolved' && a.status !== 'Dismissed'
-  ).length;
-
   return (
     <>
       {open && (
@@ -573,20 +569,6 @@ export default function FloatingChatButton() {
                 AI Telemetry & Anomaly Supervisor
               </div>
             </div>
-            {activeAnomalyCount > 0 && (
-              <span
-                style={{
-                  background: '#EF4444',
-                  color: 'white',
-                  fontSize: 10,
-                  fontWeight: 800,
-                  padding: '2px 7px',
-                  borderRadius: 10,
-                }}
-              >
-                {activeAnomalyCount} Alerts
-              </span>
-            )}
             <button
               onClick={() => setOpen(false)}
               style={{
@@ -787,37 +769,18 @@ export default function FloatingChatButton() {
             alt="Chatbot"
             style={{ width: '65%', height: '65%', objectFit: 'contain' }}
           />
-          {activeAnomalyCount > 0 ? (
-            <span
-              style={{
-                position: 'absolute',
-                top: -2,
-                right: -2,
-                background: '#EF4444',
-                color: 'white',
-                fontSize: 10,
-                fontWeight: 800,
-                padding: '2px 6px',
-                borderRadius: 10,
-                border: '2px solid white',
-              }}
-            >
-              {activeAnomalyCount}
-            </span>
-          ) : (
-            <span
-              style={{
-                position: 'absolute',
-                bottom: 2,
-                right: 2,
-                width: 12,
-                height: 12,
-                borderRadius: '50%',
-                background: '#10B981',
-                border: '2px solid white',
-              }}
-            />
-          )}
+          <span
+            style={{
+              position: 'absolute',
+              bottom: 2,
+              right: 2,
+              width: 12,
+              height: 12,
+              borderRadius: '50%',
+              background: '#10B981',
+              border: '2px solid white',
+            }}
+          />
         </div>
       </div>
     </>
