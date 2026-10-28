@@ -323,12 +323,12 @@ class PresenceService {
     // Stop existing timer if any
     if (this.timer) clearInterval(this.timer);
 
-    // Heartbeat every 20 seconds
+    // Heartbeat every 45 seconds (optimized to preserve Firestore write quota)
     this.timer = setInterval(() => {
       if (this.isRunning) {
         this.sendHeartbeat(true);
       }
-    }, 20000);
+    }, 45000);
 
     // Listen to AppState (foreground / background)
     if (!this.appStateSubscription) {

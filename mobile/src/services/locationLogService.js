@@ -226,32 +226,34 @@ class LocationLogService {
         }
       }
 
-      // Update employee document in Firestore with out-of-bounds telemetry
-      const empId = employee?.id || employee?.uid;
-      if (empId && empId !== 'emp_fallback' && !empId.startsWith('emp_current')) {
-        await updateDoc(doc(db, 'employees', empId), {
-          geofenceStatus: 'Outside Assigned Site',
-          inFence: false,
-          lastOutOfFenceDistance: distMeters,
-          lastOutOfFenceAt: serverTimestamp(),
-          lat: Number(latitude),
-          lng: Number(longitude),
-          latitude: Number(latitude),
-          longitude: Number(longitude),
-          lastActive: Date.now(),
-        }).catch(() => {});
-      }
+      // Update employee and attendance documents in Firestore ONLY on state transition (not on every GPS tick)
+      if (!this.lastOutOfFenceState) {
+        this.lastOutOfFenceState = true;
+        const empId = employee?.id || employee?.uid;
+        if (empId && empId !== 'emp_fallback' && !empId.startsWith('emp_current')) {
+          await updateDoc(doc(db, 'employees', empId), {
+            geofenceStatus: 'Outside Assigned Site',
+            inFence: false,
+            lastOutOfFenceDistance: distMeters,
+            lastOutOfFenceAt: serverTimestamp(),
+            lat: Number(latitude),
+            lng: Number(longitude),
+            latitude: Number(latitude),
+            longitude: Number(longitude),
+            lastActive: Date.now(),
+          }).catch(() => {});
+        }
 
-      // Update active attendance doc in Firestore to Flagged & inFence: false
-      if (attendanceId) {
-        const attPatch = {
-          inFence: false,
-          status: 'Flagged',
-          lastOutOfFenceDistance: distMeters,
-          lastOutOfFenceAt: serverTimestamp(),
-        };
-        await updateDoc(doc(db, 'Attendance', attendanceId), attPatch).catch(() => {});
-        await updateDoc(doc(db, 'attendance', attendanceId), attPatch).catch(() => {});
+        if (attendanceId) {
+          const attPatch = {
+            inFence: false,
+            status: 'Flagged',
+            lastOutOfFenceDistance: distMeters,
+            lastOutOfFenceAt: serverTimestamp(),
+          };
+          await updateDoc(doc(db, 'Attendance', attendanceId), attPatch).catch(() => {});
+          await updateDoc(doc(db, 'attendance', attendanceId), attPatch).catch(() => {});
+        }
       }
 
       return { breached: true, distance: distMeters, site: siteGeofence };

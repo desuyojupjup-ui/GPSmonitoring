@@ -280,64 +280,8 @@ export default function Attendance() {
     }
   }, []);
 
-  // Background Auto-Sync: Ensure any Missed Shifts are persisted to Firestore Attendance
-  useEffect(() => {
-    if (!assignments.length) return;
-    const now = new Date();
-
-    assignments.forEach(async (asg) => {
-      try {
-        if (!asg || !asg.id) return;
-        const rawStatus = (asg.status || '').trim().toLowerCase();
-        if (rawStatus === 'cancelled') return;
-
-        const ended = isAssignmentEnded(asg, now);
-        const isMissed = rawStatus === 'missed shift' || (ended && !asg.hasCheckIn && rawStatus !== 'completed');
-
-        if (isMissed) {
-          const missedAttId = `att_missed_${asg.id}`;
-          const empName = asg.empName || asg.employeeName || '—';
-          const empId = asg.empId || asg.employeeId || '';
-          const empEmail = asg.empEmail || asg.employeeEmail || '';
-          const siteName = asg.site || asg.siteName || (Array.isArray(asg.assignedSites) ? asg.assignedSites.join(', ') : 'Assigned Site');
-          const shiftStr = asg.shift || asg.shiftTime || '';
-          const dateStr = asg.assignDate || asg.scheduleDate || asg.date || '';
-
-          const exists = attendance.some(a => a.id === missedAttId || (a.assignmentId === asg.id && a.status === 'Missed Shift'));
-          if (!exists) {
-            const missedDoc = {
-              id: missedAttId,
-              attendanceId: missedAttId,
-              assignmentId: asg.id,
-              employee_name: empName,
-              employeeName: empName,
-              employee_id: empId,
-              employeeId: empId,
-              email: empEmail,
-              site_name: siteName,
-              siteName: siteName,
-              site: siteName,
-              date: dateStr,
-              check_in: 'Missed (No Check-in)',
-              check_out: '—',
-              timeIn: null,
-              timeOut: null,
-              duration: '0m',
-              status: 'Missed Shift',
-              verification: 'No Show',
-              shift: shiftStr,
-              inFence: false,
-              isMissedShift: true,
-              createdAt: asg.createdAt || Date.now(),
-              updatedAt: Date.now()
-            };
-            await setDoc(doc(db, 'Attendance', missedAttId), missedDoc, { merge: true }).catch(() => {});
-            await setDoc(doc(db, 'attendance', missedAttId), missedDoc, { merge: true }).catch(() => {});
-          }
-        }
-      } catch (_) {}
-    });
-  }, [assignments, attendance]);
+  // Note: Missed shifts are calculated dynamically in memory below via combinedAttendance
+  // to avoid repeated Firestore write cycles that exceed quota.
 
 
   // Consolidate live Firestore attendance records with Missed Shifts and Active Workforce

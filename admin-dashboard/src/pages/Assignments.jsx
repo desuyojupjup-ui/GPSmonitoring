@@ -648,7 +648,7 @@ export default function Assignments() {
                                     (empEmail && eMail && eMail === empEmail.toLowerCase()) ||
                                     (empName && eName && (eName === empName.toLowerCase() || eName.includes(empName.toLowerCase())));
 
-                    if (isMatch) {
+                    if (isMatch && (eData.assignedSite !== 'Unassigned' || (eData.assignedSites && eData.assignedSites.length > 0))) {
                       await updateDoc(doc(db, 'employees', empDoc.id), {
                         assignedSite: 'Unassigned',
                         assignedSiteId: '',
