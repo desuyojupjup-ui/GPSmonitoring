@@ -1,4 +1,5 @@
 import React, { useState, useEffect } from 'react';
+import { useLocation } from 'react-router-dom';
 import { db, collection, onSnapshot, query, orderBy, limit, updateDoc, doc, deleteDoc, addDoc, serverTimestamp } from '../firebase';
 import { Search, ShieldAlert, AlertTriangle, CheckCircle, ArrowUpRight, Filter, Eye, Trash2, Activity, TrendingUp, Zap, BrainCircuit, ShieldX, Gauge, Sliders, CheckSquare } from 'lucide-react';
 import { showToast, showConfirmDelete } from '../utils/toast';
@@ -111,11 +112,23 @@ const CustomComboTooltip = ({ active, payload }) => {
 };
 
 export default function AnomalyList() {
+  const location = useLocation();
   const [anomalies, setAnomalies] = useState([]);
   const [loading, setLoading] = useState(true);
   const [searchTerm, setSearchTerm] = useState('');
   const [severityFilter, setSeverityFilter] = useState('All');
   const [selectedAnomaly, setSelectedAnomaly] = useState(null);
+
+  // Auto-select anomaly if passed from dashboard modal
+  useEffect(() => {
+    const targetId = location.state?.selectedAnomalyId || location.state?.anomalyId;
+    if (targetId && anomalies.length > 0) {
+      const match = anomalies.find(a => a.id === targetId);
+      if (match) {
+        setSelectedAnomaly(match);
+      }
+    }
+  }, [location.state, anomalies]);
 
   // Pagination & Bulk Select state
   const [page, setPage] = useState(1);
@@ -213,6 +226,12 @@ export default function AnomalyList() {
         await updateDoc(doc(db, 'ai_analysis', id), { status: newStatus });
       }
 
+      // Keep matching notification in sync
+      if (newStatus === 'Resolved' || newStatus === 'Dismissed') {
+        updateDoc(doc(db, 'notifications', `anomaly_${id}`), { status: 'Read', read: true, resolutionStatus: newStatus }).catch(() => {});
+        window.dispatchEvent(new CustomEvent('subai_notifications_updated'));
+      }
+
       // If escalated to fraud, also create a record in fraud_reports collection
       if (newStatus === 'Escalated to Fraud' && targetItem) {
         await addDoc(collection(db, 'fraud_reports'), {
@@ -289,11 +308,13 @@ export default function AnomalyList() {
       try {
         await Promise.all(selectedIds.map(async id => {
           const item = anomalies.find(a => a.id === id);
+          deleteDoc(doc(db, 'notifications', `anomaly_${id}`)).catch(() => {});
           if (item?.sourceCollection === 'ActivityLogs') {
             return deleteDoc(doc(db, 'ActivityLogs', id)).catch(() => {});
           }
           return deleteDoc(doc(db, 'ai_analysis', id)).catch(() => {});
         }));
+        window.dispatchEvent(new CustomEvent('subai_notifications_updated'));
         showToast('success', 'Bulk Delete Successful', `${selectedIds.length} anomaly record(s) deleted.`);
         setSelectedIds([]);
       } catch (err) {

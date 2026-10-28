@@ -4,11 +4,23 @@ import {
   Search, Sun, Moon, Bell, ChevronDown, LogOut, User, Settings, Shield, 
   ScrollText, HelpCircle, Zap, Plus, Users, MapPin, ClipboardList, 
   FileBarChart2, Send, Bot, CheckCircle, AlertTriangle, Clock, Activity, 
-  X, Menu, RefreshCw, Radio, Building2, Check, ArrowRight, Sparkles 
+  X, Menu, RefreshCw, Radio, Building2, Check, ArrowRight, Sparkles, ShieldAlert 
 } from 'lucide-react';
 import { showToast, showConfirmLogout } from '../utils/toast';
 import { db, collection, onSnapshot, query, doc, updateDoc, safeLocalStorageSet } from '../firebase';
 import { isPathAllowedForRole } from '../utils/roles';
+import { startAnomalyNotificationSync } from '../services/anomalyNotificationSync';
+
+const notifMillis = (n) => {
+  const ts = n?.timestamp || n?.createdAt;
+  if (!ts) return 0;
+  if (typeof ts?.toDate === 'function') { try { return ts.toDate().getTime(); } catch (_) {} }
+  if (typeof ts?.seconds === 'number') return ts.seconds * 1000;
+  if (typeof ts === 'number') return ts;
+  const d = new Date(ts);
+  return isNaN(d.getTime()) ? 0 : d.getTime();
+};
+const sortNotifs = (list) => [...list].sort((a, b) => notifMillis(b) - notifMillis(a));
 
 const RECENT_SEARCHES = ['John Cruz', 'Maria Santos', 'Attendance', 'Greenfield Mall', 'Site Guard Duty'];
 
@@ -39,7 +51,9 @@ const NOTIF_ICONS = {
   ai: <Bot size={14} />,
   system: <CheckCircle size={14} />,
   alert: <AlertTriangle size={14} />,
-  message: <Bell size={14} />
+  message: <Bell size={14} />,
+  'ai anomaly': <ShieldAlert size={14} />,
+  anomaly: <ShieldAlert size={14} />
 };
 
 const NOTIF_COLORS = {
@@ -50,7 +64,9 @@ const NOTIF_COLORS = {
   ai: '#6366F1',
   system: '#06B6D4',
   alert: '#EF4444',
-  message: '#3B82F6'
+  message: '#3B82F6',
+  'ai anomaly': '#DC2626',
+  anomaly: '#DC2626'
 };
 
 export default function TopNav({ user, onLogout, onMenuToggle }) {
@@ -186,7 +202,7 @@ export default function TopNav({ user, onLogout, onMenuToggle }) {
     let unsub = () => {};
     try {
       unsub = onSnapshot(query(collection(db, 'notifications')), (snap) => {
-        const live = snap.docs.map(d => ({ id: d.id, ...d.data() }));
+        const live = sortNotifs(snap.docs.map(d => ({ id: d.id, ...d.data() })));
         setNotifications(live);
         safeLocalStorageSet('subai_store_notifications', JSON.stringify(live));
       }, () => {
@@ -197,8 +213,13 @@ export default function TopNav({ user, onLogout, onMenuToggle }) {
     }
 
     const handleUpdate = () => {
-      setNotifications(loadFromStorage());
+      setNotifications(sortNotifs(loadFromStorage()));
     };
+
+    // Mirror AI anomaly alerts into the notifications feed
+    const stopAnomalySync = startAnomalyNotificationSync((notif) => {
+      showToast(notif.title, notif.message, notif.severity === 'High' ? 'error' : 'warning');
+    });
 
     window.addEventListener('subai_notifications_updated', handleUpdate);
     window.addEventListener('storage', (e) => {
@@ -207,6 +228,7 @@ export default function TopNav({ user, onLogout, onMenuToggle }) {
 
     return () => {
       unsub();
+      stopAnomalySync();
       window.removeEventListener('subai_notifications_updated', handleUpdate);
     };
   }, []);
@@ -239,6 +261,10 @@ export default function TopNav({ user, onLogout, onMenuToggle }) {
     setShowNotifs(false);
     
     // Contextual routing based on notification content
+    if (notif.anomalyId || notif.category === 'AI Anomaly') {
+      navigate('/anomalies', { state: { selectedAnomalyId: notif.anomalyId } });
+      return;
+    }
     const text = `${notif.type || ''} ${notif.title || ''} ${notif.sender || ''} ${notif.message || ''}`.toLowerCase();
     if (text.includes('tracking') || text.includes('gps') || text.includes('speed') || text.includes('location')) {
       navigate('/tracking');
@@ -943,7 +969,7 @@ export default function TopNav({ user, onLogout, onMenuToggle }) {
                 ) : (
                   notifications.slice(0, 7).map((notif) => {
                     const isUnread = notif.status === 'Unread' || notif.read === false;
-                    const typeKey = (notif.type || notif.category || 'system').toLowerCase();
+                    const typeKey = (notif.category === 'AI Anomaly' || notif.anomalyId) ? 'ai anomaly' : (notif.type || notif.category || 'system').toLowerCase();
                     const iconColor = NOTIF_COLORS[typeKey] || '#1E5ADB';
                     const icon = NOTIF_ICONS[typeKey] || <Bell size={14} />;
 

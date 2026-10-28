@@ -4,13 +4,14 @@ import {
   Users, CheckCircle, MapPin, ClipboardCheck, WifiOff, ArrowRight,
   Clock, RefreshCw, Maximize2, Eye, UserCheck, Shield, Truck,
   Bot, Activity, Building2, ShieldAlert, X, Search, Navigation,
-  ChevronRight, AlertTriangle, Radio
+  ChevronRight, AlertTriangle, Radio, Check, ArrowLeft, ExternalLink
 } from 'lucide-react';
 import {
   AreaChart, Area, BarChart, Bar, XAxis, YAxis, CartesianGrid, Tooltip,
   ResponsiveContainer, PieChart, Pie, Cell
 } from 'recharts';
-import { db, collection, onSnapshot, query, limit } from '../firebase';
+import { db, collection, onSnapshot, query, limit, doc, updateDoc, addDoc, serverTimestamp } from '../firebase';
+import { showToast } from '../utils/toast';
 import MapTracking from './MapTracking';
 import { resolveAssignmentStatus } from '../pages/Assignments';
 import { isEmployeeOnline, resolveEmployeeStatus, resolveEmployeeWorkType } from '../utils/statusUtils';
@@ -366,6 +367,69 @@ function ActivityFeedItem({ avatar, name, action, time, status, color }) {
 }
 
 // ── Full-featured Interactive Drilldown Modal ──
+// ── Anomaly Helper Utilities ──
+const getTsMillis = (ts) => {
+  if (!ts) return 0;
+  if (ts?.toDate && typeof ts.toDate === 'function') {
+    try { return ts.toDate().getTime(); } catch (_) {}
+  }
+  if (typeof ts?.seconds === 'number') return ts.seconds * 1000;
+  if (typeof ts === 'number') return ts;
+  const d = new Date(ts);
+  return isNaN(d.getTime()) ? 0 : d.getTime();
+};
+
+const formatAnomalyTime = (ts) => {
+  if (!ts) return 'Recent';
+  const millis = getTsMillis(ts);
+  if (!millis) return 'Recent';
+  const d = new Date(millis);
+  const now = new Date();
+  const isToday = d.toDateString() === now.toDateString();
+  const timeStr = d.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
+  if (isToday) return `Today at ${timeStr}`;
+  const diffDays = Math.round((now.getTime() - d.getTime()) / (1000 * 3600 * 24));
+  if (diffDays === 1) return `Yesterday at ${timeStr}`;
+  return `${d.toLocaleDateString([], { month: 'short', day: 'numeric' })} at ${timeStr}`;
+};
+
+const formatAnomalyFullDate = (ts) => {
+  if (!ts) return 'N/A';
+  const millis = getTsMillis(ts);
+  if (!millis) return 'N/A';
+  return new Date(millis).toLocaleString();
+};
+
+const cleanAnomalyDescription = (desc, empName) => {
+  if (!desc) return 'Outlier telemetry detected';
+  let cleaned = String(desc);
+  // Round raw float accuracy like (38.74389848120117m) or (9043.123m away)
+  cleaned = cleaned.replace(/\((\d+\.\d+)m(?:\s+away)?\)/g, (match, num) => {
+    const val = parseFloat(num);
+    const rounded = val >= 100 ? Math.round(val) : Math.round(val * 10) / 10;
+    return `(${rounded}m${match.includes('away') ? ' away' : ''})`;
+  });
+  // Also clean unrounded floats without parenthesis: 38.74389848120117m
+  cleaned = cleaned.replace(/(\d+\.\d{3,})m/g, (match, num) => {
+    const val = parseFloat(num);
+    const rounded = val >= 100 ? Math.round(val) : Math.round(val * 10) / 10;
+    return `${rounded}m`;
+  });
+  // Clean raw float speed like 84.123456 km/h
+  cleaned = cleaned.replace(/(\d+\.\d+)\s*km\/h/g, (match, num) => {
+    return `${Math.round(parseFloat(num))} km/h`;
+  });
+  // If description repeats "Employee [Name] did not check in...", simplify
+  if (empName && cleaned.toLowerCase().startsWith(`employee ${empName.toLowerCase()}`)) {
+    cleaned = cleaned.slice(`employee ${empName.toLowerCase()}`.length).trim();
+    if (cleaned.startsWith('•')) cleaned = cleaned.slice(1).trim();
+    if (cleaned.length > 0) {
+      cleaned = cleaned.charAt(0).toUpperCase() + cleaned.slice(1);
+    }
+  }
+  return cleaned;
+};
+
 // ── Full-featured Interactive Drilldown Modal ──
 function DashboardDrilldownModal({
   type,
@@ -380,8 +444,84 @@ function DashboardDrilldownModal({
   const navigate = useNavigate();
   const [searchTerm, setSearchTerm] = useState('');
   const [tabFilter, setTabFilter] = useState('All');
+  const [inspectedAnomaly, setInspectedAnomaly] = useState(null);
+  const [anomalyList, setAnomalyList] = useState(anomalies);
+
+  useEffect(() => {
+    const sorted = [...anomalies].sort((a, b) => getTsMillis(b.timestamp || b.createdAt) - getTsMillis(a.timestamp || a.createdAt));
+    setAnomalyList(sorted);
+  }, [anomalies]);
+
+  useEffect(() => {
+    setInspectedAnomaly(null);
+    setSearchTerm('');
+    setTabFilter('All');
+  }, [type]);
 
   if (!type) return null;
+
+  const handleAnomalyAction = async (id, newStatus) => {
+    try {
+      const targetItem = anomalyList.find(a => a.id === id) || inspectedAnomaly;
+      const isFromActivityLogs = targetItem?.sourceCollection === 'ActivityLogs';
+
+      if (isFromActivityLogs) {
+        try {
+          await updateDoc(doc(db, 'ActivityLogs', id), { status: newStatus });
+        } catch (_) {}
+      } else {
+        await updateDoc(doc(db, 'ai_analysis', id), { status: newStatus });
+      }
+
+      if (newStatus === 'Escalated to Fraud' && targetItem) {
+        await addDoc(collection(db, 'fraud_reports'), {
+          employeeId: targetItem.employeeId || null,
+          employeeName: targetItem.employeeName || 'Field Employee',
+          employeeEmail: targetItem.employeeEmail || null,
+          violationType: targetItem.type || 'Security Anomaly',
+          severity: targetItem.severity || 'High',
+          status: 'pending_review',
+          description: targetItem.description || 'Escalated from AI Anomaly Detection Center',
+          latitude: targetItem.latitude || null,
+          longitude: targetItem.longitude || null,
+          anomalyId: id,
+          resolved: false,
+          timestamp: serverTimestamp(),
+          createdAt: serverTimestamp(),
+        });
+        showToast('warning', 'Escalated to Fraud', 'Incident escalated to Fraud & Security.');
+      } else {
+        showToast('success', 'Status Updated', `Anomaly marked as ${newStatus}.`);
+      }
+    } catch (e) {
+      console.warn('Anomaly update error:', e);
+      showToast('error', 'Update Failed', e?.message || 'Could not update status');
+    }
+
+    setAnomalyList(prev => prev.map(a => a.id === id ? { ...a, status: newStatus } : a));
+    if (inspectedAnomaly && inspectedAnomaly.id === id) {
+      setInspectedAnomaly(prev => ({ ...prev, status: newStatus }));
+    }
+  };
+
+  const handleLocateOnMap = (item) => {
+    const lat = item.latitude || item.lat;
+    const lng = item.longitude || item.lng;
+    if (lat && lng && typeof onFocusEmployee === 'function') {
+      onClose();
+      onFocusEmployee({ lat: Number(lat), lng: Number(lng), name: item.employeeName || 'Anomaly Location' });
+      showToast('info', 'Map Focus', `Focused on ${item.employeeName || 'incident location'}.`);
+      return;
+    }
+    const emp = employees.find(e => e.id === item.employeeId || e.name === item.employeeName);
+    if (emp && emp.lat && emp.lng && typeof onFocusEmployee === 'function') {
+      onClose();
+      onFocusEmployee(emp);
+      showToast('info', 'Map Focus', `Focused on ${emp.name} on the map.`);
+    } else {
+      showToast('info', 'No GPS Data', 'No GPS coordinates recorded for this incident.');
+    }
+  };
 
   // Configuration based on modal type
   const config = {
@@ -392,9 +532,9 @@ function DashboardDrilldownModal({
       color: '#7C3AED',
       items: employees.filter(e => resolveEmployeeWorkType(e, assignments) === 'Fixed Site Employee'),
       pills: [
-        { label: 'Fixed Staff', value: employees.filter(e => resolveEmployeeWorkType(e, assignments) === 'Fixed Site Employee').length },
-        { label: 'On Site', value: employees.filter(e => resolveEmployeeWorkType(e, assignments) === 'Fixed Site Employee' && resolveEmployeeStatus(e) === 'On Site').length, color: '#10B981' },
-        { label: 'On Duty', value: employees.filter(e => resolveEmployeeWorkType(e, assignments) === 'Fixed Site Employee' && ['On Duty', 'On Site'].includes(resolveEmployeeStatus(e))).length, color: '#3B82F6' },
+        { label: 'Fixed Staff', filterKey: 'All', value: employees.filter(e => resolveEmployeeWorkType(e, assignments) === 'Fixed Site Employee').length },
+        { label: 'On Site', filterKey: 'On Duty', value: employees.filter(e => resolveEmployeeWorkType(e, assignments) === 'Fixed Site Employee' && resolveEmployeeStatus(e) === 'On Site').length, color: '#10B981' },
+        { label: 'On Duty', filterKey: 'On Duty', value: employees.filter(e => resolveEmployeeWorkType(e, assignments) === 'Fixed Site Employee' && ['On Duty', 'On Site'].includes(resolveEmployeeStatus(e))).length, color: '#3B82F6' },
         { label: 'Assigned Sites', value: sites.length, color: '#6366F1' }
       ]
     },
@@ -405,7 +545,7 @@ function DashboardDrilldownModal({
       color: '#D97706',
       items: employees.filter(e => resolveEmployeeWorkType(e, assignments) === 'Mobile Field Employee'),
       pills: [
-        { label: 'Field Staff', value: employees.filter(e => resolveEmployeeWorkType(e, assignments) === 'Mobile Field Employee').length },
+        { label: 'Field Staff', filterKey: 'All', value: employees.filter(e => resolveEmployeeWorkType(e, assignments) === 'Mobile Field Employee').length },
         { label: 'In Transit', value: employees.filter(e => resolveEmployeeWorkType(e, assignments) === 'Mobile Field Employee' && resolveEmployeeStatus(e) === 'In Transit').length, color: '#F59E0B' },
         { label: 'Completed Tasks', value: assignments.filter(a => resolveAssignmentStatus(a, attendance) === 'Completed').length, color: '#10B981' },
         { label: 'Fleet Sync', value: '100%', color: '#059669' }
@@ -418,8 +558,8 @@ function DashboardDrilldownModal({
       color: '#10B981',
       items: employees,
       pills: [
-        { label: 'Inside Safe', value: employees.filter(e => e.geofenceStatus !== 'Outside Assigned Site').length, color: '#10B981' },
-        { label: 'Active Breaches', value: employees.filter(e => e.geofenceStatus === 'Outside Assigned Site').length, color: '#DC2626' },
+        { label: 'Inside Safe', filterKey: 'Safe', value: employees.filter(e => e.geofenceStatus !== 'Outside Assigned Site').length, color: '#10B981' },
+        { label: 'Active Breaches', filterKey: 'Breach', value: employees.filter(e => e.geofenceStatus === 'Outside Assigned Site').length, color: '#DC2626' },
         { label: 'Monitored Sites', value: sites.length, color: '#6366F1' },
         { label: 'Precision Fit', value: '20m Bldg', color: '#7C3AED' }
       ]
@@ -429,13 +569,13 @@ function DashboardDrilldownModal({
       subtitle: 'Real-time machine learning fraud flags, geofence breaches, velocity spikes, and attendance anomalies.',
       icon: ShieldAlert,
       color: '#EF4444',
-      items: anomalies,
+      items: anomalyList,
       isAnomalyList: true,
       pills: [
-        { label: 'Total Anomalies', value: anomalies.length, color: '#EF4444' },
-        { label: 'Active Flags', value: anomalies.filter(a => a.status === 'Active' || a.status === 'Open' || !a.status).length, color: '#DC2626' },
-        { label: 'High Severity', value: anomalies.filter(a => a.severity === 'High' || a.severity === 'Critical').length, color: '#F43F5E' },
-        { label: 'Resolved', value: anomalies.filter(a => a.status === 'Resolved' || a.status === 'Dismissed').length, color: '#10B981' }
+        { label: 'Total Anomalies', filterKey: 'All', value: anomalyList.length, color: '#EF4444' },
+        { label: 'Active Flags', filterKey: 'Active', value: anomalyList.filter(a => a.status === 'Active' || a.status === 'Open' || !a.status).length, color: '#DC2626' },
+        { label: 'High Severity', filterKey: 'High', value: anomalyList.filter(a => a.severity === 'High' || a.severity === 'Critical').length, color: '#F43F5E' },
+        { label: 'Resolved', filterKey: 'Resolved', value: anomalyList.filter(a => a.status === 'Resolved' || a.status === 'Dismissed').length, color: '#10B981' }
       ]
     },
     on_duty: {
@@ -445,7 +585,7 @@ function DashboardDrilldownModal({
       color: '#10B981',
       items: employees.filter(e => ['On Duty', 'On Site', 'In Transit'].includes(resolveEmployeeStatus(e))),
       pills: [
-        { label: 'Total On Duty', value: employees.filter(e => ['On Duty', 'On Site', 'In Transit'].includes(resolveEmployeeStatus(e))).length, color: '#10B981' },
+        { label: 'Total On Duty', filterKey: 'All', value: employees.filter(e => ['On Duty', 'On Site', 'In Transit'].includes(resolveEmployeeStatus(e))).length, color: '#10B981' },
         { label: 'On Site', value: employees.filter(e => resolveEmployeeStatus(e) === 'On Site').length, color: '#3B82F6' },
         { label: 'In Transit', value: employees.filter(e => resolveEmployeeStatus(e) === 'In Transit').length, color: '#F59E0B' },
         { label: 'Active Ratio', value: `${employees.length > 0 ? Math.round((employees.filter(e => ['On Duty', 'On Site', 'In Transit'].includes(resolveEmployeeStatus(e))).length / employees.length) * 100) : 0}%`, color: '#6366F1' }
@@ -458,7 +598,7 @@ function DashboardDrilldownModal({
       color: '#F43F5E',
       items: employees.filter(e => resolveEmployeeStatus(e) === 'Offline'),
       pills: [
-        { label: 'Offline Personnel', value: employees.filter(e => resolveEmployeeStatus(e) === 'Offline').length, color: '#F43F5E' },
+        { label: 'Offline Personnel', filterKey: 'All', value: employees.filter(e => resolveEmployeeStatus(e) === 'Offline').length, color: '#F43F5E' },
         { label: 'Total Roster', value: employees.length, color: '#64748B' },
         { label: 'Offline Ratio', value: `${employees.length > 0 ? Math.round((employees.filter(e => resolveEmployeeStatus(e) === 'Offline').length / employees.length) * 100) : 0}%`, color: '#F43F5E' }
       ]
@@ -470,10 +610,10 @@ function DashboardDrilldownModal({
       color: '#6366F1',
       items: employees,
       pills: [
-        { label: 'Total Enrolled', value: employees.length, color: '#6366F1' },
+        { label: 'Total Enrolled', filterKey: 'All', value: employees.length, color: '#6366F1' },
         { label: 'Fixed Site', value: employees.filter(e => resolveEmployeeWorkType(e, assignments) === 'Fixed Site Employee').length, color: '#7C3AED' },
         { label: 'Mobile Field', value: employees.filter(e => resolveEmployeeWorkType(e, assignments) === 'Mobile Field Employee').length, color: '#D97706' },
-        { label: 'On Duty', value: employees.filter(e => ['On Duty', 'On Site', 'In Transit'].includes(resolveEmployeeStatus(e))).length, color: '#10B981' }
+        { label: 'On Duty', filterKey: 'On Duty', value: employees.filter(e => ['On Duty', 'On Site', 'In Transit'].includes(resolveEmployeeStatus(e))).length, color: '#10B981' }
       ]
     },
     on_site: {
@@ -516,8 +656,10 @@ function DashboardDrilldownModal({
       const matchSearch = !searchTerm ||
         (item.type || item.title || '').toLowerCase().includes(searchTerm.toLowerCase()) ||
         (item.employeeName || '').toLowerCase().includes(searchTerm.toLowerCase()) ||
+        (item.employeeId || '').toLowerCase().includes(searchTerm.toLowerCase()) ||
         (item.description || '').toLowerCase().includes(searchTerm.toLowerCase()) ||
-        (item.severity || '').toLowerCase().includes(searchTerm.toLowerCase());
+        (item.severity || '').toLowerCase().includes(searchTerm.toLowerCase()) ||
+        (item.location || item.assignedSite || '').toLowerCase().includes(searchTerm.toLowerCase());
       if (tabFilter === 'High') return matchSearch && (item.severity === 'High' || item.severity === 'Critical');
       if (tabFilter === 'Active') return matchSearch && item.status !== 'Resolved' && item.status !== 'Dismissed';
       if (tabFilter === 'Resolved') return matchSearch && (item.status === 'Resolved' || item.status === 'Dismissed');
@@ -567,59 +709,119 @@ function DashboardDrilldownModal({
         boxShadow: '0 25px 50px -12px rgba(15, 23, 42, 0.25)',
         display: 'flex',
         flexDirection: 'column',
-        overflow: 'hidden'
+        overflow: 'hidden',
+        background: '#FFFFFF'
       }}>
         {/* Modal Header */}
         <div className="drilldown-modal-header" style={{
-          padding: '20px 24px 16px',
+          padding: '18px 24px 16px',
           display: 'flex',
           justifyContent: 'space-between',
-          alignItems: 'flex-start'
+          alignItems: 'center',
+          borderBottom: '1px solid #F1F5F9'
         }}>
-          <div style={{ display: 'flex', gap: 12, alignItems: 'center' }}>
-            <div style={{
-              width: 44,
-              height: 44,
-              borderRadius: 12,
-              background: `${config.color}15`,
-              color: config.color,
-              display: 'flex',
-              alignItems: 'center',
-              justifyContent: 'center',
-              flexShrink: 0
-            }}>
-              <Icon size={22} />
+          {inspectedAnomaly ? (
+            <div style={{ display: 'flex', alignItems: 'center', gap: 12 }}>
+              <button
+                onClick={() => setInspectedAnomaly(null)}
+                style={{
+                  display: 'flex',
+                  alignItems: 'center',
+                  gap: 6,
+                  padding: '6px 14px',
+                  borderRadius: 8,
+                  border: '1px solid #CBD5E1',
+                  background: '#F8FAFC',
+                  color: '#0F172A',
+                  fontSize: 12,
+                  fontWeight: 700,
+                  cursor: 'pointer',
+                  transition: 'all 0.15s ease'
+                }}
+                onMouseEnter={(e) => { e.currentTarget.style.background = '#0F172A'; e.currentTarget.style.color = '#FFFFFF'; }}
+                onMouseLeave={(e) => { e.currentTarget.style.background = '#F8FAFC'; e.currentTarget.style.color = '#0F172A'; }}
+              >
+                <ArrowLeft size={14} /> Back to Anomalies List
+              </button>
+              <span style={{ fontSize: 13, color: '#64748B' }}>
+                Incident Details: <strong>{inspectedAnomaly.type || 'Alert'}</strong>
+              </span>
             </div>
-            <div>
-              <h2 className="drilldown-modal-title" style={{ fontSize: 18, fontWeight: 800, margin: 0, lineHeight: 1.2 }}>
-                {config.title}
-              </h2>
-              <p className="drilldown-modal-subtitle" style={{ fontSize: 13, margin: '4px 0 0 0' }}>
-                {config.subtitle}
-              </p>
+          ) : (
+            <div style={{ display: 'flex', gap: 12, alignItems: 'center' }}>
+              <div style={{
+                width: 44,
+                height: 44,
+                borderRadius: 12,
+                background: `${config.color}15`,
+                color: config.color,
+                display: 'flex',
+                alignItems: 'center',
+                justifyContent: 'center',
+                flexShrink: 0
+              }}>
+                <Icon size={22} />
+              </div>
+              <div>
+                <h2 className="drilldown-modal-title" style={{ fontSize: 18, fontWeight: 800, margin: 0, lineHeight: 1.2 }}>
+                  {config.title}
+                </h2>
+                <p className="drilldown-modal-subtitle" style={{ fontSize: 13, margin: '4px 0 0 0', color: '#64748B' }}>
+                  {config.subtitle}
+                </p>
+              </div>
             </div>
+          )}
+
+          <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
+            {config.isAnomalyList && !inspectedAnomaly && (
+              <button
+                onClick={() => {
+                  onClose();
+                  navigate('/anomalies');
+                }}
+                style={{
+                  background: 'none',
+                  border: '1px solid #E2E8F0',
+                  borderRadius: 8,
+                  padding: '6px 12px',
+                  fontSize: 12,
+                  fontWeight: 600,
+                  color: '#475569',
+                  cursor: 'pointer',
+                  display: 'flex',
+                  alignItems: 'center',
+                  gap: 5
+                }}
+                title="Open full AI Anomaly Center page"
+              >
+                Full Center <ExternalLink size={12} />
+              </button>
+            )}
+            <button
+              onClick={onClose}
+              className="drilldown-modal-close"
+              style={{
+                border: 'none',
+                width: 32,
+                height: 32,
+                borderRadius: 8,
+                cursor: 'pointer',
+                display: 'flex',
+                alignItems: 'center',
+                justifyContent: 'center',
+                transition: 'all 0.2s ease',
+                background: '#F1F5F9',
+                color: '#475569'
+              }}
+            >
+              <X size={18} />
+            </button>
           </div>
-          <button
-            onClick={onClose}
-            className="drilldown-modal-close"
-            style={{
-              border: 'none',
-              width: 32,
-              height: 32,
-              borderRadius: 8,
-              cursor: 'pointer',
-              display: 'flex',
-              alignItems: 'center',
-              justifyContent: 'center',
-              transition: 'all 0.2s ease'
-            }}
-          >
-            <X size={18} />
-          </button>
         </div>
 
         {/* Quick KPI Stat Strip */}
-        {config.pills && config.pills.length > 0 && (
+        {!inspectedAnomaly && config.pills && config.pills.length > 0 && (
           <div style={{
             display: 'flex',
             gap: 12,
@@ -628,128 +830,499 @@ function DashboardDrilldownModal({
             borderBottom: '1px solid #E2E8F0',
             overflowX: 'auto'
           }}>
-            {config.pills.map((pill, idx) => (
-              <div
-                key={idx}
-                style={{
-                  background: '#FFFFFF',
-                  border: '1px solid #E2E8F0',
-                  borderRadius: 10,
-                  padding: '6px 14px',
-                  display: 'flex',
-                  alignItems: 'center',
-                  gap: 8,
-                  fontSize: 12
-                }}
-              >
-                <span style={{ color: '#64748B', fontWeight: 600 }}>{pill.label}:</span>
-                <strong style={{ color: pill.color || '#0F172A', fontWeight: 800, fontSize: 13 }}>
-                  {pill.value}
-                </strong>
-              </div>
-            ))}
+            {config.pills.map((pill, idx) => {
+              const isSelected = pill.filterKey && tabFilter === pill.filterKey;
+              return (
+                <div
+                  key={idx}
+                  onClick={() => {
+                    if (pill.filterKey) setTabFilter(pill.filterKey);
+                  }}
+                  style={{
+                    background: isSelected ? '#EFF6FF' : '#FFFFFF',
+                    border: `1px solid ${isSelected ? '#3B82F6' : '#E2E8F0'}`,
+                    borderRadius: 10,
+                    padding: '6px 14px',
+                    display: 'flex',
+                    alignItems: 'center',
+                    gap: 8,
+                    fontSize: 12,
+                    cursor: pill.filterKey ? 'pointer' : 'default',
+                    transition: 'all 0.15s ease',
+                    boxShadow: isSelected ? '0 0 0 2px rgba(59, 130, 246, 0.2)' : 'none'
+                  }}
+                >
+                  <span style={{ color: isSelected ? '#1E40AF' : '#64748B', fontWeight: 600 }}>{pill.label}:</span>
+                  <strong style={{ color: pill.color || '#0F172A', fontWeight: 800, fontSize: 13 }}>
+                    {pill.value}
+                  </strong>
+                </div>
+              );
+            })}
           </div>
         )}
 
         {/* Search & Filter Toolbar */}
-        <div style={{
-          padding: '12px 24px',
-          display: 'flex',
-          alignItems: 'center',
-          gap: 12,
-          borderBottom: '1px solid #F1F5F9',
-          background: '#FFFFFF'
-        }}>
+        {!inspectedAnomaly && (
           <div style={{
-            position: 'relative',
-            flex: 1,
+            padding: '12px 24px',
             display: 'flex',
-            alignItems: 'center'
+            alignItems: 'center',
+            gap: 12,
+            borderBottom: '1px solid #F1F5F9',
+            background: '#FFFFFF'
           }}>
-            <Search size={15} color="#94A3B8" style={{ position: 'absolute', left: 12 }} />
-            <input
-              type="text"
-              placeholder="Search by name, ID, or assigned site..."
-              value={searchTerm}
-              onChange={(e) => setSearchTerm(e.target.value)}
-              style={{
-                width: '100%',
-                padding: '8px 12px 8px 36px',
-                borderRadius: 8,
-                border: '1px solid #CBD5E1',
-                fontSize: 13,
-                outline: 'none',
-                color: '#0F172A'
-              }}
-            />
-            {searchTerm && (
-              <button
-                onClick={() => setSearchTerm('')}
+            <div style={{
+              position: 'relative',
+              flex: 1,
+              display: 'flex',
+              alignItems: 'center'
+            }}>
+              <Search size={15} color="#94A3B8" style={{ position: 'absolute', left: 12 }} />
+              <input
+                type="text"
+                placeholder={config.isAnomalyList ? "Search by anomaly type, employee name, site, severity..." : "Search by name, ID, or assigned site..."}
+                value={searchTerm}
+                onChange={(e) => setSearchTerm(e.target.value)}
                 style={{
-                  position: 'absolute',
-                  right: 10,
-                  background: 'none',
-                  border: 'none',
-                  color: '#94A3B8',
-                  cursor: 'pointer',
-                  fontSize: 12
+                  width: '100%',
+                  padding: '8px 12px 8px 36px',
+                  borderRadius: 8,
+                  border: '1px solid #CBD5E1',
+                  fontSize: 13,
+                  outline: 'none',
+                  color: '#0F172A'
                 }}
-              >
-                ✕
-              </button>
-            )}
+              />
+              {searchTerm && (
+                <button
+                  onClick={() => setSearchTerm('')}
+                  style={{
+                    position: 'absolute',
+                    right: 10,
+                    background: 'none',
+                    border: 'none',
+                    color: '#94A3B8',
+                    cursor: 'pointer',
+                    fontSize: 12
+                  }}
+                >
+                  ✕
+                </button>
+              )}
+            </div>
+
+            {config.isAnomalyList ? (
+              <div style={{ display: 'flex', gap: 6 }}>
+                {['All', 'Active', 'High', 'Resolved'].map(tab => (
+                  <button
+                    key={tab}
+                    onClick={() => setTabFilter(tab)}
+                    style={{
+                      padding: '6px 12px',
+                      borderRadius: 8,
+                      fontSize: 12,
+                      fontWeight: 700,
+                      border: 'none',
+                      cursor: 'pointer',
+                      background: tabFilter === tab ? config.color : '#F1F5F9',
+                      color: tabFilter === tab ? '#FFFFFF' : '#475569',
+                      transition: 'all 0.2s ease'
+                    }}
+                  >
+                    {tab}
+                  </button>
+                ))}
+              </div>
+            ) : !config.isAssignmentList ? (
+              <div style={{ display: 'flex', gap: 6 }}>
+                {['All', 'On Duty', 'Offline'].map(tab => (
+                  <button
+                    key={tab}
+                    onClick={() => setTabFilter(tab)}
+                    style={{
+                      padding: '6px 12px',
+                      borderRadius: 8,
+                      fontSize: 12,
+                      fontWeight: 700,
+                      border: 'none',
+                      cursor: 'pointer',
+                      background: tabFilter === tab ? config.color : '#F1F5F9',
+                      color: tabFilter === tab ? '#FFFFFF' : '#475569',
+                      transition: 'all 0.2s ease'
+                    }}
+                  >
+                    {tab}
+                  </button>
+                ))}
+              </div>
+            ) : null}
           </div>
+        )}
 
-          {config.isAnomalyList ? (
-            <div style={{ display: 'flex', gap: 6 }}>
-              {['All', 'Active', 'High', 'Resolved'].map(tab => (
-                <button
-                  key={tab}
-                  onClick={() => setTabFilter(tab)}
-                  style={{
-                    padding: '6px 12px',
-                    borderRadius: 8,
-                    fontSize: 12,
-                    fontWeight: 700,
-                    border: 'none',
-                    cursor: 'pointer',
-                    background: tabFilter === tab ? config.color : '#F1F5F9',
-                    color: tabFilter === tab ? '#FFFFFF' : '#475569',
-                    transition: 'all 0.2s ease'
-                  }}
-                >
-                  {tab}
-                </button>
-              ))}
-            </div>
-          ) : !config.isAssignmentList ? (
-            <div style={{ display: 'flex', gap: 6 }}>
-              {['All', 'On Duty', 'Offline'].map(tab => (
-                <button
-                  key={tab}
-                  onClick={() => setTabFilter(tab)}
-                  style={{
-                    padding: '6px 12px',
-                    borderRadius: 8,
-                    fontSize: 12,
-                    fontWeight: 700,
-                    border: 'none',
-                    cursor: 'pointer',
-                    background: tabFilter === tab ? config.color : '#F1F5F9',
-                    color: tabFilter === tab ? '#FFFFFF' : '#475569',
-                    transition: 'all 0.2s ease'
-                  }}
-                >
-                  {tab}
-                </button>
-              ))}
-            </div>
-          ) : null}
-        </div>
-
-        {/* Scrollable Items List */}
+        {/* Scrollable Items List or Detailed Inspection */}
         <div style={{ flex: 1, overflowY: 'auto', padding: '16px 24px' }}>
-          {filteredList.length === 0 ? (
+          {inspectedAnomaly ? (
+            /* Anomaly Detailed Inspection View */
+            <div style={{ display: 'flex', flexDirection: 'column', gap: 14 }}>
+              {/* Top Severity & Status Hero */}
+              <div style={{
+                background: inspectedAnomaly.severity === 'High' || inspectedAnomaly.severity === 'Critical' ? '#FEF2F2' : '#FFFBEB',
+                border: `1px solid ${inspectedAnomaly.severity === 'High' || inspectedAnomaly.severity === 'Critical' ? '#FECACA' : '#FDE68A'}`,
+                borderRadius: 14,
+                padding: '16px 20px',
+                display: 'flex',
+                justifyContent: 'space-between',
+                alignItems: 'center',
+                flexWrap: 'wrap',
+                gap: 12
+              }}>
+                <div style={{ display: 'flex', alignItems: 'center', gap: 14 }}>
+                  <div style={{
+                    width: 48,
+                    height: 48,
+                    borderRadius: 12,
+                    background: inspectedAnomaly.severity === 'High' || inspectedAnomaly.severity === 'Critical' ? '#EF4444' : '#F59E0B',
+                    color: '#FFFFFF',
+                    display: 'flex',
+                    alignItems: 'center',
+                    justifyContent: 'center',
+                    flexShrink: 0
+                  }}>
+                    <ShieldAlert size={26} />
+                  </div>
+                  <div>
+                    <div style={{ display: 'flex', alignItems: 'center', gap: 8, flexWrap: 'wrap' }}>
+                      <h3 style={{ margin: 0, fontSize: 17, fontWeight: 800, color: '#0F172A' }}>
+                        {inspectedAnomaly.type || inspectedAnomaly.title || 'Security Anomaly'}
+                      </h3>
+                      <span style={{
+                        fontSize: 11,
+                        fontWeight: 800,
+                        padding: '3px 9px',
+                        borderRadius: 10,
+                        background: inspectedAnomaly.severity === 'High' || inspectedAnomaly.severity === 'Critical' ? '#DC2626' : '#D97706',
+                        color: '#FFFFFF'
+                      }}>
+                        {inspectedAnomaly.severity || 'High'} Risk
+                      </span>
+                      <span style={{
+                        fontSize: 11,
+                        fontWeight: 800,
+                        padding: '3px 9px',
+                        borderRadius: 10,
+                        background: inspectedAnomaly.status === 'Resolved' ? '#10B981' : inspectedAnomaly.status === 'Acknowledged' ? '#3B82F6' : inspectedAnomaly.status === 'Dismissed' ? '#94A3B8' : '#EF4444',
+                        color: '#FFFFFF'
+                      }}>
+                        {inspectedAnomaly.status || 'Active'}
+                      </span>
+                    </div>
+                    <div style={{ fontSize: 12, color: '#64748B', marginTop: 4, display: 'flex', alignItems: 'center', gap: 6, flexWrap: 'wrap' }}>
+                      <Clock size={13} />
+                      <span>Detected: <strong>{formatAnomalyFullDate(inspectedAnomaly.timestamp || inspectedAnomaly.createdAt)}</strong></span>
+                      <span>•</span>
+                      <span>Confidence: <strong>{inspectedAnomaly.confidence || '94%'}</strong></span>
+                    </div>
+                  </div>
+                </div>
+
+                <div style={{ display: 'flex', gap: 8 }}>
+                  <button
+                    onClick={() => handleLocateOnMap(inspectedAnomaly)}
+                    style={{
+                      background: '#0F172A',
+                      color: '#FFFFFF',
+                      border: 'none',
+                      borderRadius: 8,
+                      padding: '8px 14px',
+                      fontSize: 12,
+                      fontWeight: 700,
+                      cursor: 'pointer',
+                      display: 'flex',
+                      alignItems: 'center',
+                      gap: 6,
+                      transition: 'all 0.15s ease'
+                    }}
+                    onMouseEnter={(e) => { e.currentTarget.style.background = '#2563EB'; }}
+                    onMouseLeave={(e) => { e.currentTarget.style.background = '#0F172A'; }}
+                  >
+                    <Navigation size={14} /> Locate on Map
+                  </button>
+                </div>
+              </div>
+
+              {/* Description & Incident Intel */}
+              <div style={{
+                background: '#FFFFFF',
+                border: '1px solid #E2E8F0',
+                borderRadius: 12,
+                padding: '16px',
+                display: 'flex',
+                flexDirection: 'column',
+                gap: 8
+              }}>
+                <span style={{ fontSize: 11, fontWeight: 700, textTransform: 'uppercase', color: '#64748B', letterSpacing: '0.05em' }}>
+                  Incident Description & Diagnosis
+                </span>
+                <p style={{ margin: 0, fontSize: 14, color: '#1E293B', lineHeight: 1.5, fontWeight: 600 }}>
+                  {cleanAnomalyDescription(inspectedAnomaly.description, inspectedAnomaly.employeeName)}
+                </p>
+                {inspectedAnomaly.location && (
+                  <div style={{ fontSize: 12, color: '#475569', display: 'flex', alignItems: 'center', gap: 6, marginTop: 4 }}>
+                    <MapPin size={13} color="#6366F1" />
+                    <span>Reported Location: <strong>{inspectedAnomaly.location}</strong></span>
+                    {(inspectedAnomaly.latitude && inspectedAnomaly.longitude) && (
+                      <span style={{ color: '#94A3B8' }}>({Number(inspectedAnomaly.latitude).toFixed(5)}, {Number(inspectedAnomaly.longitude).toFixed(5)})</span>
+                    )}
+                  </div>
+                )}
+              </div>
+
+              {/* Personnel & Verification Info */}
+              <div style={{
+                display: 'grid',
+                gridTemplateColumns: 'repeat(auto-fit, minmax(280px, 1fr))',
+                gap: 12
+              }}>
+                {/* Personnel Record */}
+                <div style={{
+                  background: '#FFFFFF',
+                  border: '1px solid #E2E8F0',
+                  borderRadius: 12,
+                  padding: '14px 16px',
+                  display: 'flex',
+                  flexDirection: 'column',
+                  gap: 8
+                }}>
+                  <span style={{ fontSize: 11, fontWeight: 700, textTransform: 'uppercase', color: '#64748B', letterSpacing: '0.05em' }}>
+                    Personnel Record
+                  </span>
+                  <div style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
+                    <div style={{
+                      width: 38,
+                      height: 38,
+                      borderRadius: '50%',
+                      background: '#EDE9FE',
+                      color: '#7C3AED',
+                      display: 'flex',
+                      alignItems: 'center',
+                      justifyContent: 'center',
+                      fontWeight: 800,
+                      fontSize: 13
+                    }}>
+                      {getInitials(inspectedAnomaly.employeeName)}
+                    </div>
+                    <div>
+                      <div style={{ fontWeight: 800, fontSize: 14, color: '#0F172A' }}>
+                        {inspectedAnomaly.employeeName || 'Field Employee'}
+                      </div>
+                      <div style={{ fontSize: 12, color: '#64748B' }}>
+                        ID: {inspectedAnomaly.employeeId || 'N/A'} {inspectedAnomaly.employeeEmail ? `• ${inspectedAnomaly.employeeEmail}` : ''}
+                      </div>
+                    </div>
+                  </div>
+                </div>
+
+                {/* Assignment & Policy Info */}
+                <div style={{
+                  background: '#FFFFFF',
+                  border: '1px solid #E2E8F0',
+                  borderRadius: 12,
+                  padding: '14px 16px',
+                  display: 'flex',
+                  flexDirection: 'column',
+                  gap: 8
+                }}>
+                  <span style={{ fontSize: 11, fontWeight: 700, textTransform: 'uppercase', color: '#64748B', letterSpacing: '0.05em' }}>
+                    Operational Context
+                  </span>
+                  <div style={{ fontSize: 12, color: '#334155', display: 'flex', flexDirection: 'column', gap: 4 }}>
+                    <div>Site / Route: <strong>{inspectedAnomaly.assignedSite || inspectedAnomaly.site || inspectedAnomaly.location || 'Assigned Facility'}</strong></div>
+                    <div>Source Pipeline: <strong>{inspectedAnomaly.sourceCollection === 'ActivityLogs' ? 'Activity Log Sentinel' : 'AI Sensor Pipeline'}</strong></div>
+                  </div>
+                </div>
+              </div>
+
+              {/* Employee Direct Explanation / Proof (if available) */}
+              {inspectedAnomaly.employeeResponse ? (
+                <div style={{
+                  background: '#EFF6FF',
+                  border: '1px solid #BFDBFE',
+                  borderRadius: 12,
+                  padding: '16px'
+                }}>
+                  <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 8 }}>
+                    <span style={{ fontWeight: 800, color: '#1E40AF', fontSize: 13, display: 'flex', alignItems: 'center', gap: 6 }}>
+                      💬 Employee Explanation
+                    </span>
+                    <span style={{ fontSize: 11, color: '#64748B' }}>
+                      {inspectedAnomaly.respondedAt ? formatAnomalyTime(inspectedAnomaly.respondedAt) : 'Submitted via mobile'}
+                    </span>
+                  </div>
+                  <p style={{
+                    margin: 0,
+                    fontStyle: 'italic',
+                    color: '#1E293B',
+                    fontSize: 13,
+                    lineHeight: 1.5,
+                    background: '#FFFFFF',
+                    padding: 12,
+                    borderRadius: 8,
+                    border: '1px solid #DBEAFE'
+                  }}>
+                    "{inspectedAnomaly.employeeResponse}"
+                  </p>
+                  {inspectedAnomaly.responseCategory && (
+                    <div style={{ marginTop: 8, fontSize: 12, color: '#2563EB', fontWeight: 600 }}>
+                      Category: <strong>{inspectedAnomaly.responseCategory}</strong>
+                    </div>
+                  )}
+                  {inspectedAnomaly.responsePhoto && (
+                    <div style={{ marginTop: 10 }}>
+                      <span style={{ fontSize: 11, color: '#64748B', display: 'block', marginBottom: 6, fontWeight: 700 }}>
+                        Attached Verification Photo:
+                      </span>
+                      <img
+                        src={inspectedAnomaly.responsePhoto}
+                        alt="Employee proof"
+                        style={{ maxWidth: '100%', maxHeight: 200, objectFit: 'cover', borderRadius: 8, border: '1px solid #CBD5E1' }}
+                      />
+                    </div>
+                  )}
+                </div>
+              ) : (
+                <div style={{
+                  background: '#FFFBEB',
+                  border: '1px solid #FDE68A',
+                  borderRadius: 10,
+                  padding: '12px 16px',
+                  color: '#B45309',
+                  fontSize: 12.5,
+                  display: 'flex',
+                  alignItems: 'center',
+                  gap: 8
+                }}>
+                  <span>⏳</span>
+                  <span>Awaiting employee explanation via the Mobile Anomaly Alerts screen.</span>
+                </div>
+              )}
+
+              {/* Quick Action Buttons */}
+              <div style={{
+                background: '#F8FAFC',
+                border: '1px solid #E2E8F0',
+                borderRadius: 12,
+                padding: '16px',
+                display: 'flex',
+                flexDirection: 'column',
+                gap: 10
+              }}>
+                <span style={{ fontSize: 11, fontWeight: 700, textTransform: 'uppercase', color: '#64748B', letterSpacing: '0.05em' }}>
+                  Operational Resolution Actions
+                </span>
+                <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(140px, 1fr))', gap: 8 }}>
+                  <button
+                    onClick={() => handleAnomalyAction(inspectedAnomaly.id, 'Resolved')}
+                    style={{
+                      padding: '10px 14px',
+                      backgroundColor: '#10B981',
+                      color: '#FFFFFF',
+                      border: 'none',
+                      borderRadius: 8,
+                      fontWeight: 700,
+                      fontSize: 12,
+                      cursor: 'pointer',
+                      display: 'flex',
+                      alignItems: 'center',
+                      justifyContent: 'center',
+                      gap: 6
+                    }}
+                  >
+                    <Check size={14} /> Mark Resolved
+                  </button>
+                  <button
+                    onClick={() => handleAnomalyAction(inspectedAnomaly.id, 'Acknowledged')}
+                    style={{
+                      padding: '10px 14px',
+                      backgroundColor: '#3B82F6',
+                      color: '#FFFFFF',
+                      border: 'none',
+                      borderRadius: 8,
+                      fontWeight: 700,
+                      fontSize: 12,
+                      cursor: 'pointer',
+                      display: 'flex',
+                      alignItems: 'center',
+                      justifyContent: 'center',
+                      gap: 6
+                    }}
+                  >
+                    <Eye size={14} /> Acknowledge
+                  </button>
+                  <button
+                    onClick={() => handleAnomalyAction(inspectedAnomaly.id, 'Escalated to Fraud')}
+                    style={{
+                      padding: '10px 14px',
+                      backgroundColor: '#EF4444',
+                      color: '#FFFFFF',
+                      border: 'none',
+                      borderRadius: 8,
+                      fontWeight: 700,
+                      fontSize: 12,
+                      cursor: 'pointer',
+                      display: 'flex',
+                      alignItems: 'center',
+                      justifyContent: 'center',
+                      gap: 6
+                    }}
+                  >
+                    <AlertTriangle size={14} /> Escalate to Fraud
+                  </button>
+                  <button
+                    onClick={() => handleAnomalyAction(inspectedAnomaly.id, 'Dismissed')}
+                    style={{
+                      padding: '10px 14px',
+                      backgroundColor: '#64748B',
+                      color: '#FFFFFF',
+                      border: 'none',
+                      borderRadius: 8,
+                      fontWeight: 700,
+                      fontSize: 12,
+                      cursor: 'pointer',
+                      display: 'flex',
+                      alignItems: 'center',
+                      justifyContent: 'center',
+                      gap: 6
+                    }}
+                  >
+                    <X size={14} /> Dismiss Alert
+                  </button>
+                </div>
+
+                <div style={{ marginTop: 4, display: 'flex', justifyContent: 'flex-end' }}>
+                  <button
+                    onClick={() => {
+                      onClose();
+                      navigate('/anomalies', { state: { selectedAnomalyId: inspectedAnomaly.id } });
+                    }}
+                    style={{
+                      background: 'none',
+                      border: 'none',
+                      color: '#2563EB',
+                      fontSize: 12,
+                      fontWeight: 700,
+                      cursor: 'pointer',
+                      display: 'flex',
+                      alignItems: 'center',
+                      gap: 4
+                    }}
+                  >
+                    Open in Full Anomaly Center <ExternalLink size={12} />
+                  </button>
+                </div>
+              </div>
+            </div>
+          ) : filteredList.length === 0 ? (
             <div style={{ textAlign: 'center', padding: '40px 20px', color: '#94A3B8' }}>
               <div style={{ fontSize: 32, marginBottom: 8 }}>🔍</div>
               <div style={{ fontWeight: 700, fontSize: 15, color: '#475569' }}>No matching records found</div>
@@ -764,10 +1337,15 @@ function DashboardDrilldownModal({
                 const sevColor = isHigh ? '#EF4444' : isMed ? '#F59E0B' : '#3B82F6';
                 const sevBg = isHigh ? '#FEF2F2' : isMed ? '#FFFBEB' : '#EFF6FF';
                 const isResolved = anom.status === 'Resolved' || anom.status === 'Dismissed';
+                const isAcknowledged = anom.status === 'Acknowledged';
+                const isEscalated = anom.status === 'Escalated to Fraud';
+                const cleanedDesc = cleanAnomalyDescription(anom.description, anom.employeeName);
+                const timeBadge = formatAnomalyTime(anom.timestamp || anom.createdAt);
 
                 return (
                   <div
                     key={anom.id || i}
+                    onClick={() => setInspectedAnomaly(anom)}
                     style={{
                       background: isHigh && !isResolved ? '#FFF5F5' : '#FFFFFF',
                       border: `1px solid ${isHigh && !isResolved ? '#FECACA' : '#E2E8F0'}`,
@@ -777,10 +1355,21 @@ function DashboardDrilldownModal({
                       alignItems: 'center',
                       justifyContent: 'space-between',
                       boxShadow: '0 1px 3px rgba(0,0,0,0.03)',
-                      transition: 'all 0.2s ease'
+                      transition: 'all 0.2s ease',
+                      cursor: 'pointer'
+                    }}
+                    onMouseEnter={(e) => {
+                      e.currentTarget.style.borderColor = sevColor;
+                      e.currentTarget.style.transform = 'translateY(-1px)';
+                      e.currentTarget.style.boxShadow = '0 4px 12px rgba(0,0,0,0.06)';
+                    }}
+                    onMouseLeave={(e) => {
+                      e.currentTarget.style.borderColor = isHigh && !isResolved ? '#FECACA' : '#E2E8F0';
+                      e.currentTarget.style.transform = 'none';
+                      e.currentTarget.style.boxShadow = '0 1px 3px rgba(0,0,0,0.03)';
                     }}
                   >
-                    <div style={{ display: 'flex', alignItems: 'center', gap: 12 }}>
+                    <div style={{ display: 'flex', alignItems: 'center', gap: 12, flex: 1, minWidth: 0 }}>
                       <div style={{
                         width: 40,
                         height: 40,
@@ -794,8 +1383,8 @@ function DashboardDrilldownModal({
                       }}>
                         <ShieldAlert size={20} />
                       </div>
-                      <div>
-                        <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
+                      <div style={{ flex: 1, minWidth: 0 }}>
+                        <div style={{ display: 'flex', alignItems: 'center', gap: 8, flexWrap: 'wrap' }}>
                           <span style={{ fontWeight: 800, fontSize: 14, color: '#0F172A' }}>
                             {anom.type || anom.title || 'Security Anomaly'}
                           </span>
@@ -815,41 +1404,100 @@ function DashboardDrilldownModal({
                             fontWeight: 700,
                             padding: '2px 7px',
                             borderRadius: 10,
-                            background: isResolved ? '#ECFDF5' : '#FEF2F2',
-                            color: isResolved ? '#059669' : '#DC2626'
+                            background: isResolved ? '#ECFDF5' : isAcknowledged ? '#EFF6FF' : isEscalated ? '#FEF2F2' : '#FEF2F2',
+                            color: isResolved ? '#059669' : isAcknowledged ? '#2563EB' : isEscalated ? '#DC2626' : '#DC2626'
                           }}>
-                            {isResolved ? 'Resolved' : 'Active'}
+                            {anom.status || 'Active'}
                           </span>
+                          <span style={{
+                            fontSize: 11,
+                            color: '#94A3B8',
+                            display: 'inline-flex',
+                            alignItems: 'center',
+                            gap: 4
+                          }}>
+                            <Clock size={11} /> {timeBadge}
+                          </span>
+                          {anom.employeeResponse && (
+                            <span style={{
+                              fontSize: 10,
+                              fontWeight: 700,
+                              padding: '2px 7px',
+                              borderRadius: 10,
+                              background: '#EFF6FF',
+                              color: '#2563EB',
+                              border: '1px solid #BFDBFE'
+                            }}>
+                              💬 Response
+                            </span>
+                          )}
                         </div>
-                        <div style={{ fontSize: 12, color: '#64748B', marginTop: 4 }}>
-                          Employee: <strong style={{ color: '#0F172A' }}>{anom.employeeName || 'Staff Member'}</strong> • {anom.description || 'Outlier telemetry detected'}
+                        <div style={{ fontSize: 12, color: '#64748B', marginTop: 4, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
+                          Employee: <strong style={{ color: '#0F172A' }}>{anom.employeeName || 'Staff Member'}</strong> • {cleanedDesc}
                         </div>
                       </div>
                     </div>
-                    <button
-                      onClick={() => {
-                        onClose();
-                        navigate('/anomalies');
-                      }}
-                      style={{
-                        background: '#0F172A',
-                        color: '#FFFFFF',
-                        border: 'none',
-                        borderRadius: 8,
-                        padding: '6px 14px',
-                        fontSize: 11,
-                        fontWeight: 700,
-                        cursor: 'pointer',
-                        display: 'flex',
-                        alignItems: 'center',
-                        gap: 5,
-                        transition: 'all 0.2s ease'
-                      }}
-                      onMouseEnter={(e) => { e.currentTarget.style.background = '#EF4444'; }}
-                      onMouseLeave={(e) => { e.currentTarget.style.background = '#0F172A'; }}
-                    >
-                      Inspect <ArrowRight size={12} />
-                    </button>
+
+                    <div style={{ display: 'flex', alignItems: 'center', gap: 8, flexShrink: 0, marginLeft: 12 }}>
+                      {!isResolved && (
+                        <button
+                          onClick={(e) => {
+                            e.stopPropagation();
+                            handleAnomalyAction(anom.id, 'Resolved');
+                          }}
+                          style={{
+                            background: '#ECFDF5',
+                            color: '#059669',
+                            border: '1px solid #A7F3D0',
+                            borderRadius: 8,
+                            padding: '6px 11px',
+                            fontSize: 11,
+                            fontWeight: 700,
+                            cursor: 'pointer',
+                            display: 'flex',
+                            alignItems: 'center',
+                            gap: 4,
+                            transition: 'all 0.2s ease'
+                          }}
+                          onMouseEnter={(e) => {
+                            e.currentTarget.style.background = '#10B981';
+                            e.currentTarget.style.color = '#FFFFFF';
+                          }}
+                          onMouseLeave={(e) => {
+                            e.currentTarget.style.background = '#ECFDF5';
+                            e.currentTarget.style.color = '#059669';
+                          }}
+                          title="Quick Resolve this anomaly"
+                        >
+                          <Check size={12} /> Resolve
+                        </button>
+                      )}
+
+                      <button
+                        onClick={(e) => {
+                          e.stopPropagation();
+                          setInspectedAnomaly(anom);
+                        }}
+                        style={{
+                          background: '#0F172A',
+                          color: '#FFFFFF',
+                          border: 'none',
+                          borderRadius: 8,
+                          padding: '6px 14px',
+                          fontSize: 11,
+                          fontWeight: 700,
+                          cursor: 'pointer',
+                          display: 'flex',
+                          alignItems: 'center',
+                          gap: 5,
+                          transition: 'all 0.2s ease'
+                        }}
+                        onMouseEnter={(e) => { e.currentTarget.style.background = '#EF4444'; }}
+                        onMouseLeave={(e) => { e.currentTarget.style.background = '#0F172A'; }}
+                      >
+                        Inspect <ArrowRight size={12} />
+                      </button>
+                    </div>
                   </div>
                 );
               })}
@@ -1062,23 +1710,52 @@ function DashboardDrilldownModal({
           color: '#64748B'
         }}>
           <div>
-            Showing <strong>{filteredList.length}</strong> of <strong>{config.items.length}</strong> records
+            {inspectedAnomaly ? (
+              <span>Inspecting Incident: <strong>{inspectedAnomaly.type || 'Anomaly Alert'}</strong></span>
+            ) : (
+              <span>Showing <strong>{filteredList.length}</strong> of <strong>{config.items.length}</strong> records</span>
+            )}
           </div>
-          <button
-            onClick={onClose}
-            style={{
-              padding: '6px 16px',
-              borderRadius: 8,
-              border: '1px solid #CBD5E1',
-              background: '#FFFFFF',
-              color: '#0F172A',
-              fontWeight: 700,
-              fontSize: 12,
-              cursor: 'pointer'
-            }}
-          >
-            Close
-          </button>
+          <div style={{ display: 'flex', gap: 8, alignItems: 'center' }}>
+            {config.isAnomalyList && !inspectedAnomaly && (
+              <button
+                onClick={() => {
+                  onClose();
+                  navigate('/anomalies');
+                }}
+                style={{
+                  padding: '6px 14px',
+                  borderRadius: 8,
+                  border: '1px solid #CBD5E1',
+                  background: '#F1F5F9',
+                  color: '#0F172A',
+                  fontWeight: 700,
+                  fontSize: 12,
+                  cursor: 'pointer',
+                  display: 'flex',
+                  alignItems: 'center',
+                  gap: 4
+                }}
+              >
+                Full Center <ExternalLink size={12} />
+              </button>
+            )}
+            <button
+              onClick={onClose}
+              style={{
+                padding: '6px 16px',
+                borderRadius: 8,
+                border: '1px solid #CBD5E1',
+                background: '#FFFFFF',
+                color: '#0F172A',
+                fontWeight: 700,
+                fontSize: 12,
+                cursor: 'pointer'
+              }}
+            >
+              Close
+            </button>
+          </div>
         </div>
       </div>
     </div>
@@ -1124,7 +1801,9 @@ export default function Dashboard() {
         setRecentLogs(snap.docs.map(d => ({ id: d.id, ...d.data() })));
       });
       const unsubAi = onSnapshot(query(collection(db, 'ai_analysis')), (snap) => {
-        setAnomalies(snap.docs.map(d => ({ id: d.id, ...d.data() })));
+        const list = snap.docs.map(d => ({ id: d.id, ...d.data() }));
+        list.sort((a, b) => getTsMillis(b.timestamp || b.createdAt) - getTsMillis(a.timestamp || a.createdAt));
+        setAnomalies(list);
       });
       return () => { unsubEmp(); unsubSites(); unsubAsg(); unsubAtt(); unsubLogs(); unsubAi(); };
     } catch (e) {
@@ -1555,13 +2234,7 @@ export default function Dashboard() {
                   }
                   color={activeAnomalyCount > 0 ? "#EF4444" : geofenceViolations > 0 ? "#F59E0B" : (activeWorkforceCount > 0 ? "#8B5CF6" : "#10B981")}
                   badge="Inspect"
-                  onClick={() => {
-                    if (activeAnomalyCount > 0 || anomalies.length > 0) {
-                      setDrilldownType('ai_anomalies');
-                    } else {
-                      navigate('/anomalies');
-                    }
-                  }}
+                  onClick={() => setDrilldownType('ai_anomalies')}
                 />
               </div>
             </div>

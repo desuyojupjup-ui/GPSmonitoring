@@ -7,8 +7,20 @@ import {
 } from 'lucide-react';
 import { db, collection, onSnapshot, query, doc, updateDoc, deleteDoc, addDoc } from '../firebase';
 import { showToast, showConfirmDelete } from '../utils/toast';
+import { startAnomalyNotificationSync } from '../services/anomalyNotificationSync';
 
-const TABS = ['All Notifications', 'Unread', 'Geofence Alerts', 'Mobile Routes', 'System & Security'];
+const notifMillis = (n) => {
+  const ts = n?.timestamp || n?.createdAt;
+  if (!ts) return 0;
+  if (typeof ts?.toDate === 'function') { try { return ts.toDate().getTime(); } catch (_) {} }
+  if (typeof ts?.seconds === 'number') return ts.seconds * 1000;
+  if (typeof ts === 'number') return ts;
+  const d = new Date(ts);
+  return isNaN(d.getTime()) ? 0 : d.getTime();
+};
+const sortNotifs = (list) => [...list].sort((a, b) => notifMillis(b) - notifMillis(a));
+
+const TABS = ['All Notifications', 'Unread', 'AI Anomaly Alerts', 'Geofence Alerts', 'Mobile Routes', 'System & Security'];
 
 export default function NotificationsPage() {
   const navigate = useNavigate();
@@ -72,26 +84,28 @@ export default function NotificationsPage() {
     try {
       unsub = onSnapshot(query(collection(db, 'notifications')), (snap) => {
         if (!snap.empty) {
-          const live = snap.docs.map(d => ({ id: d.id, ...d.data() }));
+          const live = sortNotifs(snap.docs.map(d => ({ id: d.id, ...d.data() })));
           setNotifs(live);
           localStorage.setItem('subai_store_notifications', JSON.stringify(live));
         } else {
-          const initial = loadStoredNotifications();
+          const initial = sortNotifs(loadStoredNotifications());
           setNotifs(initial);
           localStorage.setItem('subai_store_notifications', JSON.stringify(initial));
         }
         setLoading(false);
       }, () => {
-        setNotifs(loadStoredNotifications());
+        setNotifs(sortNotifs(loadStoredNotifications()));
         setLoading(false);
       });
     } catch {
-      setNotifs(loadStoredNotifications());
+      setNotifs(sortNotifs(loadStoredNotifications()));
       setLoading(false);
     }
 
+    const stopAnomalySync = startAnomalyNotificationSync();
+
     const handleSyncEvent = () => {
-      setNotifs(loadStoredNotifications());
+      setNotifs(sortNotifs(loadStoredNotifications()));
     };
 
     window.addEventListener('subai_notifications_updated', handleSyncEvent);
@@ -101,6 +115,7 @@ export default function NotificationsPage() {
 
     return () => {
       unsub();
+      stopAnomalySync();
       window.removeEventListener('subai_notifications_updated', handleSyncEvent);
     };
   }, []);
@@ -121,12 +136,14 @@ export default function NotificationsPage() {
       let matchesTab = true;
       if (activeTab === 'Unread') {
         matchesTab = n.status === 'Unread' || n.read === false;
+      } else if (activeTab === 'AI Anomaly Alerts') {
+        matchesTab = n.category === 'AI Anomaly' || Boolean(n.anomalyId) || titleStr.includes('anomaly') || senderStr.includes('anomaly') || typeStr.includes('anomaly');
       } else if (activeTab === 'Geofence Alerts') {
         matchesTab = workTypeStr.includes('fixed') || typeStr.includes('geofence') || titleStr.includes('geofence') || senderStr.includes('geofence') || msgStr.includes('geofence');
       } else if (activeTab === 'Mobile Routes') {
         matchesTab = workTypeStr.includes('mobile') || typeStr.includes('route') || titleStr.includes('route') || senderStr.includes('route') || msgStr.includes('destination') || msgStr.includes('travel');
       } else if (activeTab === 'System & Security') {
-        matchesTab = typeStr.includes('alert') || typeStr.includes('system') || typeStr.includes('security') || titleStr.includes('backup') || titleStr.includes('security');
+        matchesTab = typeStr.includes('alert') || typeStr.includes('system') || typeStr.includes('security') || titleStr.includes('backup') || titleStr.includes('security') || n.category === 'AI Anomaly' || Boolean(n.anomalyId);
       }
 
       return matchesSearch && matchesTab;
@@ -339,8 +356,14 @@ export default function NotificationsPage() {
   // 7. Contextual Route Navigation
   const navigateToRelatedModule = (notif) => {
     setSelectedNotif(null);
+    if (notif.anomalyId || notif.category === 'AI Anomaly') {
+      navigate('/anomalies', { state: { selectedAnomalyId: notif.anomalyId } });
+      return;
+    }
     const text = `${notif.type || ''} ${notif.title || ''} ${notif.sender || ''} ${notif.message || ''}`.toLowerCase();
-    if (text.includes('tracking') || text.includes('gps') || text.includes('speed') || text.includes('location')) {
+    if (text.includes('anomaly')) {
+      navigate('/anomalies');
+    } else if (text.includes('tracking') || text.includes('gps') || text.includes('speed') || text.includes('location')) {
       navigate('/tracking');
     } else if (text.includes('attendance') || text.includes('check-in') || text.includes('late')) {
       navigate('/attendance');
@@ -362,6 +385,7 @@ export default function NotificationsPage() {
   // Quick Stats
   const totalCount = notifs.length;
   const unreadCount = notifs.filter(n => n.status === 'Unread' || n.read === false).length;
+  const anomalyCount = notifs.filter(n => n.category === 'AI Anomaly' || Boolean(n.anomalyId) || (n.title || '').toLowerCase().includes('anomaly') || (n.sender || '').toLowerCase().includes('anomaly')).length;
   const geofenceCount = notifs.filter(n => (n.sender || '').includes('Geofence') || (n.workType || '').includes('Fixed') || (n.title || '').includes('Geofence')).length;
   const systemCount = notifs.filter(n => n.type === 'Alert' || n.type === 'System' || (n.sender || '').includes('System')).length;
 
@@ -494,11 +518,12 @@ export default function NotificationsPage() {
       </div>
 
       {/* KPI STATS CARDS */}
-      <div style={{ display: 'grid', gridTemplateColumns: 'repeat(4, 1fr)', gap: '16px' }}>
+      <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(200px, 1fr))', gap: '16px' }}>
         <StatCard label="Total Notifications" value={totalCount} icon={Bell} color="#1E5ADB" bg="#EEF2FF" />
         <StatCard label="Unread Alerts" value={unreadCount} icon={Clock} color="#F59E0B" bg="#FFFBEB" />
+        <StatCard label="AI Anomaly Alerts" value={anomalyCount} icon={ShieldAlert} color="#EF4444" bg="#FEF2F2" />
         <StatCard label="Geofence & Site Alerts" value={geofenceCount} icon={ShieldAlert} color="#8B5CF6" bg="#F3E8FF" />
-        <StatCard label="System & Security Flags" value={systemCount} icon={AlertTriangle} color="#EF4444" bg="#FEF2F2" />
+        <StatCard label="System & Security Flags" value={systemCount} icon={AlertTriangle} color="#059669" bg="#ECFDF5" />
       </div>
 
       {/* MAIN DATATABLE CONTAINER */}
@@ -530,6 +555,11 @@ export default function NotificationsPage() {
                 {tab === 'Unread' && unreadCount > 0 && (
                   <span style={{ marginLeft: 6, background: '#EF4444', color: 'white', borderRadius: 10, padding: '1px 6px', fontSize: 10 }}>
                     {unreadCount}
+                  </span>
+                )}
+                {tab === 'AI Anomaly Alerts' && anomalyCount > 0 && (
+                  <span style={{ marginLeft: 6, background: '#DC2626', color: 'white', borderRadius: 10, padding: '1px 6px', fontSize: 10 }}>
+                    {anomalyCount}
                   </span>
                 )}
               </button>
@@ -659,16 +689,20 @@ export default function NotificationsPage() {
                             width: 34,
                             height: 34,
                             borderRadius: '50%',
-                            background: isUnread ? '#DBEAFE' : '#EFF6FF',
+                            background: (row.category === 'AI Anomaly' || row.anomalyId) ? '#FEE2E2' : isUnread ? '#DBEAFE' : '#EFF6FF',
                             display: 'flex',
                             alignItems: 'center',
                             justifyContent: 'center',
-                            color: '#1E5ADB',
+                            color: (row.category === 'AI Anomaly' || row.anomalyId) ? '#DC2626' : '#1E5ADB',
                             fontWeight: '800',
                             fontSize: '12px',
                             flexShrink: 0
                           }}>
-                            {(row.sender || 'SYS').substring(0, 2).toUpperCase()}
+                            {(row.category === 'AI Anomaly' || row.anomalyId) ? (
+                              <ShieldAlert size={18} />
+                            ) : (
+                              (row.sender || 'SYS').substring(0, 2).toUpperCase()
+                            )}
                           </div>
                           <div>
                             <div style={{ fontWeight: 700, color: '#0F172A' }}>{row.sender || 'System Dispatch'}</div>
@@ -699,10 +733,28 @@ export default function NotificationsPage() {
                         <div style={{ color: '#94A3B8', fontSize: 11 }}>{row.time || 'Recent'}</div>
                       </td>
                       <td style={{ padding: '14px 18px', whiteSpace: 'nowrap' }}>
-                        <div style={{ display: 'flex', alignItems: 'center', gap: 6, fontSize: 12, fontWeight: 600, color: '#475569' }}>
-                          {row.type === 'Alert' ? <AlertTriangle size={14} color="#EF4444" /> : row.type === 'System' ? <CheckCircle size={14} color="#10B981" /> : <Bell size={14} color="#3B82F6" />}
-                          {row.type || 'Alert'}
-                        </div>
+                        {(row.category === 'AI Anomaly' || row.anomalyId) ? (
+                          <span style={{
+                            display: 'inline-flex',
+                            alignItems: 'center',
+                            gap: 5,
+                            fontSize: 11,
+                            fontWeight: 700,
+                            padding: '3px 9px',
+                            borderRadius: 12,
+                            background: '#FEE2E2',
+                            color: '#DC2626',
+                            border: '1px solid #FCA5A5'
+                          }}>
+                            <ShieldAlert size={13} color="#DC2626" />
+                            AI Anomaly
+                          </span>
+                        ) : (
+                          <div style={{ display: 'flex', alignItems: 'center', gap: 6, fontSize: 12, fontWeight: 600, color: '#475569' }}>
+                            {row.type === 'Alert' ? <AlertTriangle size={14} color="#EF4444" /> : row.type === 'System' ? <CheckCircle size={14} color="#10B981" /> : <Bell size={14} color="#3B82F6" />}
+                            {row.category || row.type || 'Alert'}
+                          </div>
+                        )}
                       </td>
                       <td style={{ padding: '14px 18px', whiteSpace: 'nowrap' }}>
                         <span style={{
@@ -895,8 +947,23 @@ export default function NotificationsPage() {
 
             <div style={{ padding: '24px', display: 'flex', flexDirection: 'column', gap: '16px' }}>
               <div style={{ display: 'flex', alignItems: 'center', gap: 12, background: '#F8FAFC', padding: '14px', borderRadius: '12px', border: '1px solid #F1F5F9' }}>
-                <div style={{ width: 44, height: 44, borderRadius: '50%', background: '#EFF6FF', color: '#1E5ADB', display: 'flex', alignItems: 'center', justifyContent: 'center', fontWeight: '800', fontSize: '15px' }}>
-                  {(selectedNotif.sender || 'S').substring(0, 2).toUpperCase()}
+                <div style={{
+                  width: 44,
+                  height: 44,
+                  borderRadius: '50%',
+                  background: (selectedNotif.anomalyId || selectedNotif.category === 'AI Anomaly') ? '#FEE2E2' : '#EFF6FF',
+                  color: (selectedNotif.anomalyId || selectedNotif.category === 'AI Anomaly') ? '#DC2626' : '#1E5ADB',
+                  display: 'flex',
+                  alignItems: 'center',
+                  justifyContent: 'center',
+                  fontWeight: '800',
+                  fontSize: '15px'
+                }}>
+                  {(selectedNotif.anomalyId || selectedNotif.category === 'AI Anomaly') ? (
+                    <ShieldAlert size={22} color="#DC2626" />
+                  ) : (
+                    (selectedNotif.sender || 'S').substring(0, 2).toUpperCase()
+                  )}
                 </div>
                 <div>
                   <div style={{ fontSize: 15, fontWeight: 800, color: '#0F172A' }}>{selectedNotif.title}</div>
@@ -916,7 +983,9 @@ export default function NotificationsPage() {
               <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 8 }}>
                 <div style={{ background: '#F8FAFC', padding: '10px 12px', borderRadius: 8, border: '1px solid #E2E8F0', fontSize: 12 }}>
                   <span style={{ color: '#64748B' }}>Category: </span>
-                  <strong style={{ color: '#0F172A' }}>{selectedNotif.type || 'Alert'}</strong>
+                  <strong style={{ color: (selectedNotif.anomalyId || selectedNotif.category === 'AI Anomaly') ? '#DC2626' : '#0F172A' }}>
+                    {selectedNotif.category || selectedNotif.type || 'Alert'}
+                  </strong>
                 </div>
                 <div style={{ background: '#F8FAFC', padding: '10px 12px', borderRadius: 8, border: '1px solid #E2E8F0', fontSize: 12 }}>
                   <span style={{ color: '#64748B' }}>Work Environment: </span>
@@ -932,10 +1001,10 @@ export default function NotificationsPage() {
                   style={{
                     display: 'inline-flex',
                     alignItems: 'center',
-                    gap: 4,
+                    gap: 6,
                     padding: '8px 14px',
                     borderRadius: '8px',
-                    background: '#1E5ADB',
+                    background: (selectedNotif.anomalyId || selectedNotif.category === 'AI Anomaly') ? '#DC2626' : '#1E5ADB',
                     color: 'white',
                     border: 'none',
                     fontWeight: '700',
@@ -943,7 +1012,15 @@ export default function NotificationsPage() {
                     cursor: 'pointer'
                   }}
                 >
-                  Go to Module <ArrowRight size={13} />
+                  {(selectedNotif.anomalyId || selectedNotif.category === 'AI Anomaly') ? (
+                    <>
+                      <ShieldAlert size={14} /> Inspect in AI Anomaly Center <ArrowRight size={13} />
+                    </>
+                  ) : (
+                    <>
+                      Go to Module <ArrowRight size={13} />
+                    </>
+                  )}
                 </button>
                 <button
                   onClick={() => {

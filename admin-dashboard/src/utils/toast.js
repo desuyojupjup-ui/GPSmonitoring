@@ -41,6 +41,18 @@ const DELETE_ICON_HTML = `<div class="modal-icon-badge modal-icon-danger">
 
 // Modern Premium Glassmorphic Toast Notification
 export const showToast = (title, text = '', icon = 'success') => {
+  // Support legacy call order: showToast('success', 'Title', 'Message')
+  if (TOAST_ICONS[title]) {
+    const legacyIcon = title;
+    if (!TOAST_ICONS[icon]) {
+      title = text;
+      text = icon;
+    } else {
+      title = text;
+      text = '';
+    }
+    icon = legacyIcon;
+  }
   Swal.fire({
     toast: true,
     position: 'top-end',

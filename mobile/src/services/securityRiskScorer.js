@@ -67,7 +67,7 @@ export function describeEvent(eventType, extra = {}) {
     LOCATION_FROZEN: 'Location has not changed during an extended period of active duty.',
     GPS_DISABLED: 'GPS was disabled during an active attendance session.',
     LOCATION_UPDATE_INTERRUPTED: 'Location updates stopped unexpectedly during active shift.',
-    UNUSUAL_GPS_ACCURACY: `GPS accuracy is unusually low (${extra.accuracy ? extra.accuracy + 'm' : 'poor signal'}).`,
+    UNUSUAL_GPS_ACCURACY: `GPS accuracy is unusually low (${extra.accuracy ? Math.round(extra.accuracy * 10) / 10 + 'm' : 'poor signal'}).`,
     UNAUTHORIZED_LOCATION: `Employee is outside the assigned geofence (${extra.distance ? Math.round(extra.distance) + 'm away' : 'location mismatch'}).`,
     REPEATED_FACIAL_VERIFICATION_FAILURE: `Employee has failed facial verification ${extra.count || 3}+ consecutive times.`,
     MULTIPLE_SECURITY_SIGNALS: 'Multiple security signals detected simultaneously during active attendance.',
