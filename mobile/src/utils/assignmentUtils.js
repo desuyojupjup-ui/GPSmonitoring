@@ -389,3 +389,61 @@ export function isMobileFieldWithoutSite(emp, asg, site) {
   return true;
 }
 
+/**
+ * Resolves the scheduled shift end time details.
+ */
+export function getShiftEndInfo(asgOrShiftStr) {
+  let shiftStr = typeof asgOrShiftStr === 'string'
+    ? asgOrShiftStr
+    : (asgOrShiftStr?.shift || asgOrShiftStr?.shiftTime || asgOrShiftStr?.scheduledShift || '');
+  let startStr = typeof asgOrShiftStr === 'object'
+    ? (asgOrShiftStr?.shiftStart || asgOrShiftStr?.startTime || '')
+    : '';
+  let endStr = typeof asgOrShiftStr === 'object'
+    ? (asgOrShiftStr?.shiftEnd || asgOrShiftStr?.endTime || '')
+    : '';
+
+  if ((!startStr || !endStr) && shiftStr) {
+    const parts = shiftStr.split(/\s*[-~]|(?:\s+to\s+)\s*/i).filter(Boolean);
+    if (parts.length >= 2) {
+      if (!startStr) startStr = parts[0].trim();
+      if (!endStr) endStr = parts[1].trim();
+    } else if (parts.length === 1 && !endStr) {
+      endStr = parts[0].trim();
+    }
+  }
+
+  if (!endStr) endStr = '05:00 PM'; // fallback standard shift end
+  const parsed = parseTimeToHoursMinutes(endStr);
+  return {
+    raw: endStr,
+    startRaw: startStr,
+    hour: parsed?.hours ?? 17,
+    minute: parsed?.minutes ?? 0,
+    seconds: parsed?.seconds ?? 0,
+  };
+}
+
+/**
+ * Checks if current check-out time is earlier than the scheduled shift end.
+ * @param {object|string} asgOrShift
+ * @param {Date|number} [checkTime=new Date()]
+ * @param {number} [graceMinutes=5]
+ * @returns {{ isEarly: boolean, minutesEarly: number, shiftEndStr: string, shiftEndDt: Date }}
+ */
+export function checkEarlyCheckout(asgOrShift, checkTime = new Date(), graceMinutes = 5) {
+  const endInfo = getShiftEndInfo(asgOrShift);
+  const now = checkTime instanceof Date ? checkTime : new Date(checkTime);
+  const shiftEndDt = new Date(now.getFullYear(), now.getMonth(), now.getDate(), endInfo.hour, endInfo.minute, endInfo.seconds);
+  const diffMs = shiftEndDt.getTime() - now.getTime();
+  const minutesEarly = Math.round(diffMs / 60000);
+
+  return {
+    isEarly: minutesEarly >= graceMinutes,
+    minutesEarly: Math.max(0, minutesEarly),
+    shiftEndStr: endInfo.raw,
+    shiftEndDt,
+  };
+}
+
+

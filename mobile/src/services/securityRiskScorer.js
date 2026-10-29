@@ -70,6 +70,7 @@ export function describeEvent(eventType, extra = {}) {
     UNUSUAL_GPS_ACCURACY: `GPS accuracy is unusually low (${extra.accuracy ? Math.round(extra.accuracy * 10) / 10 + 'm' : 'poor signal'}).`,
     UNAUTHORIZED_LOCATION: `Employee is outside the assigned geofence (${extra.distance ? Math.round(extra.distance) + 'm away' : 'location mismatch'}).`,
     OVERTIME_SHIFT_EXCEEDED: `Employee is still clocked in beyond scheduled shift hours (${extra.details || 'Shift end time elapsed'}).`,
+    EARLY_CHECKOUT: `Employee checked out early before scheduled shift end (${extra.details || 'Early departure'}).`,
     REPEATED_FACIAL_VERIFICATION_FAILURE: `Employee has failed facial verification ${extra.count || 3}+ consecutive times.`,
     MULTIPLE_SECURITY_SIGNALS: 'Multiple security signals detected simultaneously during active attendance.',
     SUSPICIOUS_MOVEMENT: 'Suspicious movement pattern detected.',

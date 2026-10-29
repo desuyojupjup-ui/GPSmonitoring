@@ -362,6 +362,64 @@ export function startAnomalyNotificationSync(onNewAlert) {
       },
       () => {}
     );
+
+    // ── Monitor Attendance for Early Check-Out Anomalies ──
+    const handleAttEarlyCheck = (docs) => {
+      if (!docs) return;
+      docs.forEach((d) => {
+        const raw = { id: d.id, ...d.data() };
+        if (raw.earlyCheckOut || raw.anomalyFlag === 'Early Check-Out' || raw.earlyDeparture || (raw.minutesEarly && raw.minutesEarly >= 5)) {
+          const attId = raw.id;
+          const alertKey = `early_co_${attId}`;
+          if (lastAdminGeofenceAlertTime.has(alertKey)) return;
+
+          const hasExisting = (anomalies || []).some(
+            (a) => a.relatedAttendanceId === attId || a.attendanceId === attId
+          );
+          if (hasExisting) return;
+
+          lastAdminGeofenceAlertTime.set(alertKey, Date.now());
+          const minutes = raw.minutesEarly || 10;
+          const desc = raw.departureNote || `Employee checked out early before scheduled shift end (${minutes}m early departure).`;
+          const payload = {
+            employeeId: raw.employeeId || raw.employee_id || null,
+            employeeName: raw.employeeName || raw.employee_name || 'Employee',
+            employeeEmail: raw.email || null,
+            employeeType: raw.employeeType || 'Employee',
+            type: 'Early Shift Departure / Early Check-Out',
+            eventType: 'EARLY_CHECKOUT',
+            severity: minutes >= 60 ? 'High' : 'Medium',
+            confidence: '95%',
+            status: 'Active',
+            description: desc,
+            location: raw.siteName || raw.site || 'Scheduled Post',
+            siteId: raw.site_id || null,
+            siteName: raw.siteName || raw.site || 'Scheduled Post',
+            relatedAttendanceId: attId,
+            attendanceId: attId,
+            source: 'attendance_early_monitor',
+            createdAt: serverTimestamp(),
+            timestamp: serverTimestamp(),
+          };
+
+          addDoc(collection(db, 'ai_analysis'), payload).catch((err) =>
+            console.warn('[anomalySync] Early checkout write error:', err)
+          );
+        }
+      });
+    };
+
+    const unsubAtt1 = onSnapshot(collection(db, 'Attendance'), (snap) => handleAttEarlyCheck(snap.docs), () => {});
+    const unsubAtt2 = onSnapshot(collection(db, 'attendance'), (snap) => handleAttEarlyCheck(snap.docs), () => {});
+
+    return () => {
+      unsubAi();
+      unsubNotif();
+      unsubSites();
+      unsubEmployees();
+      unsubAtt1();
+      unsubAtt2();
+    };
   } catch (e) {
     console.warn('Anomaly notification sync init error:', e);
   }

@@ -1,6 +1,6 @@
 import React, { useState, useEffect } from 'react';
 import { useLocation } from 'react-router-dom';
-import { Download, FileText, Calendar, Users, MapPin, CheckCircle, Search, Filter, ChevronDown, Clock, XCircle, StopCircle, RefreshCw, Trash2, Activity, ShieldCheck, TrendingUp, UserCheck, Smile, Award } from 'lucide-react';
+import { Download, FileText, Calendar, Users, MapPin, CheckCircle, Search, Filter, ChevronDown, Clock, XCircle, StopCircle, RefreshCw, Trash2, Activity, ShieldCheck, TrendingUp, UserCheck, Smile, Award, AlertTriangle } from 'lucide-react';
 import { db, collection, onSnapshot, query, orderBy, limit, deleteDoc, doc, setDoc } from '../firebase';
 import { isAssignmentEnded } from './Assignments';
 import { showToast, showConfirmDelete } from '../utils/toast';
@@ -107,6 +107,11 @@ export default function Attendance() {
     setTimeout(() => setSyncing(false), 800);
   };
 
+  const sitesRef = React.useRef([]);
+  useEffect(() => {
+    sitesRef.current = sites;
+  }, [sites]);
+
   function normalizeRecord(raw) {
     const parseDate = (ts) => {
       if (!ts) return null;
@@ -159,13 +164,56 @@ export default function Attendance() {
     };
 
     const isMissed = raw.status === 'Missed Shift' || raw.isMissedShift;
+    const isEarlyCheckOut = Boolean(
+      raw.earlyCheckOut ||
+      raw.earlyDeparture ||
+      raw.anomalyFlag === 'Early Check-Out' ||
+      (raw.minutesEarly && Number(raw.minutesEarly) >= 5)
+    );
     const inInfo  = formatTsInfo(raw.timeIn  || raw.checkIn  || raw.check_in  || raw.in);
     const outInfo = formatTsInfo(raw.timeOut || raw.checkOut || raw.check_out || raw.out);
+
+    // Resolve active physical location vs registered worksite:
+    const lat = raw.latitude != null ? Number(raw.latitude) : null;
+    const lng = raw.longitude != null ? Number(raw.longitude) : null;
+    let matchedSiteName = null;
+
+    if (lat != null && lng != null && Array.isArray(sitesRef.current) && sitesRef.current.length > 0) {
+      for (const s of sitesRef.current) {
+        const sLat = s.latitude != null ? Number(s.latitude) : (s.lat != null ? Number(s.lat) : null);
+        const sLng = s.longitude != null ? Number(s.longitude) : (s.lng != null ? Number(s.lng) : null);
+        const sRad = Number(s.radius || s.geofenceRadius || 200);
+        if (sLat != null && sLng != null) {
+          const R = 6371000;
+          const dLat = ((lat - sLat) * Math.PI) / 180;
+          const dLon = ((lng - sLng) * Math.PI) / 180;
+          const a = Math.sin(dLat / 2) ** 2 + Math.cos((sLat * Math.PI) / 180) * Math.cos((lat * Math.PI) / 180) * Math.sin(dLon / 2) ** 2;
+          const dist = R * 2 * Math.atan2(Math.sqrt(a), Math.sqrt(1 - a));
+          if (dist <= sRad) {
+            matchedSiteName = s.name;
+            break;
+          }
+        }
+      }
+    }
+
+    const activeAddress = raw.actualLocation || raw.locationAddress || raw.address;
+    let displaySite = matchedSiteName || activeAddress || raw.siteName || raw.site_name || raw.site || '—';
+
+    // If marked out of fence or if raw.siteName was set to assigned site but active location was logged:
+    if (activeAddress && (raw.inFence === false || displaySite === 'Unassigned Site' || displaySite.toLowerCase() === 'uc banilad')) {
+      displaySite = activeAddress;
+    }
+
     return {
       id:            raw.id,
       assignmentId:  raw.assignmentId || null,
       employee_name: raw.employeeName || raw.employee_name || raw.name || raw.emp || '—',
-      site_name:     raw.siteName || raw.site_name || raw.site || '—',
+      site_name:     displaySite,
+      active_location: activeAddress || null,
+      isEarlyCheckOut,
+      minutesEarly:  raw.minutesEarly || null,
+      departureNote: raw.departureNote || null,
       check_in:      isMissed ? 'Missed (No Check-in)' : inInfo.full,
       check_in_time: isMissed ? 'Missed' : inInfo.time,
       check_in_date: inInfo.date || (raw.date ? (typeof raw.date === 'string' ? raw.date : formatDate(raw.date)) : ''),
@@ -569,7 +617,14 @@ export default function Attendance() {
                           />
                         </td>
                         <td style={{ padding: '14px 18px', fontWeight: 600, color: '#0F172A', whiteSpace: 'nowrap' }}>{row.employee_name}</td>
-                        <td style={{ padding: '14px 18px', color: '#475569', whiteSpace: 'nowrap' }}>{row.site_name}</td>
+                        <td style={{ padding: '14px 18px', color: '#475569', whiteSpace: 'nowrap' }}>
+                          <div style={{ fontWeight: 600, color: '#0F172A' }}>{row.site_name}</div>
+                          {row.active_location && row.active_location !== row.site_name && (
+                            <div style={{ fontSize: 11, color: '#64748B', marginTop: 2, display: 'flex', alignItems: 'center', gap: 4 }}>
+                              <MapPin size={11} color="#94A3B8" /> {row.active_location}
+                            </div>
+                          )}
+                        </td>
                         <td style={{ padding: '12px 18px', whiteSpace: 'nowrap' }}>
                           <div style={{ color: row.status === 'Missed Shift' ? '#DC2626' : '#0F172A', fontWeight: 600 }}>
                             {row.status === 'Missed Shift' ? 'Missed (No Check-in)' : (row.check_in_time || row.check_in)}
@@ -590,6 +645,24 @@ export default function Attendance() {
                             <div style={{ width: 6, height: 6, borderRadius: '50%', background: statusStyle.dot }}></div>
                             {row.status}
                           </div>
+                          {row.isEarlyCheckOut && (
+                            <div style={{
+                              display: 'inline-flex',
+                              alignItems: 'center',
+                              gap: 4,
+                              marginLeft: 6,
+                              background: '#FEF2F2',
+                              color: '#DC2626',
+                              border: '1px solid #FECACA',
+                              padding: '2px 8px',
+                              borderRadius: 12,
+                              fontSize: 10,
+                              fontWeight: 700,
+                            }}>
+                              <AlertTriangle size={11} color="#DC2626" />
+                              Early Check-Out{row.minutesEarly ? ` (-${row.minutesEarly}m)` : ''}
+                            </div>
+                          )}
                         </td>
                         <td style={{ padding: '14px 18px', whiteSpace: 'nowrap' }}>
                           <div style={{

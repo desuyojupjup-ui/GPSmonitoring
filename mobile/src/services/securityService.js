@@ -57,6 +57,8 @@ function buildReport({ employee, site, latest, deviceId, ip }) {
     ipAddress: ip,
     siteId: site?.id ?? null,
     siteName: site?.name ?? null,
+    matchedSite: null,
+    activeLocationAddress: null,
     latitude: latest?.latitude ?? null,
     longitude: latest?.longitude ?? null,
     accuracy: latest?.accuracy ?? null,
@@ -74,7 +76,7 @@ function buildReport({ employee, site, latest, deviceId, ip }) {
  * Run all checks. Returns { passed, failedCheck, reason, report }.
  * Caller shows SecurityWarningModal({ failedCheck, reason }) when !passed.
  */
-export async function runPreAttendanceChecks({ employee, site, action = 'time_in' }) {
+export async function runPreAttendanceChecks({ employee, site, allSites = [], action = 'time_in' }) {
   // Permission first.
   const { status } = await Location.requestForegroundPermissionsAsync();
   if (status !== 'granted') {
@@ -91,6 +93,28 @@ export async function runPreAttendanceChecks({ employee, site, action = 'time_in
   const readings = await captureReadings();
   const latest = readings[readings.length - 1];
   const report = buildReport({ employee, site, latest, deviceId, ip });
+
+  // Reverse geocode active physical address of where the employee is checking in
+  if (latest?.latitude && latest?.longitude) {
+    try {
+      const geoArr = await Location.reverseGeocodeAsync({
+        latitude: latest.latitude,
+        longitude: latest.longitude,
+      });
+      if (geoArr && geoArr.length > 0) {
+        const g = geoArr[0];
+        const parts = [
+          g.name && g.name !== g.street ? g.name : null,
+          g.street,
+          g.district || g.subregion,
+          g.city || g.region,
+        ].filter(Boolean);
+        report.activeLocationAddress = parts.join(', ') || g.city || g.region || `${latest.latitude.toFixed(4)}, ${latest.longitude.toFixed(4)}`;
+      }
+    } catch (err) {
+      console.warn('Reverse geocode error:', err);
+    }
+  }
 
   const fail = (failedCheck, reason, logExtra) => {
     report.passed = false;
@@ -158,15 +182,31 @@ export async function runPreAttendanceChecks({ employee, site, action = 'time_in
     return fail('accuracy', acc.reason);
   }
 
-  // 5. Geofence (Enforced ONLY for Fixed Site Employees; Mobile Field Employees travel across sites)
+  // 5. Geofence Check & Active Location Resolution
   const empWorkType = (employee?.workType || employee?.employeeType || employee?.type || '').toString().toLowerCase();
   const isFieldEmployee = empWorkType.includes('mobile') || empWorkType.includes('field');
 
+  // Verify against assigned site(s)
+  const geo = verifyGeofence(latest.latitude, latest.longitude, site);
+  report.geofenceOk = geo.ok;
+  report.distanceToBoundary = geo.distanceToBoundary;
+  report.matchedSite = geo.matchedSite || null;
+
+  // If not inside assigned site, check if physically located inside any registered site
+  if (!report.matchedSite && Array.isArray(allSites) && allSites.length > 0) {
+    const allSitesGeo = verifyGeofence(latest.latitude, latest.longitude, allSites);
+    if (allSitesGeo.ok && allSitesGeo.matchedSite) {
+      report.matchedSite = allSitesGeo.matchedSite;
+      if (!isFieldEmployee) {
+        // Employee is within a recognized worksite perimeter
+        report.geofenceOk = true;
+        report.distanceToBoundary = 0;
+      }
+    }
+  }
+
   if (!isFieldEmployee) {
-    const geo = verifyGeofence(latest.latitude, latest.longitude, site);
-    report.geofenceOk = geo.ok;
-    report.distanceToBoundary = geo.distanceToBoundary;
-    if (!geo.ok) {
+    if (!report.geofenceOk) {
       writeSecurityEvent({
         eventType: 'UNAUTHORIZED_LOCATION',
         employee: { id: employee?.id, name: employee?.name, email: employee?.email, workType: employee?.workType || 'Fixed Site Employee' },
@@ -178,7 +218,7 @@ export async function runPreAttendanceChecks({ employee, site, action = 'time_in
       return fail('geofence', geo.reason, () => writeGeofenceEvent(report, 'violation'));
     }
   } else {
-    // For Field Employees, being outside a fixed static geofence is standard field work
+    // For Field Employees, working across field locations is authorized
     report.geofenceOk = true;
     report.distanceToBoundary = 0;
   }

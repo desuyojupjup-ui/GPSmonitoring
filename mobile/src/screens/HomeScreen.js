@@ -36,9 +36,10 @@ import FacialVerificationModal from '../components/FacialVerificationModal';
 import DelayIncidentModal from '../components/DelayIncidentModal';
 import SecurityWarningModal from '../components/SecurityWarningModal';
 import { runPreAttendanceChecks } from '../services/securityService';
+import { writeSecurityEvent } from '../services/securityLogger';
 import { getDeviceId } from '../services/deviceInfo';
 import { getPendingSyncCount, syncOfflineRecords, clearOfflineQueue } from '../services/offlineSyncService';
-import { isAssignmentDatePassed, isAssignmentActiveToday, resolveShift, isAssignmentForEmployee, deduplicateAssignments, isMobileFieldWithoutSite } from '../utils/assignmentUtils';
+import { isAssignmentDatePassed, isAssignmentActiveToday, resolveShift, isAssignmentForEmployee, deduplicateAssignments, isMobileFieldWithoutSite, checkEarlyCheckout } from '../utils/assignmentUtils';
 import {
   startSession as schedulerStart,
   stopSession as schedulerStop,
@@ -762,7 +763,7 @@ export default function HomeScreen({ navigation, route, user: propUser }) {
       // ── Anti-Spoofing & Security Checks Pipeline ──
       // Checks: Root/Jailbreak, VPN/Proxy, Mock GPS, Accuracy, Geofence, Speed/Consistency
       const sitesToCheck = assignedSitesList.length > 0 ? assignedSitesList.map(s => s.site) : site;
-      const checkResult = await runPreAttendanceChecks({ employee, site: sitesToCheck, action: 'time_in' });
+      const checkResult = await runPreAttendanceChecks({ employee, site: sitesToCheck, allSites: sitesData, action: 'time_in' });
       if (!checkResult.passed) {
         if (checkResult.failedCheck === 'geofence') {
           const empWorkType = (employee?.workType || employee?.employeeType || employee?.type || '').toString().toLowerCase();
@@ -771,12 +772,13 @@ export default function HomeScreen({ navigation, route, user: propUser }) {
           if (!isFieldEmployee) {
             const lat = checkResult.report?.latitude || 0;
             const lng = checkResult.report?.longitude || 0;
-            const matchedSite = checkResult.report?.matchedSite || site;
+            const matchedSite = checkResult.report?.matchedSite;
+            const activeLoc = checkResult.report?.activeLocationAddress;
             Alert.alert(
               'Geofence Warning',
               'You are outside your assigned fixed worksite perimeter. Check-in registered with out-of-bounds flag.',
               [
-                { text: 'Proceed', onPress: () => processCheckIn(lat, lng, false, matchedSite) },
+                { text: 'Proceed', onPress: () => processCheckIn(lat, lng, false, matchedSite, activeLoc) },
                 { text: 'Cancel', style: 'cancel' }
               ]
             );
@@ -793,9 +795,9 @@ export default function HomeScreen({ navigation, route, user: propUser }) {
         return;
       }
 
-      const { latitude, longitude } = checkResult.report;
-      const activeSite = checkResult.report?.matchedSite || site;
-      await processCheckIn(latitude, longitude, true, activeSite);
+      const { latitude, longitude, activeLocationAddress } = checkResult.report;
+      const activeSite = checkResult.report?.matchedSite;
+      await processCheckIn(latitude, longitude, true, activeSite, activeLocationAddress);
     } catch (err) {
       console.error(err);
       Alert.alert('Error', 'Failed to retrieve location or verify security.');
@@ -804,10 +806,15 @@ export default function HomeScreen({ navigation, route, user: propUser }) {
     }
   };
 
-  const processCheckIn = async (lat, lng, inFence, activeSite) => {
+  const processCheckIn = async (lat, lng, inFence, activeSite, activeLocationAddress) => {
     try {
       const statusText = inFence ? 'On Site' : 'Flagged';
-      const siteToUse = activeSite || site;
+      // Priority for site display:
+      // 1. If employee's GPS matches a recognized worksite fence, display that worksite name
+      // 2. If out of fence or in field, display the reverse-geocoded active physical location address
+      // 3. Fallback to assigned site or Active Field Location
+      const resolvedSiteName = activeSite?.name || (inFence ? (site?.name || assignment?.site) : (activeLocationAddress || site?.name || 'Active Field Location'));
+      const activeAddressToSave = activeLocationAddress || activeSite?.address || site?.address || resolvedSiteName;
 
       const newAtt = {
         employee_id: employee.id,
@@ -815,8 +822,12 @@ export default function HomeScreen({ navigation, route, user: propUser }) {
         employeeUid: employee.uid || employee.id,
         employeeName: employee.name,
         email: employee.email || currentEmail,
-        site_id: siteToUse?.id || site?.id || 'Unknown',
-        siteName: siteToUse?.name || site?.name || assignment?.site || 'Unassigned Site',
+        site_id: activeSite?.id || site?.id || 'Unknown',
+        siteName: resolvedSiteName,
+        assignedSite: site?.name || assignment?.site || 'Unassigned Site',
+        actualLocation: activeAddressToSave,
+        locationAddress: activeAddressToSave,
+        shift: assignment?.shift || employee?.shift || '08:00 AM - 05:00 PM',
         date: serverTimestamp(),
         timeIn: serverTimestamp(),
         timeOut: null,
@@ -912,16 +923,55 @@ export default function HomeScreen({ navigation, route, user: propUser }) {
 
     setChecking(true);
     try {
-      await updateDoc(doc(db, 'Attendance', attendance.id), {
-        timeOut: serverTimestamp(),
-        status: 'Completed'
-      });
-      // Dual-write checkout to lowercase collection
-      await updateDoc(doc(db, 'attendance', attendance.id), {
-        timeOut: serverTimestamp(),
-        status: 'Completed'
-      }).catch(() => {});
+      const now = new Date();
+      const shiftToCheck = assignment?.shift || employee?.shift || employee?.scheduledShift || attendance?.shift || '08:00 AM - 05:00 PM';
+      const earlyInfo = checkEarlyCheckout(shiftToCheck, now, 5);
 
+      let curCoords = { latitude: attendance.latitude || null, longitude: attendance.longitude || null };
+      try {
+        const curLoc = await Location.getCurrentPositionAsync({ accuracy: Location.Accuracy.Balanced });
+        if (curLoc?.coords) {
+          curCoords = { latitude: curLoc.coords.latitude, longitude: curLoc.coords.longitude };
+        }
+      } catch (_) {}
+
+      if (earlyInfo.isEarly) {
+        const departureDesc = `Employee checked out early at ${now.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit', hour12: true })} before scheduled shift end (${earlyInfo.shiftEndStr}; ${earlyInfo.minutesEarly}m early departure).`;
+        await writeSecurityEvent({
+          eventType: 'EARLY_CHECKOUT',
+          employee: {
+            id: employee.id,
+            name: employee.name,
+            email: employee.email || currentEmail,
+            employeeType: employee.workType || employee.employeeType || 'Employee',
+          },
+          assignment: {
+            id: assignment?.id || null,
+            siteId: site?.id || null,
+            siteName: attendance.siteName || site?.name || assignment?.site || 'Scheduled Post',
+          },
+          coords: curCoords,
+          relatedAttendanceId: attendance.id,
+          customDescription: departureDesc,
+          extra: { details: `${earlyInfo.minutesEarly}m before ${earlyInfo.shiftEndStr}` },
+        });
+      }
+
+      const checkoutPayload = {
+        timeOut: serverTimestamp(),
+        status: 'Completed',
+        ...(earlyInfo.isEarly ? {
+          earlyCheckOut: true,
+          earlyDeparture: true,
+          minutesEarly: earlyInfo.minutesEarly,
+          anomalyFlag: 'Early Check-Out',
+          departureNote: `Early Check-Out: Left ${earlyInfo.minutesEarly}m before scheduled shift end (${earlyInfo.shiftEndStr})`,
+        } : {})
+      };
+
+      await updateDoc(doc(db, 'Attendance', attendance.id), checkoutPayload);
+      // Dual-write checkout to lowercase collection
+      await updateDoc(doc(db, 'attendance', attendance.id), checkoutPayload).catch(() => {});
 
       if (employee.id && employee.id !== 'emp_fallback') {
         await updateDoc(doc(db, 'employees', employee.id), {
@@ -937,11 +987,12 @@ export default function HomeScreen({ navigation, route, user: propUser }) {
         employee_id: employee.id,
         employeeName: employee.name,
         site_id: site?.id || 'Unknown',
-        siteName: site?.name || assignment?.site || 'Unassigned Site',
-        action: 'Check Out',
-        type: 'Attendance',
+        siteName: attendance.siteName || site?.name || assignment?.site || 'Unassigned Site',
+        action: earlyInfo.isEarly ? 'Check Out (Early Departure)' : 'Check Out',
+        type: earlyInfo.isEarly ? 'Security Anomaly' : 'Attendance',
         timestamp: serverTimestamp(),
-        status: 'Normal'
+        status: earlyInfo.isEarly ? 'Warning' : 'Normal',
+        details: earlyInfo.isEarly ? `Early departure: ${earlyInfo.minutesEarly}m before ${earlyInfo.shiftEndStr}` : 'Shift Completed'
       });
 
       // Stop verification scheduler
@@ -951,7 +1002,14 @@ export default function HomeScreen({ navigation, route, user: propUser }) {
       // Stop periodic location logging upon check-out
       await locationLogService.stopPeriodicLogging();
 
-      Alert.alert('Check Out Successful', 'Have a great day!');
+      if (earlyInfo.isEarly) {
+        Alert.alert(
+          '⚠️ Early Check-Out Logged',
+          `You checked out ${earlyInfo.minutesEarly} minutes before your scheduled shift ends (${earlyInfo.shiftEndStr}). An anomaly alert has been reported to administration.`
+        );
+      } else {
+        Alert.alert('Check Out Successful', 'Have a great day!');
+      }
     } catch (e) {
       console.error(e);
       Alert.alert('Error', 'Could not record check-out.');
