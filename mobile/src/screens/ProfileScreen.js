@@ -94,6 +94,19 @@ export default function ProfileScreen({ navigation, route, user: propUser, onLog
   const empRole = employee?.role || employee?.type || employee?.jobTitle || employee?.position || 'Field Specialist';
   const empEmail = employee?.email || employee?.empEmail || currentEmail || 'employee@gmail.com';
 
+  const empWorkType = (
+    employee?.workType || 
+    employee?.employeeType || 
+    employee?.type || 
+    route?.params?.employee?.workType || 
+    route?.params?.employee?.employeeType || 
+    propUser?.workType || 
+    propUser?.employeeType || 
+    ''
+  ).toString().toLowerCase();
+  const isFieldEmployee = empWorkType.includes('mobile') || empWorkType.includes('field');
+  const employeeTypeLabel = isFieldEmployee ? '🚚 Mobile Field Employee' : '🏢 Fixed Employee';
+
   const lastEmpKeyRef = React.useRef('');
   useEffect(() => {
     if (!currentEmail) return;
@@ -145,6 +158,7 @@ export default function ProfileScreen({ navigation, route, user: propUser, onLog
         status: empData.status, 
         department: empData.department || empData.org,
         role: empData.role || empData.type,
+        workType: empData.workType || empData.employeeType,
         idNum: empData.idNum || empData.employeeId,
         assignedSite: empData.assignedSite,
         profilePic: empData.profilePic 
@@ -395,7 +409,7 @@ export default function ProfileScreen({ navigation, route, user: propUser, onLog
                 ) : employee?.profilePic ? (
                   <Image source={{ uri: employee.profilePic }} style={styles.avatarImage} />
                 ) : (
-                  <Ionicons name="person" size={38} color="#93C5FD" />
+                  <Ionicons name="person" size={38} color="#C7D2FE" />
                 )}
               </View>
               <View style={styles.cameraBadge}>
@@ -408,9 +422,16 @@ export default function ProfileScreen({ navigation, route, user: propUser, onLog
               <Text style={styles.userNameText} numberOfLines={1}>
                 {displayName}
               </Text>
-              <Text style={styles.userSubtitleText} numberOfLines={1}>
-                Employee ID: {empId}
-              </Text>
+              <View style={styles.idTypeRow}>
+                <Text style={styles.userSubtitleText} numberOfLines={1}>
+                  Employee ID: {empId}
+                </Text>
+                <View style={styles.typeBadge}>
+                  <Text style={styles.typeBadgeText}>
+                    {employeeTypeLabel}
+                  </Text>
+                </View>
+              </View>
               <Text style={styles.userEmailText} numberOfLines={1}>
                 {empEmail}
               </Text>
@@ -949,9 +970,9 @@ const styles = StyleSheet.create({
     flex: 1, 
     backgroundColor: '#F8FAFC' 
   },
-  // ── Blue Header ──
+  // ── Violet Header (Matching HomeScreen) ──
   blueHeader: {
-    backgroundColor: '#2563EB',
+    backgroundColor: '#4F46E5',
     borderBottomLeftRadius: 28,
     borderBottomRightRadius: 28,
     paddingHorizontal: 20,
@@ -983,7 +1004,7 @@ const styles = StyleSheet.create({
     width: 64,
     height: 64,
     borderRadius: 32,
-    backgroundColor: '#1E40AF',
+    backgroundColor: '#3730A3',
     borderWidth: 3,
     borderColor: '#FFFFFF',
     justifyContent: 'center',
@@ -1002,7 +1023,7 @@ const styles = StyleSheet.create({
     width: 22,
     height: 22,
     borderRadius: 11,
-    backgroundColor: '#1D4ED8',
+    backgroundColor: '#4338CA',
     borderWidth: 2,
     borderColor: '#FFFFFF',
     justifyContent: 'center',
@@ -1017,11 +1038,31 @@ const styles = StyleSheet.create({
     color: '#FFFFFF',
     letterSpacing: 0.2,
   },
+  idTypeRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 6,
+    flexWrap: 'wrap',
+    marginTop: 2,
+  },
+  typeBadge: {
+    backgroundColor: 'rgba(255, 255, 255, 0.22)',
+    paddingHorizontal: 6,
+    paddingVertical: 1.5,
+    borderRadius: 6,
+    borderWidth: 0.5,
+    borderColor: 'rgba(255, 255, 255, 0.35)',
+  },
+  typeBadgeText: {
+    color: '#FFFFFF',
+    fontSize: 10,
+    fontWeight: '700',
+    letterSpacing: 0.1,
+  },
   userSubtitleText: {
     fontSize: 12.5,
     fontWeight: '600',
     color: 'rgba(255, 255, 255, 0.92)',
-    marginTop: 2,
   },
   userEmailText: {
     fontSize: 11.5,
