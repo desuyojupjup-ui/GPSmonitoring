@@ -74,7 +74,6 @@ export default function ProfileScreen({ navigation, route, user: propUser, onLog
   const [employee, setEmployee] = useState(null);
   const [uploading, setUploading] = useState(false);
   const [isDarkMode, setIsDarkMode] = useState(false);
-  const [isLiveTrackingActive, setIsLiveTrackingActive] = useState(true);
   
   // Modals state
   const [showPhotoModal, setShowPhotoModal] = useState(false);
@@ -153,7 +152,6 @@ export default function ProfileScreen({ navigation, route, user: propUser, onLog
       if (empKey !== lastEmpKeyRef.current) {
         lastEmpKeyRef.current = empKey;
         setEmployee(empData);
-        setIsLiveTrackingActive(empData.status === 'On Duty' || empData.status === 'On Site' || empData.status === 'Online');
       }
     });
     return () => unsub();
@@ -166,20 +164,6 @@ export default function ProfileScreen({ navigation, route, user: propUser, onLog
       fetchModalData('history');
     }
   }, [employee?.id, currentEmail]);
-
-  const toggleLiveTracking = async (value) => {
-    setIsLiveTrackingActive(value);
-    const newStatus = value ? 'On Duty' : 'Offline';
-    setEmployee(prev => prev ? { ...prev, status: newStatus } : prev);
-    try {
-      const targetId = employee?.id || auth.currentUser?.uid;
-      if (targetId) {
-        await updateDoc(doc(db, 'employees', targetId), { status: newStatus });
-      }
-    } catch (e) {
-      console.warn('Status toggle error:', e);
-    }
-  };
 
   const fetchModalData = async (type) => {
     if (!employee && !currentEmail) return;
@@ -460,25 +444,9 @@ export default function ProfileScreen({ navigation, route, user: propUser, onLog
           </View>
         </View>
 
-        {/* ── 4. Menu Group 1: Operations (With Switch Toggle on Top) ── */}
+        {/* ── 3. Menu Group 1: Operations ── */}
         <View style={[styles.menuSectionCard, isDarkMode && styles.darkCard, isDarkMode && styles.darkBorder]}>
-          {/* Item 1: Live Tracking Switch (matches "Open order" in screenshot) */}
-          <View style={[styles.menuRowItem, isDarkMode && styles.darkBorder]}>
-            <View style={styles.menuItemLeft}>
-              <View style={[styles.iconBadge, { backgroundColor: '#DCFCE7' }]}>
-                <Ionicons name="radio" size={18} color="#16A34A" />
-              </View>
-              <Text style={[styles.menuItemTitle, isDarkMode && styles.darkText]}>Live GPS Tracking</Text>
-            </View>
-            <Switch
-              value={isLiveTrackingActive}
-              onValueChange={toggleLiveTracking}
-              trackColor={{ true: '#10B981', false: '#E2E8F0' }}
-              thumbColor="#FFFFFF"
-            />
-          </View>
-
-          {/* Item 2: My Assignments (Blue) */}
+          {/* Item 1: My Assignments (Blue) */}
           <TouchableOpacity 
             style={[styles.menuRowItem, isDarkMode && styles.darkBorder]} 
             onPress={() => handleMenuPress('My Assignments')}
