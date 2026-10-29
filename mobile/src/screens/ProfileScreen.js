@@ -409,7 +409,10 @@ export default function ProfileScreen({ navigation, route, user: propUser, onLog
                 {displayName}
               </Text>
               <Text style={styles.userSubtitleText} numberOfLines={1}>
-                {empId} • {empEmail}
+                Employee ID: {empId}
+              </Text>
+              <Text style={styles.userEmailText} numberOfLines={1}>
+                {empEmail}
               </Text>
             </View>
 
@@ -989,10 +992,16 @@ const styles = StyleSheet.create({
     letterSpacing: 0.2,
   },
   userSubtitleText: {
-    fontSize: 13,
-    fontWeight: '500',
-    color: 'rgba(255, 255, 255, 0.85)',
-    marginTop: 3,
+    fontSize: 12.5,
+    fontWeight: '600',
+    color: 'rgba(255, 255, 255, 0.92)',
+    marginTop: 2,
+  },
+  userEmailText: {
+    fontSize: 11.5,
+    fontWeight: '400',
+    color: 'rgba(255, 255, 255, 0.78)',
+    marginTop: 2,
   },
   qrRowBtn: {
     flexDirection: 'row',
