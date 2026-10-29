@@ -1278,9 +1278,9 @@ export default function HomeScreen({ navigation, route, user: propUser }) {
         <View style={styles.headerGreetingRow}>
           <View style={styles.greetingLeftCol}>
             <Text style={styles.greeting}>{getGreeting()}</Text>
-            <View style={{ flexDirection: 'row', alignItems: 'center', flexWrap: 'wrap' }}>
-              <Text style={styles.name}>{displayName}</Text>
-              <Image source={require('../../assets/wave.png')} style={{ width: 22, height: 22, marginLeft: 6, marginTop: 2 }} />
+            <View style={styles.nameRow}>
+              <Text style={styles.name} numberOfLines={1} ellipsizeMode="tail">{displayName}</Text>
+              <Image source={require('../../assets/wave.png')} style={styles.waveIcon} />
             </View>
           </View>
 
@@ -1882,14 +1882,26 @@ const styles = StyleSheet.create({
   },
   greeting: {
     color: '#C7D2FE',
-    fontSize: 14,
+    fontSize: 13.5,
     fontWeight: '500',
     marginBottom: 2,
   },
+  nameRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+  },
   name: {
     color: '#FFFFFF',
-    fontSize: 22,
+    fontSize: 17,
     fontWeight: '700',
+    flexShrink: 1,
+    letterSpacing: 0.1,
+  },
+  waveIcon: {
+    width: 20,
+    height: 20,
+    marginLeft: 6,
+    flexShrink: 0,
   },
   notifBtn: {
     width: 38,
