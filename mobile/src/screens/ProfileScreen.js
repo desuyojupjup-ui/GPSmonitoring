@@ -159,6 +159,14 @@ export default function ProfileScreen({ navigation, route, user: propUser, onLog
     return () => unsub();
   }, [currentEmail]);
 
+  // Pre-load attendance and activity history counts for the floating metrics card
+  useEffect(() => {
+    if (employee || currentEmail) {
+      fetchModalData('attendance');
+      fetchModalData('history');
+    }
+  }, [employee?.id, currentEmail]);
+
   const toggleLiveTracking = async (value) => {
     setIsLiveTrackingActive(value);
     const newStatus = value ? 'On Duty' : 'Offline';
@@ -417,7 +425,7 @@ export default function ProfileScreen({ navigation, route, user: propUser, onLog
                 {displayName}
               </Text>
               <Text style={styles.userSubtitleText} numberOfLines={1}>
-                {empDept} • {empRole}
+                {employee?.assignedSite || 'GeoStride Workforce'}
               </Text>
             </View>
 
@@ -433,21 +441,21 @@ export default function ProfileScreen({ navigation, route, user: propUser, onLog
           </View>
         </View>
 
-        {/* ── 2. Floating Metrics Card (Dual Column) ── */}
+        {/* ── 2. Floating Metrics Card (Dual Column: Matches "My client: 98 | Withdrawal: 332" in reference) ── */}
         <View style={[styles.floatingCard, isDarkMode && styles.darkCard, isDarkMode && styles.darkBorder]}>
           <View style={styles.metricColumn}>
-            <Text style={[styles.metricLabel, isDarkMode && styles.darkSubText]}>EMPLOYEE ID</Text>
-            <Text style={[styles.metricValue, isDarkMode && styles.darkText]} numberOfLines={1}>
-              {empId}
+            <Text style={[styles.metricLabel, isDarkMode && styles.darkSubText]}>TOTAL ATTENDANCE</Text>
+            <Text style={[styles.metricValue, isDarkMode && styles.darkText]}>
+              {attendance.length > 0 ? attendance.length : (employee?.totalAttendance || '0')}
             </Text>
           </View>
 
           <View style={styles.metricDivider} />
 
           <View style={styles.metricColumn}>
-            <Text style={[styles.metricLabel, isDarkMode && styles.darkSubText]}>DEPARTMENT</Text>
-            <Text style={[styles.metricValue, isDarkMode && styles.darkText]} numberOfLines={1}>
-              {empDept}
+            <Text style={[styles.metricLabel, isDarkMode && styles.darkSubText]}>ACTIVITY LOGS</Text>
+            <Text style={[styles.metricValue, isDarkMode && styles.darkText]}>
+              {history.length > 0 ? history.length : (employee?.totalLogs || '0')}
             </Text>
           </View>
         </View>
