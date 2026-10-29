@@ -263,7 +263,8 @@ export default function HomeScreen({ navigation, route, user: propUser }) {
       currentEmail,
       employee?.email,
       employee?.workEmail,
-      user?.email,
+      propUser?.email,
+      route?.params?.user?.email,
       auth.currentUser?.email,
     ].filter(Boolean).map(e => String(e).trim().toLowerCase());
     const validEmails = Array.from(new Set(rawEmails));
@@ -274,9 +275,12 @@ export default function HomeScreen({ navigation, route, user: propUser }) {
       employee?.empId,
       employee?.employeeId,
       employee?.uid,
-      user?.id,
-      user?.uid,
-      user?.empId,
+      propUser?.id,
+      propUser?.uid,
+      propUser?.empId,
+      route?.params?.user?.id,
+      route?.params?.user?.uid,
+      route?.params?.user?.empId,
       auth.currentUser?.uid,
     ].filter(x => x !== undefined && x !== null && String(x).trim() !== '' && String(x).trim() !== 'emp_fallback')
      .map(x => String(x).trim().toLowerCase());
@@ -287,7 +291,8 @@ export default function HomeScreen({ navigation, route, user: propUser }) {
       employee?.name,
       employee?.displayName,
       displayName,
-      user?.name,
+      propUser?.name,
+      route?.params?.user?.name,
       auth.currentUser?.displayName,
     ].filter(Boolean).map(n => String(n).trim().toLowerCase())
      .filter(n => n.length >= 2 && !genericWords.includes(n));
