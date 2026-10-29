@@ -1449,16 +1449,6 @@ export default function HomeScreen({ navigation, route, user: propUser }) {
                 )}
               </TouchableOpacity>
             )}
-
-            <TouchableOpacity
-              style={[styles.photoBtn, uploadingPhoto && { opacity: 0.7 }]}
-              onPress={handleUploadPhoto}
-              disabled={uploadingPhoto}
-            >
-              {uploadingPhoto ? <ActivityIndicator color="#4F46E5" /> : (
-                <Ionicons name="camera-outline" size={22} color="#4F46E5" />
-              )}
-            </TouchableOpacity>
           </View>
         </View>
 
