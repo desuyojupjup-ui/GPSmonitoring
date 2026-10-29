@@ -385,34 +385,41 @@ export default function ChatbotScreen({ route, user: propUser }) {
           <View style={styles.botIconWrap}>
             <Ionicons name="chatbubbles" size={20} color="#4F46E5" />
           </View>
-          <View style={{ flex: 1 }}>
-            <View style={{ flexDirection: 'row', alignItems: 'center', gap: 6 }}>
-              <Text style={styles.headerTitle}>SubAi Voice & Chat</Text>
-              {isSpeaking && (
-                <View style={styles.speakingChip}>
-                  <Ionicons name="volume-high" size={11} color="#4F46E5" />
-                  <Text style={styles.speakingChipText}>Speaking</Text>
-                </View>
-              )}
-            </View>
-            <Text style={styles.headerSubtitle}>🟢 Online · Voice Commands Enabled</Text>
+          <View style={{ flex: 1, minWidth: 0, marginRight: 8 }}>
+            <Text style={styles.headerTitle} numberOfLines={1} ellipsizeMode="tail">
+              SubAi Voice & Chat
+            </Text>
+            <Text style={[styles.headerSubtitle, isSpeaking && { color: '#EEF2FF', fontWeight: '600' }]} numberOfLines={1} ellipsizeMode="tail">
+              {isSpeaking ? '🔊 Speaking response...' : '🟢 Online · Voice Commands Enabled'}
+            </Text>
           </View>
         </View>
 
-        {/* Header Voice Toggle */}
-        <TouchableOpacity
-          onPress={() => {
-            if (isSpeaking) stopSpeaking();
-            else setVoiceEnabled(!voiceEnabled);
-          }}
-          style={styles.headerVoiceBtn}
-        >
-          <Ionicons
-            name={isSpeaking ? "stop-circle" : (voiceEnabled ? "volume-high" : "volume-mute")}
-            size={20}
-            color={isSpeaking ? "#EF4444" : "white"}
-          />
-        </TouchableOpacity>
+        {/* Header Voice Toggle / Stop */}
+        {isSpeaking ? (
+          <TouchableOpacity
+            onPress={stopSpeaking}
+            style={styles.stopVoiceBtn}
+            activeOpacity={0.8}
+            hitSlop={{ top: 8, bottom: 8, left: 8, right: 8 }}
+          >
+            <Ionicons name="stop" size={13} color="#FFFFFF" />
+            <Text style={styles.stopVoiceBtnText}>Stop</Text>
+          </TouchableOpacity>
+        ) : (
+          <TouchableOpacity
+            onPress={() => setVoiceEnabled(!voiceEnabled)}
+            style={styles.headerVoiceBtn}
+            activeOpacity={0.8}
+            hitSlop={{ top: 8, bottom: 8, left: 8, right: 8 }}
+          >
+            <Ionicons
+              name={voiceEnabled ? "volume-high" : "volume-mute"}
+              size={20}
+              color="white"
+            />
+          </TouchableOpacity>
+        )}
       </View>
 
       {/* Voice Listening Overlay Panel */}
@@ -554,8 +561,22 @@ const styles = StyleSheet.create({
     flexDirection: 'row', alignItems: 'center', gap: 3,
     backgroundColor: '#EEF2FF', paddingHorizontal: 6, paddingVertical: 2, borderRadius: 6,
   },
-  speakingChipText: { fontSize: 10, color: '#4F46E5', fontWeight: '700' },
   headerVoiceBtn: { width: 36, height: 36, borderRadius: 18, backgroundColor: 'rgba(255,255,255,0.2)', justifyContent: 'center', alignItems: 'center' },
+  stopVoiceBtn: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 4,
+    backgroundColor: '#EF4444',
+    paddingHorizontal: 10,
+    paddingVertical: 6,
+    borderRadius: 14,
+    flexShrink: 0,
+  },
+  stopVoiceBtnText: {
+    color: '#FFFFFF',
+    fontSize: 12,
+    fontWeight: '700',
+  },
 
   voicePanel: {
     backgroundColor: '#FFFFFF',

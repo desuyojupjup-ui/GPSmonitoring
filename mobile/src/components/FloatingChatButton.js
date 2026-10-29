@@ -558,45 +558,54 @@ export default function FloatingChatButton({ user: propUser }) {
             <View style={styles.botIcon}>
               <Image source={chatbotIcon} style={{ width: 26, height: 26 }} resizeMode="contain" />
             </View>
-            <View style={{ flex: 1 }}>
-              <View style={{ flexDirection: 'row', alignItems: 'center', gap: 6 }}>
-                <Text style={styles.headerTitle}>SubAi Voice & Chat Assistant</Text>
-                {isSpeaking && (
-                  <View style={styles.speakingBadge}>
-                    <Ionicons name="volume-high" size={11} color="#4F46E5" />
-                    <Text style={styles.speakingBadgeText}>Speaking</Text>
-                  </View>
-                )}
-              </View>
+            <View style={styles.headerTextWrap}>
+              <Text style={styles.headerTitle} numberOfLines={1} ellipsizeMode="tail">
+                SubAi Voice & Chat Assistant
+              </Text>
               <View style={{ flexDirection: 'row', alignItems: 'center', gap: 5, marginTop: 2 }}>
-                <View style={styles.statusDot} />
-                <Text style={styles.headerSub}>Online · Voice Commands Enabled</Text>
+                <View style={[styles.statusDot, isSpeaking && styles.statusDotSpeaking]} />
+                <Text
+                  style={[styles.headerSub, isSpeaking && styles.headerSubSpeaking]}
+                  numberOfLines={1}
+                  ellipsizeMode="tail"
+                >
+                  {isSpeaking ? '🔊 Speaking response...' : 'Online · Voice Commands Enabled'}
+                </Text>
               </View>
             </View>
 
-            {/* Voice Audio Toggle Button */}
-            <TouchableOpacity 
-              onPress={() => {
-                if (isSpeaking) {
-                  stopSpeaking();
-                } else {
-                  setVoiceEnabled(!voiceEnabled);
-                }
-              }} 
-              style={[styles.headerActionBtn, isSpeaking && styles.headerActionBtnActive]}
-              activeOpacity={0.7}
-            >
-              <Ionicons 
-                name={isSpeaking ? "stop-circle" : (voiceEnabled ? "volume-high" : "volume-mute")} 
-                size={18} 
-                color={isSpeaking ? "#DC2626" : (voiceEnabled ? "#4F46E5" : "#9CA3AF")} 
-              />
-            </TouchableOpacity>
+            {/* Header Right Actions */}
+            <View style={styles.headerActionsWrap}>
+              {isSpeaking ? (
+                <TouchableOpacity 
+                  onPress={stopSpeaking} 
+                  style={styles.stopSpeakingBtn}
+                  activeOpacity={0.7}
+                  hitSlop={{ top: 8, bottom: 8, left: 8, right: 8 }}
+                >
+                  <Ionicons name="stop" size={13} color="#FFFFFF" />
+                  <Text style={styles.stopSpeakingBtnText}>Stop</Text>
+                </TouchableOpacity>
+              ) : (
+                <TouchableOpacity 
+                  onPress={() => setVoiceEnabled(!voiceEnabled)} 
+                  style={styles.headerActionBtn}
+                  activeOpacity={0.7}
+                  hitSlop={{ top: 8, bottom: 8, left: 8, right: 8 }}
+                >
+                  <Ionicons 
+                    name={voiceEnabled ? "volume-high" : "volume-mute"} 
+                    size={18} 
+                    color={voiceEnabled ? "#4F46E5" : "#9CA3AF"} 
+                  />
+                </TouchableOpacity>
+              )}
 
-            {/* Close Button */}
-            <TouchableOpacity onPress={closeModal} style={styles.closeBtn}>
-              <Ionicons name="close" size={22} color="#6B7280" />
-            </TouchableOpacity>
+              {/* Close Button */}
+              <TouchableOpacity onPress={closeModal} style={styles.closeBtn} hitSlop={{ top: 8, bottom: 8, left: 8, right: 8 }}>
+                <Ionicons name="close" size={22} color="#6B7280" />
+              </TouchableOpacity>
+            </View>
           </View>
 
           {/* Voice Command Listening Overlay Panel */}
@@ -807,17 +816,43 @@ const styles = StyleSheet.create({
     width: 36, height: 36, borderRadius: 18,
     backgroundColor: '#EEF2FF', borderWidth: 1, borderColor: '#C7D2FE',
     justifyContent: 'center', alignItems: 'center',
+    flexShrink: 0,
+  },
+  headerTextWrap: {
+    flex: 1,
+    minWidth: 0,
+    justifyContent: 'center',
+    marginRight: 4,
   },
   headerTitle: { fontSize: 14, fontWeight: '700', color: '#111827' },
   headerSub: { fontSize: 11, color: '#6B7280' },
+  headerSubSpeaking: { color: '#4F46E5', fontWeight: '600' },
   statusDot: {
     width: 7, height: 7, borderRadius: 3.5, backgroundColor: '#10B981',
   },
-  speakingBadge: {
-    flexDirection: 'row', alignItems: 'center', gap: 3,
-    backgroundColor: '#EEF2FF', paddingHorizontal: 6, paddingVertical: 2, borderRadius: 6,
+  statusDotSpeaking: {
+    backgroundColor: '#4F46E5',
   },
-  speakingBadgeText: { fontSize: 10, color: '#4F46E5', fontWeight: '600' },
+  headerActionsWrap: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 8,
+    flexShrink: 0,
+  },
+  stopSpeakingBtn: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 4,
+    backgroundColor: '#DC2626',
+    paddingHorizontal: 9,
+    paddingVertical: 5,
+    borderRadius: 12,
+  },
+  stopSpeakingBtnText: {
+    color: '#FFFFFF',
+    fontSize: 11,
+    fontWeight: '700',
+  },
   headerActionBtn: {
     width: 32, height: 32, borderRadius: 16,
     backgroundColor: '#F3F4F6', justifyContent: 'center', alignItems: 'center',
