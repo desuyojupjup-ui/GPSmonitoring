@@ -301,10 +301,10 @@ export default function FraudReportList() {
 
 
   return (
-    <div style={{ padding: '24px', background: '#F8FAFC', minHeight: '100vh', display: 'flex', flexDirection: 'column', gap: '24px' }}>
+    <div className="security-page-container">
       
       {/* Top KPI Cards */}
-      <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(180px, 1fr))', gap: '16px' }}>
+      <div className="security-kpi-grid">
         <div style={cardStyle}>
           <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
             <span style={{ fontSize: '12px', color: '#64748B', fontWeight: '700', letterSpacing: '0.5px' }}>TOTAL EVENTS</span>
@@ -372,15 +372,15 @@ export default function FraudReportList() {
         </div>
       </div>
 
-      {/* Main Content Layout: Datatable Left + Telemetry Sidebar Right */}
-      <div style={{ display: 'grid', gridTemplateColumns: '1fr 380px', gap: '24px', alignItems: 'start' }}>
+      {/* Main Content Layout: Responsive Split (Stacks smoothly on smaller screens) */}
+      <div className="security-responsive-layout">
         
         {/* LEFT COLUMN: Controls & Interactive Datatable */}
-        <div style={{ display: 'flex', flexDirection: 'column', gap: '16px' }}>
+        <div style={{ display: 'flex', flexDirection: 'column', gap: '16px', minWidth: 0 }}>
           
           {/* Search & Filter Controls */}
-          <div style={{ display: 'flex', gap: '12px', flexWrap: 'wrap', alignItems: 'center' }}>
-            <div style={{ position: 'relative', flex: 1, minWidth: '240px' }}>
+          <div className="security-filter-bar">
+            <div className="security-filter-search">
               <Search size={18} style={{ position: 'absolute', left: '12px', top: '50%', transform: 'translateY(-50%)', color: '#94A3B8' }} />
               <input
                 type="text"
@@ -427,102 +427,107 @@ export default function FraudReportList() {
           </div>
 
           {/* Data Table */}
-          <div style={{ backgroundColor: 'white', borderRadius: '12px', boxShadow: '0 1px 3px rgba(0,0,0,0.06)', border: '1px solid #E2E8F0', overflow: 'hidden' }}>
-            <div style={{ overflowX: 'auto' }}>
-              <table style={{ width: '100%', borderCollapse: 'collapse', textAlign: 'left', fontSize: '14px' }}>
-                <thead>
-                  <tr style={{ backgroundColor: '#F8FAFC', borderBottom: '1px solid #E2E8F0', color: '#475569', fontSize: '12px', textTransform: 'uppercase', fontWeight: '700' }}>
-                    <th style={{ width: 40, padding: '12px 16px', textAlign: 'center' }}>
-                      <input
-                        type="checkbox"
-                        checked={isAllSelected}
-                        onChange={toggleSelectAll}
-                        style={{ cursor: 'pointer', accentColor: '#1E5ADB', width: 15, height: 15 }}
-                      />
-                    </th>
-                    <th style={{ padding: '12px 16px', whiteSpace: 'nowrap' }}>Employee</th>
-                    <th style={{ padding: '12px 16px', whiteSpace: 'nowrap' }}>Violation Type</th>
-                    <th style={{ padding: '12px 16px', whiteSpace: 'nowrap' }}>IP Address</th>
-                    <th style={{ padding: '12px 16px', whiteSpace: 'nowrap' }}>Device Details</th>
-                    <th style={{ padding: '12px 16px', whiteSpace: 'nowrap' }}>Status</th>
-                    <th style={{ padding: '12px 16px', whiteSpace: 'nowrap' }}>Timestamp</th>
-                    <th style={{ padding: '12px 16px', textAlign: 'right', whiteSpace: 'nowrap' }}>Actions</th>
-                  </tr>
-                </thead>
-                <tbody>
-                  {currentPageItems.map(item => {
-                    const isSelected = selectedIds.includes(item.id);
-                    return (
-                      <tr key={item.id} style={{ borderBottom: '1px solid #F1F5F9', background: isSelected ? '#EFF6FF' : 'transparent' }}>
-                        <td style={{ padding: '14px 16px', textAlign: 'center' }}>
-                          <input
-                            type="checkbox"
-                            checked={isSelected}
-                            onChange={() => toggleSelectOne(item.id)}
-                            style={{ cursor: 'pointer', accentColor: '#1E5ADB', width: 15, height: 15 }}
-                          />
-                        </td>
-                        <td style={{ padding: '14px 16px', fontWeight: '600', color: '#0F172A', whiteSpace: 'nowrap' }}>
-                          {item.employeeName || 'Staff Member'}
-                        </td>
-                        <td style={{ padding: '14px 16px', fontWeight: '700', color: '#DC2626', whiteSpace: 'nowrap' }}>
-                          {item.violationType || 'Mock Location App'}
-                        </td>
-                        <td style={{ padding: '14px 16px', color: '#64748B', fontFamily: 'monospace', whiteSpace: 'nowrap' }}>{item.ipAddress || '112.203.45.18'}</td>
-                        <td style={{ padding: '14px 16px', color: '#475569', whiteSpace: 'nowrap' }}>{item.deviceModel || 'Samsung Galaxy S22'}</td>
-                        <td style={{ padding: '14px 16px', whiteSpace: 'nowrap' }}>
-                          <span style={{
-                            padding: '4px 10px', borderRadius: '12px', fontSize: '12px', fontWeight: '700',
-                            backgroundColor: item.status === 'Confirmed Fraud' ? '#FEE2E2' : item.status === 'Resolved' ? '#D1FAE5' : '#FEF3C7',
-                            color: item.status === 'Confirmed Fraud' ? '#991B1B' : item.status === 'Resolved' ? '#065F46' : '#92400E',
-                          }}>
-                            {item.status || 'Unresolved'}
-                          </span>
-                        </td>
-                        <td style={{ padding: '14px 16px', color: '#64748B', whiteSpace: 'nowrap' }}>{new Date(item.timestamp || Date.now()).toLocaleString()}</td>
-                        <td style={{ padding: '10px 16px', textAlign: 'right', whiteSpace: 'nowrap' }}>
-                          <button
-                            onClick={() => setSelectedReport(item)}
-                            style={{
-                              display: 'inline-flex',
-                              alignItems: 'center',
-                              gap: '4px',
-                              padding: '4px 10px',
-                              height: '28px',
-                              borderRadius: '6px',
-                              border: '1px solid #DBEAFE',
-                              backgroundColor: '#FFFFFF',
-                              color: '#1E5ADB',
-                              fontWeight: '700',
-                              fontSize: '11px',
-                              cursor: 'pointer',
-                              boxShadow: '0 1px 2px rgba(0, 0, 0, 0.04)',
-                              transition: 'all 0.15s ease'
-                            }}
-                          >
-                            <Eye size={13} color="#1E5ADB" /> Inspect
-                          </button>
-                        </td>
-                      </tr>
-                    );
-                  })}
-
-                  {/* Empty Filler Rows */}
-                  {emptyRowsCount > 0 && Array.from({ length: emptyRowsCount }).map((_, idx) => (
-                    <tr key={`empty-row-${idx}`} style={{ height: 38, borderBottom: '1px dashed #F8FAFC' }}>
-                      <td style={{ padding: '8px 16px', color: '#E2E8F0', fontSize: 11, textAlign: 'center' }}>—</td>
-                      <td style={{ padding: '8px 16px', color: '#E2E8F0', fontSize: 11 }}>—</td>
-                      <td style={{ padding: '8px 16px', color: '#E2E8F0', fontSize: 11 }}>—</td>
-                      <td style={{ padding: '8px 16px', color: '#E2E8F0', fontSize: 11 }}>—</td>
-                      <td style={{ padding: '8px 16px', color: '#E2E8F0', fontSize: 11 }}>—</td>
-                      <td style={{ padding: '8px 16px', color: '#E2E8F0', fontSize: 11 }}>—</td>
-                      <td style={{ padding: '8px 16px', color: '#E2E8F0', fontSize: 11 }}>—</td>
-                      <td style={{ padding: '8px 16px', color: '#E2E8F0', fontSize: 11 }}>—</td>
+          <div className="security-table-card">
+            <table className="security-fluid-table">
+              <thead>
+                <tr>
+                  <th style={{ width: 36, textAlign: 'center' }}>
+                    <input
+                      type="checkbox"
+                      checked={isAllSelected}
+                      onChange={toggleSelectAll}
+                      style={{ cursor: 'pointer', accentColor: '#1E5ADB', width: 15, height: 15 }}
+                    />
+                  </th>
+                  <th>Employee</th>
+                  <th>Violation Type</th>
+                  <th className="security-col-optional-tablet">IP Address</th>
+                  <th className="security-col-optional-mobile">Device Details</th>
+                  <th>Status</th>
+                  <th className="security-col-optional-tablet">Timestamp</th>
+                  <th style={{ textAlign: 'right' }}>Actions</th>
+                </tr>
+              </thead>
+              <tbody>
+                {currentPageItems.map(item => {
+                  const isSelected = selectedIds.includes(item.id);
+                  return (
+                    <tr key={item.id} style={{ background: isSelected ? '#EFF6FF' : 'transparent' }}>
+                      <td style={{ width: 36, textAlign: 'center' }}>
+                        <input
+                          type="checkbox"
+                          checked={isSelected}
+                          onChange={() => toggleSelectOne(item.id)}
+                          style={{ cursor: 'pointer', accentColor: '#1E5ADB', width: 15, height: 15 }}
+                        />
+                      </td>
+                      <td style={{ fontWeight: '600', color: '#0F172A' }}>
+                        {item.employeeName || 'Staff Member'}
+                      </td>
+                      <td style={{ fontWeight: '700', color: '#DC2626' }}>
+                        {item.violationType || 'Mock Location App'}
+                      </td>
+                      <td className="security-col-optional-tablet" style={{ color: '#64748B', fontFamily: 'monospace' }}>
+                        {item.ipAddress || '112.203.45.18'}
+                      </td>
+                      <td className="security-col-optional-mobile" style={{ color: '#475569' }}>
+                        {item.deviceModel || 'Samsung Galaxy S22'}
+                      </td>
+                      <td>
+                        <span style={{
+                          padding: '4px 10px', borderRadius: '12px', fontSize: '12px', fontWeight: '700',
+                          backgroundColor: item.status === 'Confirmed Fraud' ? '#FEE2E2' : item.status === 'Resolved' ? '#D1FAE5' : '#FEF3C7',
+                          color: item.status === 'Confirmed Fraud' ? '#991B1B' : item.status === 'Resolved' ? '#065F46' : '#92400E',
+                          display: 'inline-block'
+                        }}>
+                          {item.status || 'Unresolved'}
+                        </span>
+                      </td>
+                      <td className="security-col-optional-tablet" style={{ color: '#64748B' }}>
+                        {new Date(item.timestamp || Date.now()).toLocaleString()}
+                      </td>
+                      <td style={{ textAlign: 'right' }}>
+                        <button
+                          onClick={() => setSelectedReport(item)}
+                          style={{
+                            display: 'inline-flex',
+                            alignItems: 'center',
+                            gap: '4px',
+                            padding: '4px 10px',
+                            height: '28px',
+                            borderRadius: '6px',
+                            border: '1px solid #DBEAFE',
+                            backgroundColor: '#FFFFFF',
+                            color: '#1E5ADB',
+                            fontWeight: '700',
+                            fontSize: '11px',
+                            cursor: 'pointer',
+                            boxShadow: '0 1px 2px rgba(0, 0, 0, 0.04)',
+                            transition: 'all 0.15s ease'
+                          }}
+                        >
+                          <Eye size={13} color="#1E5ADB" /> Inspect
+                        </button>
+                      </td>
                     </tr>
-                  ))}
-                </tbody>
-              </table>
-            </div>
+                  );
+                })}
+
+                {/* Empty Filler Rows */}
+                {emptyRowsCount > 0 && Array.from({ length: emptyRowsCount }).map((_, idx) => (
+                  <tr key={`empty-row-${idx}`} style={{ height: 38 }}>
+                    <td style={{ color: '#E2E8F0', fontSize: 11, textAlign: 'center' }}>—</td>
+                    <td style={{ color: '#E2E8F0', fontSize: 11 }}>—</td>
+                    <td style={{ color: '#E2E8F0', fontSize: 11 }}>—</td>
+                    <td className="security-col-optional-tablet" style={{ color: '#E2E8F0', fontSize: 11 }}>—</td>
+                    <td className="security-col-optional-mobile" style={{ color: '#E2E8F0', fontSize: 11 }}>—</td>
+                    <td style={{ color: '#E2E8F0', fontSize: 11 }}>—</td>
+                    <td className="security-col-optional-tablet" style={{ color: '#E2E8F0', fontSize: 11 }}>—</td>
+                    <td style={{ color: '#E2E8F0', fontSize: 11 }}>—</td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
 
             {/* Datatable Footer */}
             <div style={{
@@ -598,18 +603,7 @@ export default function FraudReportList() {
         </div>
 
         {/* RIGHT COLUMN: 3 UNIQUE FRAUD TELEMETRY CHARTS SIDEBAR */}
-        <div style={{
-          background: '#FFFFFF',
-          borderRadius: '16px',
-          border: '1px solid #E2E8F0',
-          boxShadow: '0 4px 20px -2px rgba(0, 0, 0, 0.05)',
-          padding: '20px',
-          display: 'flex',
-          flexDirection: 'column',
-          gap: '24px',
-          sticky: 'top',
-          top: '24px'
-        }}>
+        <div className="security-sidebar-card">
           {/* Sidebar Header */}
           <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', borderBottom: '1px solid #F1F5F9', paddingBottom: '14px' }}>
             <div style={{ display: 'flex', alignItems: 'center', gap: 10 }}>

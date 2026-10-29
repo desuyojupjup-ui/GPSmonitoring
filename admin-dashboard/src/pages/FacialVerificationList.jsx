@@ -440,10 +440,10 @@ export default function FacialVerificationList() {
   ];
 
   return (
-    <div style={{ padding: '24px', background: '#F8FAFC', minHeight: '100vh', display: 'flex', flexDirection: 'column', gap: '24px' }}>
+    <div className="security-page-container">
       
       {/* Top KPI Summary Cards */}
-      <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(220px, 1fr))', gap: '16px' }}>
+      <div className="security-kpi-grid">
         <div style={cardStyle}>
           <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
             <span style={{ fontSize: '12px', color: '#64748B', fontWeight: '700', letterSpacing: '0.5px' }}>TOTAL VERIFICATIONS</span>
@@ -495,15 +495,15 @@ export default function FacialVerificationList() {
         </div>
       </div>
 
-      {/* Main Content Layout: Datatable Left + Telemetry Sidebar Right */}
-      <div style={{ display: 'grid', gridTemplateColumns: '1fr 380px', gap: '24px', alignItems: 'start' }}>
+      {/* Main Content Layout: Responsive Split (Stacks smoothly on smaller screens) */}
+      <div className="security-responsive-layout">
         
         {/* LEFT COLUMN: Controls & Interactive Datatable */}
-        <div style={{ display: 'flex', flexDirection: 'column', gap: '16px' }}>
+        <div style={{ display: 'flex', flexDirection: 'column', gap: '16px', minWidth: 0 }}>
           
           {/* Search & Filter Controls */}
-          <div style={{ display: 'flex', gap: '12px', flexWrap: 'wrap', alignItems: 'center' }}>
-            <div style={{ position: 'relative', flex: 1, minWidth: '240px' }}>
+          <div className="security-filter-bar">
+            <div className="security-filter-search">
               <Search size={18} style={{ position: 'absolute', left: '12px', top: '50%', transform: 'translateY(-50%)', color: '#94A3B8' }} />
               <input
                 type="text"
@@ -569,70 +569,74 @@ export default function FacialVerificationList() {
           </div>
 
           {/* Data Table */}
-          <div style={{ backgroundColor: 'white', borderRadius: '12px', boxShadow: '0 1px 3px rgba(0,0,0,0.06)', border: '1px solid #E2E8F0', overflow: 'hidden' }}>
-            <div style={{ overflowX: 'auto' }}>
-              <table style={{ width: '100%', borderCollapse: 'collapse', textAlign: 'left', fontSize: '14px' }}>
-                <thead>
-                  <tr style={{ backgroundColor: '#F8FAFC', borderBottom: '1px solid #E2E8F0', color: '#475569', fontSize: '12px', textTransform: 'uppercase', fontWeight: '700' }}>
-                    <th style={{ width: 40, padding: '12px 16px', textAlign: 'center' }}>
-                      <input
-                        type="checkbox"
-                        checked={isAllSelected}
-                        onChange={toggleSelectAll}
-                        style={{ cursor: 'pointer', accentColor: '#1E5ADB', width: 15, height: 15 }}
-                      />
-                    </th>
-                    <th style={{ padding: '12px 16px', whiteSpace: 'nowrap' }}>Employee</th>
-                    <th style={{ padding: '12px 16px', whiteSpace: 'nowrap' }}>Trigger Type</th>
-                    <th style={{ padding: '12px 16px', whiteSpace: 'nowrap' }}>Confidence</th>
-                    <th style={{ padding: '12px 16px', whiteSpace: 'nowrap' }}>Result</th>
-                    <th style={{ padding: '12px 16px', whiteSpace: 'nowrap' }}>Location</th>
-                    <th style={{ padding: '12px 16px', whiteSpace: 'nowrap' }}>Timestamp</th>
-                    <th style={{ padding: '12px 16px', textAlign: 'right', whiteSpace: 'nowrap' }}>Actions</th>
-                  </tr>
-                </thead>
-                <tbody>
-                  {currentPageItems.map(item => {
-                    const isSelected = selectedIds.includes(item.id);
-                    return (
-                      <tr key={item.id} style={{ borderBottom: '1px solid #F1F5F9', background: isSelected ? '#EFF6FF' : 'transparent' }}>
-                        <td style={{ padding: '14px 16px', textAlign: 'center' }}>
-                          <input
-                            type="checkbox"
-                            checked={isSelected}
-                            onChange={() => toggleSelectOne(item.id)}
-                            style={{ cursor: 'pointer', accentColor: '#1E5ADB', width: 15, height: 15 }}
-                          />
-                        </td>
-                        <td style={{ padding: '14px 16px', fontWeight: '600', color: '#0F172A', whiteSpace: 'nowrap' }}>
-                          {item.employeeName || 'Staff Member'}
-                          <div style={{ fontSize: '12px', color: '#94A3B8', fontWeight: '400' }}>ID: {item.employeeId || 'N/A'}</div>
-                        </td>
-                        <td style={{ padding: '14px 16px', color: '#475569', whiteSpace: 'nowrap' }}>{item.triggerType || 'Check-in Verification'}</td>
-                        <td style={{ padding: '14px 16px', whiteSpace: 'nowrap' }}>
-                          <span style={{ fontWeight: '700', color: (item.confidenceScore || 0) >= 90 ? '#10B981' : (item.confidenceScore || 0) >= 75 ? '#F59E0B' : '#EF4444' }}>
-                            {item.confidenceScore || 0}%
-                          </span>
-                        </td>
-                        <td style={{ padding: '14px 16px', whiteSpace: 'nowrap' }}>
-                          <span style={{
-                            padding: '4px 10px', borderRadius: '12px', fontSize: '12px', fontWeight: '600',
-                            backgroundColor: item.result === 'Verified' ? '#D1FAE5' : item.result === 'Flagged' ? '#FEF3C7' : '#FEE2E2',
-                            color: item.result === 'Verified' ? '#065F46' : item.result === 'Flagged' ? '#92400E' : '#991B1B',
-                          }}>
-                            {item.result || 'Verified'}
-                          </span>
-                        </td>
-                        <td style={{ padding: '14px 16px', color: '#64748B', whiteSpace: 'nowrap' }}>{item.location || 'Greenfield Site'}</td>
-                        <td style={{ padding: '14px 16px', color: '#64748B', whiteSpace: 'nowrap' }}>{new Date(item.timestamp || Date.now()).toLocaleString()}</td>
-                        <td style={{ padding: '10px 16px', textAlign: 'right', whiteSpace: 'nowrap' }}>
+          <div className="security-table-card">
+            <table className="security-fluid-table">
+              <thead>
+                <tr>
+                  <th style={{ width: 36, textAlign: 'center' }}>
+                    <input
+                      type="checkbox"
+                      checked={isAllSelected}
+                      onChange={toggleSelectAll}
+                      style={{ cursor: 'pointer', accentColor: '#1E5ADB', width: 15, height: 15 }}
+                    />
+                  </th>
+                  <th>Employee</th>
+                  <th className="security-col-optional-tablet">Trigger Type</th>
+                  <th>Confidence</th>
+                  <th>Result</th>
+                  <th className="security-col-optional-tablet">Location</th>
+                  <th className="security-col-optional-mobile">Timestamp</th>
+                  <th style={{ textAlign: 'right' }}>Actions</th>
+                </tr>
+              </thead>
+              <tbody>
+                {currentPageItems.map(item => {
+                  const isSelected = selectedIds.includes(item.id);
+                  return (
+                    <tr key={item.id} style={{ background: isSelected ? '#EFF6FF' : 'transparent' }}>
+                      <td style={{ width: 36, textAlign: 'center' }}>
+                        <input
+                          type="checkbox"
+                          checked={isSelected}
+                          onChange={() => toggleSelectOne(item.id)}
+                          style={{ cursor: 'pointer', accentColor: '#1E5ADB', width: 15, height: 15 }}
+                        />
+                      </td>
+                      <td style={{ fontWeight: '600', color: '#0F172A' }}>
+                        <div>{item.employeeName || 'Staff Member'}</div>
+                        <div style={{ fontSize: '11px', color: '#94A3B8', fontWeight: '400' }}>ID: {item.employeeId || 'N/A'}</div>
+                      </td>
+                      <td className="security-col-optional-tablet" style={{ color: '#475569' }}>{item.triggerType || 'Check-in'}</td>
+                      <td>
+                        <span style={{ fontWeight: '700', color: (item.confidenceScore || 0) >= 90 ? '#10B981' : (item.confidenceScore || 0) >= 75 ? '#F59E0B' : '#EF4444' }}>
+                          {item.confidenceScore || 0}%
+                        </span>
+                      </td>
+                      <td>
+                        <span style={{
+                          padding: '3px 8px', borderRadius: '12px', fontSize: '11px', fontWeight: '700',
+                          backgroundColor: item.result === 'Verified' ? '#D1FAE5' : item.result === 'Flagged' ? '#FEF3C7' : '#FEE2E2',
+                          color: item.result === 'Verified' ? '#065F46' : item.result === 'Flagged' ? '#92400E' : '#991B1B',
+                          display: 'inline-block'
+                        }}>
+                          {item.result || 'Verified'}
+                        </span>
+                      </td>
+                      <td className="security-col-optional-tablet" style={{ color: '#64748B' }}>{item.location || 'Greenfield Site'}</td>
+                      <td className="security-col-optional-mobile" style={{ color: '#64748B' }}>
+                        <div style={{ fontWeight: '600', color: '#334155', fontSize: '12px' }}>{new Date(item.timestamp || Date.now()).toLocaleDateString([], { month: 'short', day: 'numeric' })}</div>
+                        <div style={{ fontSize: '10px', color: '#94A3B8' }}>{new Date(item.timestamp || Date.now()).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}</div>
+                      </td>
+                      <td style={{ textAlign: 'right', whiteSpace: 'nowrap' }}>
+                        <div style={{ display: 'inline-flex', gap: '4px', alignItems: 'center' }}>
                           <button
                             onClick={() => setSelectedItem(item)}
                             style={{
                               display: 'inline-flex',
                               alignItems: 'center',
                               gap: '4px',
-                              padding: '4px 10px',
+                              padding: '4px 8px',
                               height: '28px',
                               borderRadius: '6px',
                               border: '1px solid #DBEAFE',
@@ -653,7 +657,7 @@ export default function FacialVerificationList() {
                               display: 'inline-flex',
                               alignItems: 'center',
                               gap: '4px',
-                              padding: '4px 10px',
+                              padding: '4px 8px',
                               height: '28px',
                               borderRadius: '6px',
                               border: '1px solid #FEE2E2',
@@ -662,63 +666,61 @@ export default function FacialVerificationList() {
                               fontWeight: '700',
                               fontSize: '11px',
                               cursor: 'pointer',
-                              marginLeft: '6px',
                               boxShadow: '0 1px 2px rgba(0, 0, 0, 0.04)',
                               transition: 'all 0.15s ease'
                             }}
                           >
-                            <Trash2 size={13} color="#EF4444" /> Delete
+                            <Trash2 size={13} color="#EF4444" />
                           </button>
-                        </td>
-                      </tr>
-                    );
-                  })}
-
-                  {/* Empty Filler Rows */}
-                  {emptyRowsCount > 0 && Array.from({ length: emptyRowsCount }).map((_, idx) => (
-                    <tr key={`empty-row-${idx}`} style={{ height: 38, borderBottom: '1px dashed #F8FAFC' }}>
-                      <td style={{ padding: '8px 16px', color: '#E2E8F0', fontSize: 11, textAlign: 'center' }}>—</td>
-                      <td style={{ padding: '8px 16px', color: '#E2E8F0', fontSize: 11 }}>—</td>
-                      <td style={{ padding: '8px 16px', color: '#E2E8F0', fontSize: 11 }}>—</td>
-                      <td style={{ padding: '8px 16px', color: '#E2E8F0', fontSize: 11 }}>—</td>
-                      <td style={{ padding: '8px 16px', color: '#E2E8F0', fontSize: 11 }}>—</td>
-                      <td style={{ padding: '8px 16px', color: '#E2E8F0', fontSize: 11 }}>—</td>
-                      <td style={{ padding: '8px 16px', color: '#E2E8F0', fontSize: 11 }}>—</td>
-                      <td style={{ padding: '8px 16px', color: '#E2E8F0', fontSize: 11 }}>—</td>
+                        </div>
+                      </td>
                     </tr>
-                  ))}
-                </tbody>
-              </table>
-            </div>
+                  );
+                })}
+
+                {/* Empty Filler Rows */}
+                {emptyRowsCount > 0 && Array.from({ length: emptyRowsCount }).map((_, idx) => (
+                  <tr key={`empty-row-${idx}`} style={{ height: 38, borderBottom: '1px dashed #F8FAFC' }}>
+                    <td style={{ padding: '8px 12px', color: '#E2E8F0', fontSize: 11, textAlign: 'center' }}>—</td>
+                    <td style={{ padding: '8px 12px', color: '#E2E8F0', fontSize: 11 }}>—</td>
+                    <td className="security-col-optional-tablet" style={{ padding: '8px 12px', color: '#E2E8F0', fontSize: 11 }}>—</td>
+                    <td style={{ padding: '8px 12px', color: '#E2E8F0', fontSize: 11 }}>—</td>
+                    <td style={{ padding: '8px 12px', color: '#E2E8F0', fontSize: 11 }}>—</td>
+                    <td className="security-col-optional-tablet" style={{ padding: '8px 12px', color: '#E2E8F0', fontSize: 11 }}>—</td>
+                    <td className="security-col-optional-mobile" style={{ padding: '8px 12px', color: '#E2E8F0', fontSize: 11 }}>—</td>
+                    <td style={{ padding: '8px 12px', color: '#E2E8F0', fontSize: 11 }}>—</td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
 
             {/* Datatable Footer */}
             <div style={{
               display: 'flex',
               justifyContent: 'space-between',
               alignItems: 'center',
-              padding: '14px 18px',
+              padding: '12px 16px',
               borderTop: '1px solid #F1F5F9',
               background: '#FFFFFF',
               flexWrap: 'wrap',
-              gap: 12
+              gap: 10
             }}>
-              <div style={{ display: 'flex', alignItems: 'center', gap: 16 }}>
-                <div style={{ fontSize: 13, color: '#64748B', fontWeight: 500 }}>
-                  Showing <strong style={{ color: '#0F172A' }}>{totalItems === 0 ? 0 : startIndex + 1}</strong> to <strong style={{ color: '#0F172A' }}>{Math.min(startIndex + pageSize, totalItems)}</strong> of <strong style={{ color: '#0F172A' }}>{totalItems}</strong> entries
+              <div style={{ display: 'flex', alignItems: 'center', gap: 12, flexWrap: 'wrap' }}>
+                <div style={{ fontSize: 12, color: '#64748B', fontWeight: 500 }}>
+                  Showing <strong style={{ color: '#0F172A' }}>{totalItems === 0 ? 0 : startIndex + 1}</strong> to <strong style={{ color: '#0F172A' }}>{Math.min(startIndex + pageSize, totalItems)}</strong> of <strong style={{ color: '#0F172A' }}>{totalItems}</strong>
                 </div>
-                <div style={{ display: 'flex', alignItems: 'center', gap: 8, fontSize: 13, color: '#64748B', fontWeight: 500 }}>
+                <div style={{ display: 'flex', alignItems: 'center', gap: 6, fontSize: 12, color: '#64748B', fontWeight: 500 }}>
                   <span>Show</span>
                   <select
                     value={pageSize}
                     onChange={e => { setPageSize(Number(e.target.value)); setPage(1); }}
-                    style={{ padding: '5px 10px', border: '1px solid #E2E8F0', borderRadius: 8, fontSize: 12, fontWeight: 600, color: '#0F172A', background: '#F8FAFC', outline: 'none', cursor: 'pointer' }}
+                    style={{ padding: '4px 8px', border: '1px solid #E2E8F0', borderRadius: 6, fontSize: 11, fontWeight: 600, color: '#0F172A', background: '#F8FAFC', outline: 'none', cursor: 'pointer' }}
                   >
                     <option value={10}>10</option>
                     <option value={20}>20</option>
                     <option value={30}>30</option>
                     <option value={50}>50</option>
                   </select>
-                  <span>per page</span>
                 </div>
               </div>
 
@@ -726,9 +728,9 @@ export default function FacialVerificationList() {
                 <button
                   disabled={safePage <= 1}
                   onClick={() => setPage(p => Math.max(p - 1, 1))}
-                  style={{ padding: '6px 12px', borderRadius: 8, border: '1px solid #E2E8F0', background: safePage <= 1 ? '#F8FAFC' : '#FFFFFF', color: safePage <= 1 ? '#94A3B8' : '#334155', fontSize: 12, fontWeight: 600, cursor: safePage <= 1 ? 'not-allowed' : 'pointer' }}
+                  style={{ padding: '5px 10px', borderRadius: 6, border: '1px solid #E2E8F0', background: safePage <= 1 ? '#F8FAFC' : '#FFFFFF', color: safePage <= 1 ? '#94A3B8' : '#334155', fontSize: 11, fontWeight: 600, cursor: safePage <= 1 ? 'not-allowed' : 'pointer' }}
                 >
-                  Previous
+                  Prev
                 </button>
 
                 {Array.from({ length: totalPages }, (_, i) => i + 1).map(p => (
@@ -736,13 +738,13 @@ export default function FacialVerificationList() {
                     key={p}
                     onClick={() => setPage(p)}
                     style={{
-                      width: 32,
-                      height: 32,
-                      borderRadius: 8,
+                      width: 28,
+                      height: 28,
+                      borderRadius: 6,
                       border: 'none',
                       background: safePage === p ? '#1E5ADB' : 'transparent',
                       color: safePage === p ? '#FFFFFF' : '#334155',
-                      fontSize: 12,
+                      fontSize: 11,
                       fontWeight: 700,
                       cursor: 'pointer',
                       boxShadow: safePage === p ? '0 2px 6px rgba(30, 90, 219, 0.3)' : 'none'
@@ -755,7 +757,7 @@ export default function FacialVerificationList() {
                 <button
                   disabled={safePage >= totalPages}
                   onClick={() => setPage(p => Math.min(p + 1, totalPages))}
-                  style={{ padding: '6px 12px', borderRadius: 8, border: '1px solid #E2E8F0', background: safePage >= totalPages ? '#F8FAFC' : '#FFFFFF', color: safePage >= totalPages ? '#94A3B8' : '#334155', fontSize: 12, fontWeight: 600, cursor: safePage >= totalPages ? 'not-allowed' : 'pointer' }}
+                  style={{ padding: '5px 10px', borderRadius: 6, border: '1px solid #E2E8F0', background: safePage >= totalPages ? '#F8FAFC' : '#FFFFFF', color: safePage >= totalPages ? '#94A3B8' : '#334155', fontSize: 11, fontWeight: 600, cursor: safePage >= totalPages ? 'not-allowed' : 'pointer' }}
                 >
                   Next
                 </button>
@@ -765,18 +767,7 @@ export default function FacialVerificationList() {
         </div>
 
         {/* RIGHT COLUMN: 3 UNIQUE VERIFICATION TELEMETRY CHARTS SIDEBAR */}
-        <div style={{
-          background: '#FFFFFF',
-          borderRadius: '16px',
-          border: '1px solid #E2E8F0',
-          boxShadow: '0 4px 20px -2px rgba(0, 0, 0, 0.05)',
-          padding: '20px',
-          display: 'flex',
-          flexDirection: 'column',
-          gap: '24px',
-          sticky: 'top',
-          top: '24px'
-        }}>
+        <div className="security-sidebar-card">
           {/* Sidebar Header */}
           <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', borderBottom: '1px solid #F1F5F9', paddingBottom: '14px' }}>
             <div style={{ display: 'flex', alignItems: 'center', gap: 10 }}>

@@ -2702,3 +2702,155 @@ body.dark-mode .user-menu-logout:hover { background: rgba(239,68,68,0.1) !import
   }
 }
 
+/* ═══════════════════════════════════════════════════════
+   SECURITY & BIOMETRICS RESPONSIVE LAYOUTS
+   (Facial Verification, AI Anomaly, Security Fraud)
+   ═══════════════════════════════════════════════════════ */
+
+.security-page-container {
+  padding: 24px;
+  background: #F8FAFC;
+  min-height: 100vh;
+  display: flex;
+  flex-direction: column;
+  gap: 20px;
+  box-sizing: border-box;
+  width: 100%;
+}
+
+.security-kpi-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(190px, 1fr));
+  gap: 14px;
+  width: 100%;
+}
+
+.security-responsive-layout {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) 360px;
+  gap: 20px;
+  align-items: start;
+  width: 100%;
+}
+
+.security-filter-bar {
+  display: flex;
+  gap: 10px;
+  flex-wrap: wrap;
+  align-items: center;
+  width: 100%;
+}
+
+.security-filter-search {
+  position: relative;
+  flex: 1 1 200px;
+  min-width: 160px;
+}
+
+.security-table-card {
+  background: #FFFFFF;
+  border-radius: 12px;
+  box-shadow: 0 1px 3px rgba(0,0,0,0.06);
+  border: 1px solid #E2E8F0;
+  width: 100%;
+  overflow: hidden;
+}
+
+.security-fluid-table {
+  width: 100%;
+  border-collapse: collapse;
+  text-align: left;
+  font-size: 13px;
+  table-layout: auto;
+}
+
+.security-fluid-table th {
+  padding: 10px 12px;
+  background-color: #F8FAFC;
+  border-bottom: 1px solid #E2E8F0;
+  color: #475569;
+  font-size: 11px;
+  text-transform: uppercase;
+  font-weight: 700;
+  letter-spacing: 0.03em;
+}
+
+.security-fluid-table td {
+  padding: 12px 12px;
+  border-bottom: 1px solid #F1F5F9;
+  vertical-align: middle;
+}
+
+.security-sidebar-card {
+  background: #FFFFFF;
+  border-radius: 16px;
+  border: 1px solid #E2E8F0;
+  box-shadow: 0 4px 20px -2px rgba(0, 0, 0, 0.05);
+  padding: 18px;
+  display: flex;
+  flex-direction: column;
+  gap: 20px;
+  width: 100%;
+  box-sizing: border-box;
+}
+
+/* Tablet Breakpoint (Under 1200px) */
+@media (max-width: 1199px) {
+  .security-responsive-layout {
+    grid-template-columns: 1fr;
+    gap: 20px;
+  }
+}
+
+/* Mobile Breakpoint (Under 768px) */
+@media (max-width: 768px) {
+  .security-page-container {
+    padding: 12px;
+    gap: 14px;
+  }
+
+  .security-kpi-grid {
+    grid-template-columns: repeat(2, 1fr);
+    gap: 10px;
+  }
+
+  .security-filter-bar {
+    flex-direction: column;
+    align-items: stretch;
+    gap: 8px;
+  }
+
+  .security-filter-search {
+    width: 100%;
+    min-width: 100%;
+  }
+
+  .security-filter-bar select,
+  .security-filter-bar input[type="date"],
+  .security-filter-bar button {
+    width: 100%;
+  }
+
+  .security-col-optional-tablet {
+    display: none !important;
+  }
+
+  .security-fluid-table th,
+  .security-fluid-table td {
+    padding: 8px 8px;
+    font-size: 12px;
+  }
+}
+
+/* Extra Small Mobile (Under 480px) */
+@media (max-width: 480px) {
+  .security-kpi-grid {
+    grid-template-columns: 1fr;
+    gap: 8px;
+  }
+
+  .security-col-optional-mobile {
+    display: none !important;
+  }
+}
+
