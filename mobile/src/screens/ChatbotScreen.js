@@ -195,38 +195,38 @@ export default function ChatbotScreen({ route, user: propUser }) {
         text.includes('overtime') ||
         text.includes('flagged')
       ) {
+        const genericWords = ['employee', 'user', 'guard', 'staff', 'admin', 'officer', 'field employee', 'security'];
+        const myIds = [
+          employee?.id,
+          employee?.idNum,
+          employee?.empId,
+          employee?.employeeId,
+          employee?.uid,
+          propUser?.id,
+          propUser?.uid,
+          propUser?.empId,
+          auth.currentUser?.uid,
+        ].filter(x => x !== undefined && x !== null && String(x).trim() !== '' && String(x).trim() !== 'emp_fallback')
+         .map(x => String(x).trim().toLowerCase());
+
+        const myEmails = [
+          email,
+          employee?.email,
+          employee?.workEmail,
+          propUser?.email,
+          auth.currentUser?.email,
+        ].filter(Boolean).map(e => String(e).trim().toLowerCase());
+
+        const myNames = [
+          employee?.name,
+          employee?.displayName,
+          propUser?.name,
+          auth.currentUser?.displayName,
+        ].filter(Boolean).map(n => String(n).trim().toLowerCase())
+         .filter(n => n.length >= 2 && !genericWords.includes(n));
+
         let userAnomalies = [];
         try {
-          const myIds = [
-            employee?.id,
-            employee?.idNum,
-            employee?.empId,
-            employee?.employeeId,
-            employee?.uid,
-            propUser?.id,
-            propUser?.uid,
-            propUser?.empId,
-            auth.currentUser?.uid,
-          ].filter(x => x !== undefined && x !== null && String(x).trim() !== '' && String(x).trim() !== 'emp_fallback')
-           .map(x => String(x).trim().toLowerCase());
-
-          const myEmails = [
-            email,
-            employee?.email,
-            employee?.workEmail,
-            propUser?.email,
-            auth.currentUser?.email,
-          ].filter(Boolean).map(e => String(e).trim().toLowerCase());
-
-          const genericWords = ['employee', 'user', 'guard', 'staff', 'admin', 'officer', 'field employee', 'security'];
-          const myNames = [
-            employee?.name,
-            employee?.displayName,
-            propUser?.name,
-            auth.currentUser?.displayName,
-          ].filter(Boolean).map(n => String(n).trim().toLowerCase())
-           .filter(n => n.length >= 2 && !genericWords.includes(n));
-
           const isMatch = (item) => {
             const aIds = [item.employeeId, item.employee_id, item.empId, item.userId, item.uid]
               .filter(x => x !== undefined && x !== null && String(x).trim() !== '' && String(x).trim() !== 'emp_fallback')
@@ -267,7 +267,9 @@ export default function ChatbotScreen({ route, user: propUser }) {
               userAnomalies.push({ id: d.id, ...data, source: 'ActivityLogs' });
             }
           });
-        } catch (_) {}
+        } catch (err) {
+          console.warn('Error fetching anomalies:', err);
+        }
 
         const activeUserAnoms = userAnomalies.filter(a => {
           const st = (a.status || '').toLowerCase();
@@ -281,15 +283,18 @@ export default function ChatbotScreen({ route, user: propUser }) {
         const count = activeUserAnoms.length;
         const latest = activeUserAnoms[0];
         const rawTitle = latest.title || latest.type || latest.action || 'Security Anomaly';
-        const title = personalizeAnomalyTitle(rawTitle, myNames);
+        const title = typeof personalizeAnomalyTitle === 'function' ? personalizeAnomalyTitle(rawTitle, myNames) : rawTitle;
         const rawDesc = latest.description || latest.details || latest.reason || 'Unusual telemetry variance flagged.';
-        const desc = personalizeAnomalyDescription(rawDesc, myNames);
+        const desc = typeof personalizeAnomalyDescription === 'function' ? personalizeAnomalyDescription(rawDesc, myNames) : rawDesc;
 
         let explanation = `⚠️ Active Anomaly Alerts (${count} Requiring Response):\n\n• Latest: ${title}\n• Severity: ${latest.severity || 'Medium'}\n• Details: ${desc}\n\n`;
 
-        if (latest.eventType === 'UNAUTHORIZED_LOCATION' || (latest.type || '').includes('Geofence')) {
+        const evType = String(latest.eventType || '').toUpperCase();
+        const typeStr = String(latest.type || '').toLowerCase();
+
+        if (evType === 'UNAUTHORIZED_LOCATION' || typeStr.includes('geofence') || typeStr.includes('outside')) {
           explanation += "💡 AI Explanation:\nYou were detected outside your assigned worksite geofence perimeter.\n\n🎯 Recommended Actions:\n1. Open 'Anomaly Alerts' from your Home screen to submit an explanation.\n2. Return within the site perimeter to clear the boundary flag.";
-        } else if (latest.eventType === 'OVERTIME_SHIFT_EXCEEDED' || (latest.type || '').includes('Overtime')) {
+        } else if (evType === 'OVERTIME_SHIFT_EXCEEDED' || typeStr.includes('overtime')) {
           explanation += "💡 AI Explanation:\nYour scheduled shift end time has elapsed, but you are still clocked in.\n\n🎯 Recommended Actions:\n1. If your shift is completed, please proceed to the Attendance screen and tap 'Check Out Now'.\n2. If authorized for overtime, inform your supervisor to approve the extension.";
         } else {
           explanation += "💡 Recommended Actions:\nPlease open the 'Anomaly Alerts' screen on your Home dashboard to review your alerts and submit an explanation or photo proof.";
@@ -370,6 +375,7 @@ export default function ChatbotScreen({ route, user: propUser }) {
 
       return "I can assist you with voice commands:\n\n• What is my assignment?\n• Where is my site location?\n• What time did I check in?\n• Show my attendance count\n• What is my status?\n• Check my anomaly alerts\n\nTap the microphone icon anytime to speak a command.";
     } catch (e) {
+      console.error('Chatbot error in ChatbotScreen:', e);
       return "An error occurred while fetching your data.";
     }
   };
