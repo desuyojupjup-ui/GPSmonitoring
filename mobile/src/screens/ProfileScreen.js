@@ -425,7 +425,7 @@ export default function ProfileScreen({ navigation, route, user: propUser, onLog
                 {displayName}
               </Text>
               <Text style={styles.userSubtitleText} numberOfLines={1}>
-                {employee?.assignedSite || 'GeoStride Workforce'}
+                {empId} • {empEmail}
               </Text>
             </View>
 
@@ -441,85 +441,22 @@ export default function ProfileScreen({ navigation, route, user: propUser, onLog
           </View>
         </View>
 
-        {/* ── 2. Floating Metrics Card (Dual Column: Matches "My client: 98 | Withdrawal: 332" in reference) ── */}
+        {/* ── 2. Floating Card (Department & Role / Job) ── */}
         <View style={[styles.floatingCard, isDarkMode && styles.darkCard, isDarkMode && styles.darkBorder]}>
           <View style={styles.metricColumn}>
-            <Text style={[styles.metricLabel, isDarkMode && styles.darkSubText]}>TOTAL ATTENDANCE</Text>
-            <Text style={[styles.metricValue, isDarkMode && styles.darkText]}>
-              {attendance.length > 0 ? attendance.length : (employee?.totalAttendance || '0')}
+            <Text style={[styles.metricLabel, isDarkMode && styles.darkSubText]}>DEPARTMENT</Text>
+            <Text style={[styles.metricValue, isDarkMode && styles.darkText]} numberOfLines={1}>
+              {empDept}
             </Text>
           </View>
 
           <View style={styles.metricDivider} />
 
           <View style={styles.metricColumn}>
-            <Text style={[styles.metricLabel, isDarkMode && styles.darkSubText]}>ACTIVITY LOGS</Text>
-            <Text style={[styles.metricValue, isDarkMode && styles.darkText]}>
-              {history.length > 0 ? history.length : (employee?.totalLogs || '0')}
+            <Text style={[styles.metricLabel, isDarkMode && styles.darkSubText]}>ROLE / JOB</Text>
+            <Text style={[styles.metricValue, isDarkMode && styles.darkText]} numberOfLines={1}>
+              {empRole}
             </Text>
-          </View>
-        </View>
-
-        {/* ── 3. Employee Credentials Card (Requested: ID, Department, Role/Job, Gmail) ── */}
-        <View style={[styles.menuSectionCard, isDarkMode && styles.darkCard, isDarkMode && styles.darkBorder]}>
-          <View style={styles.cardHeaderRow}>
-            <View style={{ flexDirection: 'row', alignItems: 'center', gap: 6 }}>
-              <Ionicons name="shield-checkmark" size={15} color="#2563EB" />
-              <Text style={styles.cardHeaderTitle}>EMPLOYEE CREDENTIALS</Text>
-            </View>
-            <View style={[styles.statusBadge, { 
-              backgroundColor: isLiveTrackingActive ? '#DCFCE7' : '#F1F5F9',
-              borderColor: isLiveTrackingActive ? '#86EFAC' : '#E2E8F0',
-            }]}>
-              <View style={[styles.statusDot, { backgroundColor: isLiveTrackingActive ? '#16A34A' : '#94A3B8' }]} />
-              <Text style={[styles.statusBadgeText, { color: isLiveTrackingActive ? '#15803D' : '#64748B' }]}>
-                {employee?.status || (isLiveTrackingActive ? 'On Duty' : 'Offline')}
-              </Text>
-            </View>
-          </View>
-
-          {/* Row: Employee ID */}
-          <View style={[styles.credentialRow, isDarkMode && styles.darkBorder]}>
-            <View style={[styles.iconBadge, { backgroundColor: '#EDE9FE' }]}>
-              <Ionicons name="card" size={18} color="#7C3AED" />
-            </View>
-            <View style={styles.credentialTextWrap}>
-              <Text style={[styles.credentialLabel, isDarkMode && styles.darkSubText]}>Employee ID</Text>
-              <Text style={[styles.credentialValue, isDarkMode && styles.darkText]}>{empId}</Text>
-            </View>
-          </View>
-
-          {/* Row: Department */}
-          <View style={[styles.credentialRow, isDarkMode && styles.darkBorder]}>
-            <View style={[styles.iconBadge, { backgroundColor: '#DBEAFE' }]}>
-              <Ionicons name="business" size={18} color="#2563EB" />
-            </View>
-            <View style={styles.credentialTextWrap}>
-              <Text style={[styles.credentialLabel, isDarkMode && styles.darkSubText]}>Department</Text>
-              <Text style={[styles.credentialValue, isDarkMode && styles.darkText]}>{empDept}</Text>
-            </View>
-          </View>
-
-          {/* Row: Role / Job */}
-          <View style={[styles.credentialRow, isDarkMode && styles.darkBorder]}>
-            <View style={[styles.iconBadge, { backgroundColor: '#FEF3C7' }]}>
-              <Ionicons name="briefcase" size={18} color="#D97706" />
-            </View>
-            <View style={styles.credentialTextWrap}>
-              <Text style={[styles.credentialLabel, isDarkMode && styles.darkSubText]}>Role / Job</Text>
-              <Text style={[styles.credentialValue, isDarkMode && styles.darkText]}>{empRole}</Text>
-            </View>
-          </View>
-
-          {/* Row: Gmail Address */}
-          <View style={[styles.credentialRow, { borderBottomWidth: 0 }]}>
-            <View style={[styles.iconBadge, { backgroundColor: '#FEE2E2' }]}>
-              <Ionicons name="mail" size={18} color="#DC2626" />
-            </View>
-            <View style={styles.credentialTextWrap}>
-              <Text style={[styles.credentialLabel, isDarkMode && styles.darkSubText]}>Gmail Address</Text>
-              <Text style={[styles.credentialValue, isDarkMode && styles.darkText]} numberOfLines={1}>{empEmail}</Text>
-            </View>
           </View>
         </View>
 
@@ -1129,9 +1066,10 @@ const styles = StyleSheet.create({
     marginBottom: 4,
   },
   metricValue: {
-    fontSize: 22,
+    fontSize: 16,
     fontWeight: '800',
     color: '#0F172A',
+    textAlign: 'center',
   },
   metricDivider: {
     width: 1,
