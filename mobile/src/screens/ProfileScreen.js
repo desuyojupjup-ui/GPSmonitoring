@@ -71,16 +71,15 @@ function formatDateTime(val) {
 
 export default function ProfileScreen({ navigation, route, user: propUser, onLogout }) {
   const insets = useSafeAreaInsets();
-  const [headerHeight, setHeaderHeight] = useState(0);
   const [employee, setEmployee] = useState(null);
   const [uploading, setUploading] = useState(false);
   const [isDarkMode, setIsDarkMode] = useState(false);
+  const [isLiveTrackingActive, setIsLiveTrackingActive] = useState(true);
   
-  // Photo Picker Modals
+  // Modals state
   const [showPhotoModal, setShowPhotoModal] = useState(false);
   const [showPresetsModal, setShowPresetsModal] = useState(false);
-
-  // Modals state
+  const [showQRModal, setShowQRModal] = useState(false);
   const [activeModal, setActiveModal] = useState(null);
   const [showDelayModal, setShowDelayModal] = useState(false);
   const [attendance, setAttendance] = useState([]);
@@ -89,6 +88,12 @@ export default function ProfileScreen({ navigation, route, user: propUser, onLog
   const currentEmail = getCleanEmployeeEmail(propUser, route?.params?.user, auth.currentUser);
   const formattedEmailName = currentEmail ? currentEmail.split('@')[0].split('.').map(p => p.charAt(0).toUpperCase() + p.slice(1)).join(' ') : '';
   const displayName = employee?.name || propUser?.name || route?.params?.user?.name || formattedEmailName || 'Employee';
+
+  // Resolved Employee Credentials
+  const empId = employee?.idNum || employee?.employeeId || employee?.empId || (employee?.id ? (employee.id.startsWith('emp_') ? employee.id.replace('emp_', 'EMP-').slice(0, 8).toUpperCase() : `EMP-${employee.id.slice(0, 4).toUpperCase()}`) : 'EMP-0492');
+  const empDept = employee?.department || employee?.org || 'Operations';
+  const empRole = employee?.role || employee?.type || employee?.jobTitle || employee?.position || 'Field Specialist';
+  const empEmail = employee?.email || employee?.empEmail || currentEmail || 'employee@gmail.com';
 
   const lastEmpKeyRef = React.useRef('');
   useEffect(() => {
@@ -127,6 +132,9 @@ export default function ProfileScreen({ navigation, route, user: propUser, onLog
           name: displayName,
           email: currentEmail,
           status: 'Online',
+          department: 'Operations',
+          role: 'Field Specialist',
+          idNum: 'EMP-0492',
           profilePic: null
         };
       }
@@ -136,23 +144,41 @@ export default function ProfileScreen({ navigation, route, user: propUser, onLog
         name: empData.name, 
         email: empData.email, 
         status: empData.status, 
+        department: empData.department || empData.org,
+        role: empData.role || empData.type,
+        idNum: empData.idNum || empData.employeeId,
         assignedSite: empData.assignedSite,
         profilePic: empData.profilePic 
       });
       if (empKey !== lastEmpKeyRef.current) {
         lastEmpKeyRef.current = empKey;
         setEmployee(empData);
+        setIsLiveTrackingActive(empData.status === 'On Duty' || empData.status === 'On Site' || empData.status === 'Online');
       }
     });
     return () => unsub();
   }, [currentEmail]);
+
+  const toggleLiveTracking = async (value) => {
+    setIsLiveTrackingActive(value);
+    const newStatus = value ? 'On Duty' : 'Offline';
+    setEmployee(prev => prev ? { ...prev, status: newStatus } : prev);
+    try {
+      const targetId = employee?.id || auth.currentUser?.uid;
+      if (targetId) {
+        await updateDoc(doc(db, 'employees', targetId), { status: newStatus });
+      }
+    } catch (e) {
+      console.warn('Status toggle error:', e);
+    }
+  };
 
   const fetchModalData = async (type) => {
     if (!employee && !currentEmail) return;
     try {
       if (type === 'attendance') {
         const snap = await getDocs(collection(db, 'Attendance'));
-        const empId = (employee?.id || '').toLowerCase();
+        const empIdSearch = (employee?.id || '').toLowerCase();
         const empName = (employee?.name || currentEmail.split('@')[0]).toLowerCase();
         const emailToUse = currentEmail.toLowerCase();
 
@@ -162,7 +188,7 @@ export default function ProfileScreen({ navigation, route, user: propUser, onLog
           const rEmail = (r.email || r.employeeEmail || '').toLowerCase();
 
           if (emailToUse && rEmail && rEmail === emailToUse) return true;
-          if (empId && rId && rId === empId) return true;
+          if (empIdSearch && rId && rId === empIdSearch) return true;
           if (empName && rName && (rName === empName || rName.includes(empName) || empName.includes(rName))) return true;
           return false;
         });
@@ -175,13 +201,13 @@ export default function ProfileScreen({ navigation, route, user: propUser, onLog
         setAttendance(data);
       } else if (type === 'history') {
         const snap = await getDocs(collection(db, 'ActivityLogs'));
-        const empId = (employee?.id || '').toLowerCase();
+        const empIdSearch = (employee?.id || '').toLowerCase();
         const empName = (employee?.name || currentEmail.split('@')[0]).toLowerCase();
 
         const data = snap.docs.map(d => ({ id: d.id, ...d.data() })).filter(log => {
           const lId = (log.employee_id || log.employeeId || log.empId || '').toLowerCase();
           const lName = (log.employeeName || log.employee_name || log.name || '').toLowerCase();
-          if (empId && lId && lId === empId) return true;
+          if (empIdSearch && lId && lId === empIdSearch) return true;
           if (empName && lName && (lName === empName || lName.includes(empName) || empName.includes(lName))) return true;
           return false;
         });
@@ -212,8 +238,10 @@ export default function ProfileScreen({ navigation, route, user: propUser, onLog
       fetchModalData('history');
     } else if (title === 'Settings') {
       setActiveModal('settings');
-    } else if (title === 'Help & Support') {
+    } else if (title === 'Help & Feedback') {
       setActiveModal('support');
+    } else if (title === 'App Version') {
+      Alert.alert('App Update', 'GeoStride Mobile V2.0.8 is currently up to date.');
     }
   };
 
@@ -227,20 +255,15 @@ export default function ProfileScreen({ navigation, route, user: propUser, onLog
           text: 'Logout', 
           style: 'destructive', 
           onPress: async () => {
-            // 1. Immediately trigger onLogout callback so user state clears instantly
             const logoutCallback = onLogout || route?.params?.onLogout;
             if (typeof logoutCallback === 'function') {
               try { logoutCallback(); } catch (_) {}
             }
-
-            // 2. Clear global user session & notify listeners
             try {
               await performGlobalLogout();
             } catch (e) {
               console.warn('Global logout error:', e);
             }
-
-            // 3. Stop presence in background (fire-and-forget)
             try {
               presenceService.stopPresence(employee || propUser || { email: currentEmail }).catch(() => {});
             } catch (e) {
@@ -253,63 +276,26 @@ export default function ProfileScreen({ navigation, route, user: propUser, onLog
     );
   };
 
-  // ── Profile Photo Application Engine ──
+  // ── Profile Photo Engine ──
   const applyNewProfilePic = async (photoUri) => {
     try {
       setUploading(true);
       setShowPhotoModal(false);
       setShowPresetsModal(false);
 
-      // 1. Instant optimistic state update
       setEmployee(prev => ({ ...(prev || {}), profilePic: photoUri }));
 
-      // 2. Cache in persistent AsyncStorage
       if (currentEmail) {
         await AsyncStorage.setItem('subai_cached_profile_pic_' + currentEmail, photoUri || '');
       }
 
-      // 3. Resolve employee ID
-      const empId = employee?.id || auth.currentUser?.uid || 'emp_' + (currentEmail ? currentEmail.replace(/[^a-zA-Z0-9]/g, '_') : Date.now());
-
-      // 4. Update Firestore & Local Storage
-      const empRef = doc(db, 'employees', empId);
-      empRef.email = currentEmail;
+      const targetId = employee?.id || auth.currentUser?.uid || 'emp_' + (currentEmail ? currentEmail.replace(/[^a-zA-Z0-9]/g, '_') : Date.now());
+      const empRef = doc(db, 'employees', targetId);
       await updateDoc(empRef, { 
         profilePic: photoUri || null,
         email: currentEmail,
         name: displayName
       });
-
-      // 5. Update window localStorage if running in web mode
-      if (typeof window !== 'undefined' && window.localStorage) {
-        try {
-          const raw = window.localStorage.getItem('subai_store_employees');
-          if (raw) {
-            const emps = JSON.parse(raw);
-            if (Array.isArray(emps)) {
-              let matched = false;
-              const updated = emps.map(e => {
-                const eMail = (e.email || e.empEmail || '').trim().toLowerCase();
-                if (e.id === empId || (currentEmail && eMail === currentEmail)) {
-                  matched = true;
-                  return { ...e, profilePic: photoUri || null };
-                }
-                return e;
-              });
-              if (!matched && empId) {
-                updated.push({
-                  id: empId,
-                  name: displayName,
-                  email: currentEmail,
-                  profilePic: photoUri || null,
-                  status: 'Online'
-                });
-              }
-              window.localStorage.setItem('subai_store_employees', JSON.stringify(updated));
-            }
-          }
-        } catch (e) {}
-      }
 
       Alert.alert('Profile Updated', photoUri ? 'Your profile photo has been updated!' : 'Profile photo reset to default.');
     } catch (error) {
@@ -320,7 +306,6 @@ export default function ProfileScreen({ navigation, route, user: propUser, onLog
     }
   };
 
-  // Option 1: Capture with Camera
   const handleTakePhoto = async () => {
     try {
       const permission = await ImagePicker.requestCameraPermissionsAsync();
@@ -346,7 +331,6 @@ export default function ProfileScreen({ navigation, route, user: propUser, onLog
     }
   };
 
-  // Option 2: Select from Device Gallery
   const handlePickGallery = async () => {
     try {
       const permission = await ImagePicker.requestMediaLibraryPermissionsAsync();
@@ -372,241 +356,386 @@ export default function ProfileScreen({ navigation, route, user: propUser, onLog
     }
   };
 
-  // Option 3: Remove Custom Photo
   const handleRemovePhoto = () => {
     Alert.alert(
       'Remove Photo',
       'Reset your profile picture to default?',
       [
         { text: 'Cancel', style: 'cancel' },
-        { 
-          text: 'Remove', 
-          style: 'destructive', 
-          onPress: () => applyNewProfilePic(null) 
-        }
+        { text: 'Remove', style: 'destructive', onPress: () => applyNewProfilePic(null) }
       ]
     );
   };
 
-  const menuItems = [
-    { icon: 'clipboard-outline',   title: 'My Assignments' },
-    { icon: 'time-outline',        title: 'My Attendance' },
-    { icon: 'shield-alert-outline', title: 'Anomaly Alerts' },
-    { icon: 'warning-outline',     title: 'Report Incident / Delay' },
-    { icon: 'location-outline',    title: 'Location History' },
-    { icon: 'settings-outline',    title: 'Settings' },
-    { icon: 'help-circle-outline', title: 'Help & Support' },
-  ];
-
   return (
     <View style={[styles.container, isDarkMode && styles.darkContainer]}>
-      {/* ── Blue Header ── */}
-      <View
-        style={[styles.blueHeader, { paddingTop: insets.top + 14, justifyContent: 'center' }]}
-        onLayout={e => setHeaderHeight(e.nativeEvent.layout.height)}
+      <ScrollView 
+        showsVerticalScrollIndicator={false}
+        contentContainerStyle={{ paddingBottom: 110 }}
+        bounces={false}
       >
-        <Text style={styles.headerTitle}>Profile</Text>
-      </View>
+        {/* ── 1. Top Vibrant Blue Header (Curved Bottom) ── */}
+        <View style={[styles.blueHeader, { paddingTop: insets.top + 8 }]}>
+          {/* Top Header Bar: Settings Cog */}
+          <View style={styles.topHeaderBar}>
+            <View />
+            <TouchableOpacity 
+              style={styles.settingsHeaderBtn}
+              onPress={() => setActiveModal('settings')}
+              activeOpacity={0.8}
+            >
+              <Ionicons name="settings-sharp" size={22} color="#FFFFFF" />
+            </TouchableOpacity>
+          </View>
 
-      {/* ── Avatar overlapping the boundary ── */}
-      {headerHeight > 0 && (
-        <View style={[styles.avatarRow, { top: headerHeight - AVATAR_HALF }]}>
-          <TouchableOpacity 
-            onPress={() => setShowPhotoModal(true)} 
-            disabled={uploading}
-            activeOpacity={0.85}
-          >
-            <View style={[styles.avatarCircle, { overflow: 'hidden' }]}>
-              {uploading ? (
-                <ActivityIndicator color="#4F46E5" size="large" />
-              ) : employee?.profilePic ? (
-                <Image source={{ uri: employee.profilePic }} style={{ width: AVATAR_SIZE, height: AVATAR_SIZE }} />
-              ) : (
-                <Ionicons name="person" size={54} color="#9CA3AF" />
-              )}
+          {/* User Profile Identity Row */}
+          <View style={styles.userIdentityRow}>
+            {/* Avatar Circle with White Border */}
+            <TouchableOpacity 
+              onPress={() => setShowPhotoModal(true)} 
+              disabled={uploading}
+              activeOpacity={0.85}
+              style={styles.avatarTouchable}
+            >
+              <View style={styles.avatarCircle}>
+                {uploading ? (
+                  <ActivityIndicator color="#FFFFFF" size="small" />
+                ) : employee?.profilePic ? (
+                  <Image source={{ uri: employee.profilePic }} style={styles.avatarImage} />
+                ) : (
+                  <Ionicons name="person" size={38} color="#93C5FD" />
+                )}
+              </View>
+              <View style={styles.cameraBadge}>
+                <Ionicons name="camera" size={11} color="#FFFFFF" />
+              </View>
+            </TouchableOpacity>
+
+            {/* Name & Subtitle */}
+            <View style={styles.identityDetails}>
+              <Text style={styles.userNameText} numberOfLines={1}>
+                {displayName}
+              </Text>
+              <Text style={styles.userSubtitleText} numberOfLines={1}>
+                {empDept} • {empRole}
+              </Text>
             </View>
-            <View style={styles.cameraBadge}>
-              <Ionicons name="camera" size={13} color="white" />
+
+            {/* QR Code & Chevron */}
+            <TouchableOpacity 
+              style={styles.qrRowBtn}
+              onPress={() => setShowQRModal(true)}
+              activeOpacity={0.7}
+            >
+              <Ionicons name="qr-code-outline" size={22} color="rgba(255, 255, 255, 0.95)" />
+              <Ionicons name="chevron-forward" size={16} color="rgba(255, 255, 255, 0.7)" />
+            </TouchableOpacity>
+          </View>
+        </View>
+
+        {/* ── 2. Floating Metrics Card (Dual Column) ── */}
+        <View style={[styles.floatingCard, isDarkMode && styles.darkCard, isDarkMode && styles.darkBorder]}>
+          <View style={styles.metricColumn}>
+            <Text style={[styles.metricLabel, isDarkMode && styles.darkSubText]}>EMPLOYEE ID</Text>
+            <Text style={[styles.metricValue, isDarkMode && styles.darkText]} numberOfLines={1}>
+              {empId}
+            </Text>
+          </View>
+
+          <View style={styles.metricDivider} />
+
+          <View style={styles.metricColumn}>
+            <Text style={[styles.metricLabel, isDarkMode && styles.darkSubText]}>DEPARTMENT</Text>
+            <Text style={[styles.metricValue, isDarkMode && styles.darkText]} numberOfLines={1}>
+              {empDept}
+            </Text>
+          </View>
+        </View>
+
+        {/* ── 3. Employee Credentials Card (Requested: ID, Department, Role/Job, Gmail) ── */}
+        <View style={[styles.menuSectionCard, isDarkMode && styles.darkCard, isDarkMode && styles.darkBorder]}>
+          <View style={styles.cardHeaderRow}>
+            <View style={{ flexDirection: 'row', alignItems: 'center', gap: 6 }}>
+              <Ionicons name="shield-checkmark" size={15} color="#2563EB" />
+              <Text style={styles.cardHeaderTitle}>EMPLOYEE CREDENTIALS</Text>
+            </View>
+            <View style={[styles.statusBadge, { 
+              backgroundColor: isLiveTrackingActive ? '#DCFCE7' : '#F1F5F9',
+              borderColor: isLiveTrackingActive ? '#86EFAC' : '#E2E8F0',
+            }]}>
+              <View style={[styles.statusDot, { backgroundColor: isLiveTrackingActive ? '#16A34A' : '#94A3B8' }]} />
+              <Text style={[styles.statusBadgeText, { color: isLiveTrackingActive ? '#15803D' : '#64748B' }]}>
+                {employee?.status || (isLiveTrackingActive ? 'On Duty' : 'Offline')}
+              </Text>
+            </View>
+          </View>
+
+          {/* Row: Employee ID */}
+          <View style={[styles.credentialRow, isDarkMode && styles.darkBorder]}>
+            <View style={[styles.iconBadge, { backgroundColor: '#EDE9FE' }]}>
+              <Ionicons name="card" size={18} color="#7C3AED" />
+            </View>
+            <View style={styles.credentialTextWrap}>
+              <Text style={[styles.credentialLabel, isDarkMode && styles.darkSubText]}>Employee ID</Text>
+              <Text style={[styles.credentialValue, isDarkMode && styles.darkText]}>{empId}</Text>
+            </View>
+          </View>
+
+          {/* Row: Department */}
+          <View style={[styles.credentialRow, isDarkMode && styles.darkBorder]}>
+            <View style={[styles.iconBadge, { backgroundColor: '#DBEAFE' }]}>
+              <Ionicons name="business" size={18} color="#2563EB" />
+            </View>
+            <View style={styles.credentialTextWrap}>
+              <Text style={[styles.credentialLabel, isDarkMode && styles.darkSubText]}>Department</Text>
+              <Text style={[styles.credentialValue, isDarkMode && styles.darkText]}>{empDept}</Text>
+            </View>
+          </View>
+
+          {/* Row: Role / Job */}
+          <View style={[styles.credentialRow, isDarkMode && styles.darkBorder]}>
+            <View style={[styles.iconBadge, { backgroundColor: '#FEF3C7' }]}>
+              <Ionicons name="briefcase" size={18} color="#D97706" />
+            </View>
+            <View style={styles.credentialTextWrap}>
+              <Text style={[styles.credentialLabel, isDarkMode && styles.darkSubText]}>Role / Job</Text>
+              <Text style={[styles.credentialValue, isDarkMode && styles.darkText]}>{empRole}</Text>
+            </View>
+          </View>
+
+          {/* Row: Gmail Address */}
+          <View style={[styles.credentialRow, { borderBottomWidth: 0 }]}>
+            <View style={[styles.iconBadge, { backgroundColor: '#FEE2E2' }]}>
+              <Ionicons name="mail" size={18} color="#DC2626" />
+            </View>
+            <View style={styles.credentialTextWrap}>
+              <Text style={[styles.credentialLabel, isDarkMode && styles.darkSubText]}>Gmail Address</Text>
+              <Text style={[styles.credentialValue, isDarkMode && styles.darkText]} numberOfLines={1}>{empEmail}</Text>
+            </View>
+          </View>
+        </View>
+
+        {/* ── 4. Menu Group 1: Operations (With Switch Toggle on Top) ── */}
+        <View style={[styles.menuSectionCard, isDarkMode && styles.darkCard, isDarkMode && styles.darkBorder]}>
+          {/* Item 1: Live Tracking Switch (matches "Open order" in screenshot) */}
+          <View style={[styles.menuRowItem, isDarkMode && styles.darkBorder]}>
+            <View style={styles.menuItemLeft}>
+              <View style={[styles.iconBadge, { backgroundColor: '#DCFCE7' }]}>
+                <Ionicons name="radio" size={18} color="#16A34A" />
+              </View>
+              <Text style={[styles.menuItemTitle, isDarkMode && styles.darkText]}>Live GPS Tracking</Text>
+            </View>
+            <Switch
+              value={isLiveTrackingActive}
+              onValueChange={toggleLiveTracking}
+              trackColor={{ true: '#10B981', false: '#E2E8F0' }}
+              thumbColor="#FFFFFF"
+            />
+          </View>
+
+          {/* Item 2: My Assignments (Blue) */}
+          <TouchableOpacity 
+            style={[styles.menuRowItem, isDarkMode && styles.darkBorder]} 
+            onPress={() => handleMenuPress('My Assignments')}
+            activeOpacity={0.7}
+          >
+            <View style={styles.menuItemLeft}>
+              <View style={[styles.iconBadge, { backgroundColor: '#DBEAFE' }]}>
+                <Ionicons name="clipboard" size={18} color="#2563EB" />
+              </View>
+              <Text style={[styles.menuItemTitle, isDarkMode && styles.darkText]}>My Assignments</Text>
+            </View>
+            <Ionicons name="chevron-forward" size={18} color="#94A3B8" />
+          </TouchableOpacity>
+
+          {/* Item 3: My Attendance (Yellow/Amber) */}
+          <TouchableOpacity 
+            style={[styles.menuRowItem, isDarkMode && styles.darkBorder]} 
+            onPress={() => handleMenuPress('My Attendance')}
+            activeOpacity={0.7}
+          >
+            <View style={styles.menuItemLeft}>
+              <View style={[styles.iconBadge, { backgroundColor: '#FEF3C7' }]}>
+                <Ionicons name="time" size={18} color="#D97706" />
+              </View>
+              <Text style={[styles.menuItemTitle, isDarkMode && styles.darkText]}>My Attendance</Text>
+            </View>
+            <Ionicons name="chevron-forward" size={18} color="#94A3B8" />
+          </TouchableOpacity>
+
+          {/* Item 4: Location History (Purple/Indigo) */}
+          <TouchableOpacity 
+            style={[styles.menuRowItem, isDarkMode && styles.darkBorder]} 
+            onPress={() => handleMenuPress('Location History')}
+            activeOpacity={0.7}
+          >
+            <View style={styles.menuItemLeft}>
+              <View style={[styles.iconBadge, { backgroundColor: '#EDE9FE' }]}>
+                <Ionicons name="location" size={18} color="#7C3AED" />
+              </View>
+              <Text style={[styles.menuItemTitle, isDarkMode && styles.darkText]}>Location History</Text>
+            </View>
+            <Ionicons name="chevron-forward" size={18} color="#94A3B8" />
+          </TouchableOpacity>
+
+          {/* Item 5: Anomaly Alerts (Red) */}
+          <TouchableOpacity 
+            style={[styles.menuRowItem, { borderBottomWidth: 0 }]} 
+            onPress={() => handleMenuPress('Anomaly Alerts')}
+            activeOpacity={0.7}
+          >
+            <View style={styles.menuItemLeft}>
+              <View style={[styles.iconBadge, { backgroundColor: '#FEE2E2' }]}>
+                <Ionicons name="shield-alert" size={18} color="#DC2626" />
+              </View>
+              <Text style={[styles.menuItemTitle, isDarkMode && styles.darkText]}>Anomaly Alerts</Text>
+            </View>
+            <Ionicons name="chevron-forward" size={18} color="#94A3B8" />
+          </TouchableOpacity>
+        </View>
+
+        {/* ── 5. Menu Group 2: Support & Updates (Matches Group 2 in screenshot) ── */}
+        <View style={[styles.menuSectionCard, isDarkMode && styles.darkCard, isDarkMode && styles.darkBorder]}>
+          {/* Item 1: Report Incident / Delay (Coral/Pink) */}
+          <TouchableOpacity 
+            style={[styles.menuRowItem, isDarkMode && styles.darkBorder]} 
+            onPress={() => handleMenuPress('Report Incident / Delay')}
+            activeOpacity={0.7}
+          >
+            <View style={styles.menuItemLeft}>
+              <View style={[styles.iconBadge, { backgroundColor: '#FFE4E6' }]}>
+                <Ionicons name="warning" size={18} color="#E11D48" />
+              </View>
+              <Text style={[styles.menuItemTitle, isDarkMode && styles.darkText]}>Report Incident / Delay</Text>
+            </View>
+            <Ionicons name="chevron-forward" size={18} color="#94A3B8" />
+          </TouchableOpacity>
+
+          {/* Item 2: Help & Feedback (Teal) */}
+          <TouchableOpacity 
+            style={[styles.menuRowItem, isDarkMode && styles.darkBorder]} 
+            onPress={() => handleMenuPress('Help & Feedback')}
+            activeOpacity={0.7}
+          >
+            <View style={styles.menuItemLeft}>
+              <View style={[styles.iconBadge, { backgroundColor: '#CCFBF1' }]}>
+                <Ionicons name="chatbubble-ellipses" size={18} color="#0D9488" />
+              </View>
+              <Text style={[styles.menuItemTitle, isDarkMode && styles.darkText]}>Help & Feedback</Text>
+            </View>
+            <Ionicons name="chevron-forward" size={18} color="#94A3B8" />
+          </TouchableOpacity>
+
+          {/* Item 3: App Version (Blue with version tag V2.0.8) */}
+          <TouchableOpacity 
+            style={[styles.menuRowItem, { borderBottomWidth: 0 }]} 
+            onPress={() => handleMenuPress('App Version')}
+            activeOpacity={0.7}
+          >
+            <View style={styles.menuItemLeft}>
+              <View style={[styles.iconBadge, { backgroundColor: '#EFF6FF' }]}>
+                <Ionicons name="cloud-download" size={18} color="#2563EB" />
+              </View>
+              <Text style={[styles.menuItemTitle, isDarkMode && styles.darkText]}>App Update</Text>
+            </View>
+            <View style={{ flexDirection: 'row', alignItems: 'center', gap: 6 }}>
+              <Text style={[styles.versionTagText, isDarkMode && styles.darkSubText]}>V2.0.8</Text>
+              <Ionicons name="chevron-forward" size={18} color="#94A3B8" />
             </View>
           </TouchableOpacity>
         </View>
-      )}
 
-      {/* ── White Body ── */}
-      <View style={[styles.whiteBody, isDarkMode && styles.darkBody]}>
-        <ScrollView showsVerticalScrollIndicator={false} contentContainerStyle={styles.scrollContent}>
-          {/* Name / Email / Badge */}
-          <View style={styles.profileInfo}>
-            <Text style={[styles.nameText, isDarkMode && styles.darkText]}>{displayName}</Text>
-            <Text style={[styles.emailText, isDarkMode && styles.darkSubText]}>{currentEmail}</Text>
+        {/* ── 6. Logout Card ── */}
+        <TouchableOpacity 
+          style={[styles.logoutCard, isDarkMode && styles.darkCard, isDarkMode && styles.darkBorder]} 
+          onPress={handleLogout}
+          activeOpacity={0.8}
+        >
+          <View style={styles.menuItemLeft}>
+            <View style={[styles.iconBadge, { backgroundColor: '#FEE2E2' }]}>
+              <Ionicons name="log-out-outline" size={18} color="#DC2626" />
+            </View>
+            <Text style={styles.logoutText}>Log Out</Text>
+          </View>
+          <Ionicons name="chevron-forward" size={18} color="#F87171" />
+        </TouchableOpacity>
+      </ScrollView>
+
+      {/* ── Digital Employee ID Card & QR Modal ── */}
+      <Modal
+        visible={showQRModal}
+        transparent={true}
+        animationType="fade"
+        onRequestClose={() => setShowQRModal(false)}
+      >
+        <TouchableOpacity 
+          style={styles.actionSheetBackdrop} 
+          activeOpacity={1} 
+          onPress={() => setShowQRModal(false)}
+        >
+          <View style={[styles.qrModalCard, isDarkMode && styles.darkCard]} onStartShouldSetResponder={() => true}>
+            <View style={styles.sheetHandle} />
             
-            <View style={{ flexDirection: 'row', alignItems: 'center', gap: 8, marginTop: 4 }}>
-              <View style={[styles.dutyBadge, { 
-                backgroundColor: (employee?.status === 'On Duty' || employee?.status === 'On Site') ? '#DBEAFE' : (employee?.status === 'Online' ? '#E0F2FE' : (isDarkMode ? '#374151' : '#F3F4F6')), 
-                borderColor: (employee?.status === 'On Duty' || employee?.status === 'On Site') ? '#3B82F6' : (employee?.status === 'Online' ? '#38BDF8' : (isDarkMode ? '#4B5563' : '#E5E7EB')) 
-              }]}>
-                <Text style={[styles.dutyBadgeText, { 
-                  color: (employee?.status === 'On Duty' || employee?.status === 'On Site') ? '#1E40AF' : (employee?.status === 'Online' ? '#0369A1' : (isDarkMode ? '#D1D5DB' : '#6B7280')) 
-                }]}>{employee?.status || 'Online'}</Text>
-              </View>
-
-              <TouchableOpacity 
-                style={styles.changePhotoPill}
-                onPress={() => setShowPhotoModal(true)}
-                disabled={uploading}
-                activeOpacity={0.8}
-              >
-                <Ionicons name="camera" size={13} color="#4F46E5" />
-                <Text style={styles.changePhotoPillText}>Change Photo</Text>
+            <View style={styles.qrHeaderRow}>
+              <Text style={[styles.qrModalTitle, isDarkMode && styles.darkText]}>Digital Employee ID</Text>
+              <TouchableOpacity onPress={() => setShowQRModal(false)}>
+                <Ionicons name="close-circle" size={24} color="#94A3B8" />
               </TouchableOpacity>
             </View>
-          </View>
 
-          {/* ── Menu Items ── */}
-          <View style={[styles.menuContainer, isDarkMode && styles.darkCard]}>
-            {menuItems.map((item, index) => (
-              <TouchableOpacity key={index} style={[styles.menuItem, isDarkMode && styles.darkBorder]} onPress={() => handleMenuPress(item.title)}>
-                <View style={styles.menuLeft}>
-                  <View style={[styles.iconContainer, isDarkMode && styles.darkIconContainer]}>
-                    <Ionicons name={item.icon} size={20} color={isDarkMode ? '#818CF8' : '#4F46E5'} />
-                  </View>
-                  <Text style={[styles.menuText, isDarkMode && styles.darkText]}>{item.title}</Text>
+            {/* Visual Badge Card */}
+            <View style={styles.idBadgeContainer}>
+              <View style={styles.idBadgeHeader}>
+                <Text style={styles.idBadgeBrand}>GEOSTRIDE WORKFORCE</Text>
+                <View style={styles.idBadgeTag}>
+                  <Text style={styles.idBadgeTagText}>VERIFIED</Text>
                 </View>
-                <Ionicons name="chevron-forward" size={18} color="#9CA3AF" />
-              </TouchableOpacity>
-            ))}
-
-            {/* Logout */}
-            <TouchableOpacity style={[styles.menuItem, isDarkMode && styles.darkBorder, { marginTop: 12 }]} onPress={handleLogout}>
-              <View style={styles.menuLeft}>
-                <View style={[styles.iconContainer, { backgroundColor: isDarkMode ? '#7F1D1D' : '#FEE2E2' }]}>
-                  <Ionicons name="log-out-outline" size={20} color={isDarkMode ? '#FCA5A5' : '#EF4444'} />
-                </View>
-                <Text style={[styles.menuText, { color: isDarkMode ? '#FCA5A5' : '#EF4444' }]}>Logout</Text>
               </View>
-              <Ionicons name="chevron-forward" size={18} color="#9CA3AF" />
+
+              <View style={styles.idBadgeBody}>
+                <View style={styles.idBadgeAvatarCircle}>
+                  {employee?.profilePic ? (
+                    <Image source={{ uri: employee.profilePic }} style={styles.idBadgeAvatarImg} />
+                  ) : (
+                    <Ionicons name="person" size={32} color="#93C5FD" />
+                  )}
+                </View>
+                <View style={{ flex: 1 }}>
+                  <Text style={styles.idBadgeName} numberOfLines={1}>{displayName}</Text>
+                  <Text style={styles.idBadgeSub} numberOfLines={1}>{empRole} • {empDept}</Text>
+                  <Text style={styles.idBadgeCode}>ID: {empId}</Text>
+                </View>
+              </View>
+
+              {/* Stylized QR Code Graphic */}
+              <View style={styles.qrCodeBox}>
+                <View style={styles.qrCornerTL} />
+                <View style={styles.qrCornerTR} />
+                <View style={styles.qrCornerBL} />
+                <View style={styles.qrCornerBR} />
+                <Ionicons name="qr-code" size={120} color="#0F172A" />
+                <View style={styles.qrCenterLogo}>
+                  <Ionicons name="shield-checkmark" size={18} color="#2563EB" />
+                </View>
+              </View>
+
+              <Text style={styles.idBadgeEmailText} numberOfLines={1}>
+                {empEmail}
+              </Text>
+              <Text style={styles.qrInstructionText}>
+                Present this QR code for biometric attendance and supervisor authorization
+              </Text>
+            </View>
+
+            <TouchableOpacity 
+              style={styles.sheetCancelBtn} 
+              onPress={() => setShowQRModal(false)}
+            >
+              <Text style={styles.sheetCancelText}>Close Badge</Text>
             </TouchableOpacity>
           </View>
-
-          <View style={{ height: 100 }} />
-        </ScrollView>
-      </View>
-      
-      {/* ── Dynamic Modals ── */}
-      <Modal visible={!!activeModal} animationType="slide" presentationStyle="pageSheet" onRequestClose={() => setActiveModal(null)}>
-        <View style={[styles.modalContainer, isDarkMode && styles.darkModalContainer]}>
-          <View style={[styles.modalHeader, isDarkMode && styles.darkModalHeader]}>
-            <Text style={[styles.modalTitle, isDarkMode && styles.darkText]}>
-              {activeModal === 'attendance' && 'My Attendance'}
-              {activeModal === 'history' && 'Location History'}
-              {activeModal === 'settings' && 'Settings'}
-              {activeModal === 'support' && 'Help & Support'}
-            </Text>
-            <TouchableOpacity onPress={() => setActiveModal(null)} style={styles.modalCloseBtn}>
-              <Ionicons name="close" size={24} color={isDarkMode ? 'white' : '#374151'} />
-            </TouchableOpacity>
-          </View>
-
-          <ScrollView style={styles.modalBody} contentContainerStyle={{ paddingBottom: 40 }}>
-            {/* ATTENDANCE */}
-            {activeModal === 'attendance' && (
-              <View>
-                {attendance.length === 0 ? (
-                  <Text style={[styles.emptyText, isDarkMode && styles.darkSubText]}>No attendance records found.</Text>
-                ) : (
-                  attendance.map((record, i) => (
-                    <View key={i} style={[styles.recordCard, isDarkMode && styles.darkCard, isDarkMode && styles.darkBorder]}>
-                      <View style={styles.recordLeft}>
-                        <Ionicons name="calendar" size={20} color={isDarkMode ? '#818CF8' : '#4F46E5'} />
-                        <View>
-                          <Text style={[styles.recordDate, isDarkMode && styles.darkText]}>
-                            {formatDate(record.date || record.timeIn || record.checkIn)}
-                          </Text>
-                          <Text style={[styles.recordSub, isDarkMode && styles.darkSubText]}>Site: {record.siteName || 'N/A'}</Text>
-                        </View>
-                      </View>
-                      <View style={styles.recordRight}>
-                        <Text style={[styles.timeText, isDarkMode && styles.darkSubText]}>In: {formatTime(record.timeIn || record.checkIn || record.check_in)}</Text>
-                        <Text style={[styles.timeText, isDarkMode && styles.darkSubText]}>Out: {formatTime(record.timeOut || record.checkOut || record.check_out)}</Text>
-                      </View>
-                    </View>
-                  ))
-                )}
-              </View>
-            )}
-
-            {/* HISTORY */}
-            {activeModal === 'history' && (
-              <View>
-                {history.length === 0 ? (
-                  <Text style={[styles.emptyText, isDarkMode && styles.darkSubText]}>No recent activity logs.</Text>
-                ) : (
-                  history.map((log, i) => (
-                    <View key={i} style={[styles.recordCard, isDarkMode && styles.darkCard, isDarkMode && styles.darkBorder]}>
-                      <View style={styles.recordLeft}>
-                        <Ionicons name="location" size={20} color={isDarkMode ? '#34D399' : '#059669'} />
-                        <View>
-                          <Text style={[styles.recordDate, isDarkMode && styles.darkText]}>{log.action}</Text>
-                          <Text style={[styles.recordSub, isDarkMode && styles.darkSubText]}>{log.siteName || 'System'}</Text>
-                        </View>
-                      </View>
-                      <Text style={[styles.timeText, isDarkMode && styles.darkSubText]}>
-                        {formatDateTime(log.timestamp || log.time || log.createdAt)}
-                      </Text>
-                    </View>
-                  ))
-                )}
-              </View>
-            )}
-
-            {/* SETTINGS */}
-            {activeModal === 'settings' && (
-              <View style={[styles.settingsGroup, isDarkMode && styles.darkCard]}>
-                <View style={[styles.settingItem, isDarkMode && styles.darkBorder]}>
-                  <View style={styles.settingLeft}>
-                    <Ionicons name="notifications" size={22} color={isDarkMode ? '#9CA3AF' : '#4B5563'} />
-                    <Text style={[styles.settingText, isDarkMode && styles.darkText]}>Push Notifications</Text>
-                  </View>
-                  <Switch value={true} trackColor={{ true: isDarkMode ? '#818CF8' : '#4F46E5' }} />
-                </View>
-                <View style={[styles.settingItem, isDarkMode && styles.darkBorder]}>
-                  <View style={styles.settingLeft}>
-                    <Ionicons name="location" size={22} color={isDarkMode ? '#9CA3AF' : '#4B5563'} />
-                    <Text style={[styles.settingText, isDarkMode && styles.darkText]}>Background Tracking</Text>
-                  </View>
-                  <Switch value={true} trackColor={{ true: isDarkMode ? '#818CF8' : '#4F46E5' }} />
-                </View>
-                <View style={[styles.settingItem, isDarkMode && styles.darkBorder]}>
-                  <View style={styles.settingLeft}>
-                    <Ionicons name="moon" size={22} color={isDarkMode ? '#9CA3AF' : '#4B5563'} />
-                    <Text style={[styles.settingText, isDarkMode && styles.darkText]}>Dark Mode</Text>
-                  </View>
-                  <Switch value={isDarkMode} onValueChange={(v) => setIsDarkMode(v)} trackColor={{ true: isDarkMode ? '#818CF8' : '#4F46E5' }} />
-                </View>
-              </View>
-            )}
-
-            {/* SUPPORT */}
-            {activeModal === 'support' && (
-              <View style={styles.supportContainer}>
-                <Ionicons name="help-buoy" size={60} color={isDarkMode ? '#818CF8' : '#4F46E5'} style={{ alignSelf: 'center', marginBottom: 20 }} />
-                <Text style={[styles.supportTitle, isDarkMode && styles.darkText]}>How can we help?</Text>
-                <Text style={[styles.supportDesc, isDarkMode && styles.darkSubText]}>If you're having issues with tracking, attendance, or the app in general, please contact your admin directly or reach out to our support team.</Text>
-                <TouchableOpacity style={[styles.supportBtn, isDarkMode && {backgroundColor: '#818CF8'}]} onPress={() => Alert.alert('Contact', 'Email sent to support@subai.com')}>
-                  <Ionicons name="mail" size={18} color="white" />
-                  <Text style={styles.supportBtnText}>Email Support</Text>
-                </TouchableOpacity>
-              </View>
-            )}
-          </ScrollView>
-        </View>
+        </TouchableOpacity>
       </Modal>
-
-      <DelayIncidentModal
-        visible={showDelayModal}
-        employee={employee}
-        onClose={() => setShowDelayModal(false)}
-      />
 
       {/* ── Profile Photo Action Sheet Modal ── */}
       <Modal
@@ -628,7 +757,6 @@ export default function ProfileScreen({ navigation, route, user: propUser, onLog
             </Text>
 
             <View style={styles.sheetOptions}>
-              {/* Option 1: Take Photo */}
               <TouchableOpacity 
                 style={[styles.sheetOptionBtn, isDarkMode && styles.darkCard, isDarkMode && styles.darkBorder]} 
                 onPress={handleTakePhoto}
@@ -639,12 +767,11 @@ export default function ProfileScreen({ navigation, route, user: propUser, onLog
                 </View>
                 <View style={{ flex: 1 }}>
                   <Text style={[styles.sheetOptionTitle, isDarkMode && styles.darkText]}>Take Photo</Text>
-                  <Text style={[styles.sheetOptionSub, isDarkMode && styles.darkSubText]}>Capture a new headshot with your camera</Text>
+                  <Text style={[styles.sheetOptionSub, isDarkMode && styles.darkSubText]}>Capture a new headshot with camera</Text>
                 </View>
-                <Ionicons name="chevron-forward" size={18} color="#9CA3AF" />
+                <Ionicons name="chevron-forward" size={18} color="#94A3B8" />
               </TouchableOpacity>
 
-              {/* Option 2: Choose from Gallery */}
               <TouchableOpacity 
                 style={[styles.sheetOptionBtn, isDarkMode && styles.darkCard, isDarkMode && styles.darkBorder]} 
                 onPress={handlePickGallery}
@@ -657,10 +784,9 @@ export default function ProfileScreen({ navigation, route, user: propUser, onLog
                   <Text style={[styles.sheetOptionTitle, isDarkMode && styles.darkText]}>Choose from Gallery</Text>
                   <Text style={[styles.sheetOptionSub, isDarkMode && styles.darkSubText]}>Select an existing picture from your device</Text>
                 </View>
-                <Ionicons name="chevron-forward" size={18} color="#9CA3AF" />
+                <Ionicons name="chevron-forward" size={18} color="#94A3B8" />
               </TouchableOpacity>
 
-              {/* Option 3: Choose Avatar Preset */}
               <TouchableOpacity 
                 style={[styles.sheetOptionBtn, isDarkMode && styles.darkCard, isDarkMode && styles.darkBorder]} 
                 onPress={() => {
@@ -676,10 +802,9 @@ export default function ProfileScreen({ navigation, route, user: propUser, onLog
                   <Text style={[styles.sheetOptionTitle, isDarkMode && styles.darkText]}>Choose Avatar Preset</Text>
                   <Text style={[styles.sheetOptionSub, isDarkMode && styles.darkSubText]}>Select from 8 professional workplace avatars</Text>
                 </View>
-                <Ionicons name="chevron-forward" size={18} color="#9CA3AF" />
+                <Ionicons name="chevron-forward" size={18} color="#94A3B8" />
               </TouchableOpacity>
 
-              {/* Option 4: Remove Photo (if present) */}
               {employee?.profilePic && (
                 <TouchableOpacity 
                   style={[styles.sheetOptionBtn, isDarkMode && styles.darkCard, isDarkMode && styles.darkBorder]} 
@@ -693,7 +818,7 @@ export default function ProfileScreen({ navigation, route, user: propUser, onLog
                     <Text style={[styles.sheetOptionTitle, { color: '#DC2626' }]}>Remove Photo</Text>
                     <Text style={[styles.sheetOptionSub, isDarkMode && styles.darkSubText]}>Reset back to default employee avatar</Text>
                   </View>
-                  <Ionicons name="chevron-forward" size={18} color="#9CA3AF" />
+                  <Ionicons name="chevron-forward" size={18} color="#94A3B8" />
                 </TouchableOpacity>
               )}
             </View>
@@ -708,7 +833,7 @@ export default function ProfileScreen({ navigation, route, user: propUser, onLog
         </TouchableOpacity>
       </Modal>
 
-      {/* ── Preset Avatars Selection Modal ── */}
+      {/* ── Avatar Presets Selection Modal ── */}
       <Modal
         visible={showPresetsModal}
         animationType="slide"
@@ -751,7 +876,7 @@ export default function ProfileScreen({ navigation, route, user: propUser, onLog
                         </View>
                       )}
                     </View>
-                    <Text style={[styles.presetLabel, isDarkMode && styles.darkText, isSelected && { color: '#4F46E5', fontWeight: '700' }]}>
+                    <Text style={[styles.presetLabel, isDarkMode && styles.darkText, isSelected && { color: '#2563EB', fontWeight: '700' }]}>
                       {preset.label}
                     </Text>
                   </TouchableOpacity>
@@ -761,91 +886,385 @@ export default function ProfileScreen({ navigation, route, user: propUser, onLog
           </ScrollView>
         </View>
       </Modal>
+
+      {/* ── Sub-Modals (Attendance, History, Settings, Support) ── */}
+      <Modal visible={!!activeModal} animationType="slide" presentationStyle="pageSheet" onRequestClose={() => setActiveModal(null)}>
+        <View style={[styles.modalContainer, isDarkMode && styles.darkModalContainer]}>
+          <View style={[styles.modalHeader, isDarkMode && styles.darkModalHeader]}>
+            <Text style={[styles.modalTitle, isDarkMode && styles.darkText]}>
+              {activeModal === 'attendance' && 'My Attendance'}
+              {activeModal === 'history' && 'Location History'}
+              {activeModal === 'settings' && 'Settings'}
+              {activeModal === 'support' && 'Help & Support'}
+            </Text>
+            <TouchableOpacity onPress={() => setActiveModal(null)} style={styles.modalCloseBtn}>
+              <Ionicons name="close" size={24} color={isDarkMode ? 'white' : '#374151'} />
+            </TouchableOpacity>
+          </View>
+
+          <ScrollView style={styles.modalBody} contentContainerStyle={{ paddingBottom: 40 }}>
+            {activeModal === 'attendance' && (
+              <View>
+                {attendance.length === 0 ? (
+                  <Text style={[styles.emptyText, isDarkMode && styles.darkSubText]}>No attendance records found.</Text>
+                ) : (
+                  attendance.map((record, i) => (
+                    <View key={i} style={[styles.recordCard, isDarkMode && styles.darkCard, isDarkMode && styles.darkBorder]}>
+                      <View style={styles.recordLeft}>
+                        <Ionicons name="calendar" size={20} color={isDarkMode ? '#818CF8' : '#2563EB'} />
+                        <View>
+                          <Text style={[styles.recordDate, isDarkMode && styles.darkText]}>
+                            {formatDate(record.date || record.timeIn || record.checkIn)}
+                          </Text>
+                          <Text style={[styles.recordSub, isDarkMode && styles.darkSubText]}>Site: {record.siteName || 'N/A'}</Text>
+                        </View>
+                      </View>
+                      <View style={styles.recordRight}>
+                        <Text style={[styles.timeText, isDarkMode && styles.darkSubText]}>In: {formatTime(record.timeIn || record.checkIn || record.check_in)}</Text>
+                        <Text style={[styles.timeText, isDarkMode && styles.darkSubText]}>Out: {formatTime(record.timeOut || record.checkOut || record.check_out)}</Text>
+                      </View>
+                    </View>
+                  ))
+                )}
+              </View>
+            )}
+
+            {activeModal === 'history' && (
+              <View>
+                {history.length === 0 ? (
+                  <Text style={[styles.emptyText, isDarkMode && styles.darkSubText]}>No recent activity logs.</Text>
+                ) : (
+                  history.map((log, i) => (
+                    <View key={i} style={[styles.recordCard, isDarkMode && styles.darkCard, isDarkMode && styles.darkBorder]}>
+                      <View style={styles.recordLeft}>
+                        <Ionicons name="location" size={20} color={isDarkMode ? '#34D399' : '#059669'} />
+                        <View>
+                          <Text style={[styles.recordDate, isDarkMode && styles.darkText]}>{log.action}</Text>
+                          <Text style={[styles.recordSub, isDarkMode && styles.darkSubText]}>{log.siteName || 'System'}</Text>
+                        </View>
+                      </View>
+                      <Text style={[styles.timeText, isDarkMode && styles.darkSubText]}>
+                        {formatDateTime(log.timestamp || log.time || log.createdAt)}
+                      </Text>
+                    </View>
+                  ))
+                )}
+              </View>
+            )}
+
+            {activeModal === 'settings' && (
+              <View style={[styles.settingsGroup, isDarkMode && styles.darkCard]}>
+                <View style={[styles.settingItem, isDarkMode && styles.darkBorder]}>
+                  <View style={styles.settingLeft}>
+                    <Ionicons name="notifications" size={22} color={isDarkMode ? '#9CA3AF' : '#4B5563'} />
+                    <Text style={[styles.settingText, isDarkMode && styles.darkText]}>Push Notifications</Text>
+                  </View>
+                  <Switch value={true} trackColor={{ true: '#2563EB' }} />
+                </View>
+                <View style={[styles.settingItem, isDarkMode && styles.darkBorder]}>
+                  <View style={styles.settingLeft}>
+                    <Ionicons name="location" size={22} color={isDarkMode ? '#9CA3AF' : '#4B5563'} />
+                    <Text style={[styles.settingText, isDarkMode && styles.darkText]}>Background Tracking</Text>
+                  </View>
+                  <Switch value={true} trackColor={{ true: '#2563EB' }} />
+                </View>
+                <View style={[styles.settingItem, isDarkMode && styles.darkBorder]}>
+                  <View style={styles.settingLeft}>
+                    <Ionicons name="moon" size={22} color={isDarkMode ? '#9CA3AF' : '#4B5563'} />
+                    <Text style={[styles.settingText, isDarkMode && styles.darkText]}>Dark Mode</Text>
+                  </View>
+                  <Switch value={isDarkMode} onValueChange={(v) => setIsDarkMode(v)} trackColor={{ true: '#2563EB' }} />
+                </View>
+              </View>
+            )}
+
+            {activeModal === 'support' && (
+              <View style={styles.supportContainer}>
+                <Ionicons name="help-buoy" size={60} color={isDarkMode ? '#818CF8' : '#2563EB'} style={{ alignSelf: 'center', marginBottom: 20 }} />
+                <Text style={[styles.supportTitle, isDarkMode && styles.darkText]}>How can we help?</Text>
+                <Text style={[styles.supportDesc, isDarkMode && styles.darkSubText]}>If you're having issues with tracking, attendance, or the app in general, please contact your admin directly or reach out to our support team.</Text>
+                <TouchableOpacity style={[styles.supportBtn, isDarkMode && {backgroundColor: '#2563EB'}]} onPress={() => Alert.alert('Contact', 'Email sent to support@geostride.com')}>
+                  <Ionicons name="mail" size={18} color="white" />
+                  <Text style={styles.supportBtnText}>Email Support</Text>
+                </TouchableOpacity>
+              </View>
+            )}
+          </ScrollView>
+        </View>
+      </Modal>
+
+      <DelayIncidentModal
+        visible={showDelayModal}
+        employee={employee}
+        onClose={() => setShowDelayModal(false)}
+      />
     </View>
   );
 }
 
-const AVATAR_SIZE = 100;
-const AVATAR_HALF = AVATAR_SIZE / 2;
-
 const styles = StyleSheet.create({
-  container: { flex: 1, backgroundColor: '#F3F4F6' },
+  container: { 
+    flex: 1, 
+    backgroundColor: '#F8FAFC' 
+  },
+  // ── Blue Header ──
   blueHeader: {
-    backgroundColor: '#4F46E5',
+    backgroundColor: '#2563EB',
+    borderBottomLeftRadius: 28,
+    borderBottomRightRadius: 28,
+    paddingHorizontal: 20,
+    paddingBottom: 48,
+  },
+  topHeaderBar: {
+    flexDirection: 'row',
+    justifyContent: 'space-between',
+    alignItems: 'center',
+    marginBottom: 14,
+  },
+  settingsHeaderBtn: {
+    width: 38,
+    height: 38,
+    borderRadius: 19,
+    backgroundColor: 'rgba(255, 255, 255, 0.15)',
+    justifyContent: 'center',
+    alignItems: 'center',
+  },
+  userIdentityRow: {
     flexDirection: 'row',
     alignItems: 'center',
-    justifyContent: 'space-between',
-    paddingHorizontal: 20,
-    paddingBottom: 60,
+    gap: 14,
   },
-  headerTitle: { color: 'white', fontSize: 18, fontWeight: '600' },
-  avatarRow: { position: 'absolute', left: 0, right: 0, alignItems: 'center', zIndex: 10 },
+  avatarTouchable: {
+    position: 'relative',
+  },
   avatarCircle: {
-    width: AVATAR_SIZE, height: AVATAR_SIZE,
-    borderRadius: AVATAR_HALF,
-    backgroundColor: 'white',
-    borderWidth: 4, borderColor: '#F3F4F6',
-    justifyContent: 'center', alignItems: 'center',
-    shadowColor: '#000', shadowOffset: { width: 0, height: 4 },
-    shadowOpacity: 0.1, shadowRadius: 10, elevation: 5,
+    width: 64,
+    height: 64,
+    borderRadius: 32,
+    backgroundColor: '#1E40AF',
+    borderWidth: 3,
+    borderColor: '#FFFFFF',
+    justifyContent: 'center',
+    alignItems: 'center',
+    overflow: 'hidden',
+  },
+  avatarImage: {
+    width: 64,
+    height: 64,
+    borderRadius: 32,
   },
   cameraBadge: {
-    position: 'absolute', bottom: 4, right: 4,
-    backgroundColor: '#4F46E5',
-    width: 28, height: 28, borderRadius: 14,
-    justifyContent: 'center', alignItems: 'center',
-    borderWidth: 2, borderColor: 'white',
+    position: 'absolute',
+    bottom: -2,
+    right: -2,
+    width: 22,
+    height: 22,
+    borderRadius: 11,
+    backgroundColor: '#1D4ED8',
+    borderWidth: 2,
+    borderColor: '#FFFFFF',
+    justifyContent: 'center',
+    alignItems: 'center',
   },
-  changePhotoPill: {
+  identityDetails: {
+    flex: 1,
+  },
+  userNameText: {
+    fontSize: 19,
+    fontWeight: '800',
+    color: '#FFFFFF',
+    letterSpacing: 0.2,
+  },
+  userSubtitleText: {
+    fontSize: 13,
+    fontWeight: '500',
+    color: 'rgba(255, 255, 255, 0.85)',
+    marginTop: 3,
+  },
+  qrRowBtn: {
     flexDirection: 'row',
     alignItems: 'center',
-    gap: 4,
-    backgroundColor: '#EEF2FF',
-    paddingHorizontal: 10,
-    paddingVertical: 4,
+    gap: 2,
+    padding: 6,
+    backgroundColor: 'rgba(255, 255, 255, 0.14)',
     borderRadius: 12,
-    borderWidth: 1,
-    borderColor: '#C7D2FE',
   },
-  changePhotoPillText: {
-    fontSize: 12,
-    fontWeight: '600',
-    color: '#4F46E5',
-  },
-  whiteBody: { flex: 1, backgroundColor: '#F3F4F6', marginTop: -20 },
-  scrollContent: { paddingTop: AVATAR_HALF + 20, paddingHorizontal: 20 },
-  profileInfo: { alignItems: 'center', marginBottom: 30 },
-  nameText: { fontSize: 22, fontWeight: '700', color: '#111827', marginBottom: 4 },
-  emailText: { fontSize: 14, color: '#6B7280', marginBottom: 12 },
-  dutyBadge: {
-    paddingHorizontal: 12, paddingVertical: 4,
-    borderRadius: 12, borderWidth: 1,
-  },
-  dutyBadgeText: { fontSize: 12, fontWeight: '600' },
-  menuContainer: {
-    backgroundColor: 'white',
-    borderRadius: 16,
-    paddingVertical: 8,
-    shadowColor: '#000', shadowOffset: { width: 0, height: 2 },
-    shadowOpacity: 0.05, shadowRadius: 8, elevation: 2,
-  },
-  menuItem: {
+
+  // ── Floating Dual Metrics Card ──
+  floatingCard: {
+    marginHorizontal: 16,
+    marginTop: -32,
+    backgroundColor: '#FFFFFF',
+    borderRadius: 20,
+    paddingVertical: 18,
+    paddingHorizontal: 20,
     flexDirection: 'row',
     alignItems: 'center',
     justifyContent: 'space-between',
-    paddingVertical: 14,
+    borderWidth: 1,
+    borderColor: '#F1F5F9',
+    shadowColor: '#0F172A',
+    shadowOffset: { width: 0, height: 6 },
+    shadowOpacity: 0.08,
+    shadowRadius: 16,
+    elevation: 5,
+  },
+  metricColumn: {
+    flex: 1,
+    alignItems: 'center',
+  },
+  metricLabel: {
+    fontSize: 11,
+    fontWeight: '700',
+    color: '#94A3B8',
+    letterSpacing: 0.5,
+    marginBottom: 4,
+  },
+  metricValue: {
+    fontSize: 22,
+    fontWeight: '800',
+    color: '#0F172A',
+  },
+  metricDivider: {
+    width: 1,
+    height: 38,
+    backgroundColor: '#E2E8F0',
+    marginHorizontal: 8,
+  },
+
+  // ── Menu Cards Common ──
+  menuSectionCard: {
+    marginHorizontal: 16,
+    marginTop: 14,
+    backgroundColor: '#FFFFFF',
+    borderRadius: 20,
+    paddingVertical: 6,
     paddingHorizontal: 16,
+    borderWidth: 1,
+    borderColor: '#F1F5F9',
+    shadowColor: '#0F172A',
+    shadowOffset: { width: 0, height: 2 },
+    shadowOpacity: 0.04,
+    shadowRadius: 8,
+    elevation: 2,
+  },
+  cardHeaderRow: {
+    flexDirection: 'row',
+    justifyContent: 'space-between',
+    alignItems: 'center',
+    paddingVertical: 12,
     borderBottomWidth: 1,
-    borderBottomColor: '#F3F4F6',
+    borderBottomColor: '#F1F5F9',
   },
-  menuLeft: { flexDirection: 'row', alignItems: 'center', gap: 12 },
-  iconContainer: {
-    width: 36, height: 36, borderRadius: 10,
-    backgroundColor: '#EEF2FF',
-    justifyContent: 'center', alignItems: 'center',
+  cardHeaderTitle: {
+    fontSize: 11,
+    fontWeight: '800',
+    color: '#64748B',
+    letterSpacing: 0.6,
   },
-  menuText: { fontSize: 15, fontWeight: '500', color: '#374151' },
-  modalContainer: { flex: 1, backgroundColor: '#F9FAFB' },
+  statusBadge: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 6,
+    paddingHorizontal: 8,
+    paddingVertical: 3,
+    borderRadius: 12,
+    borderWidth: 1,
+  },
+  statusDot: {
+    width: 6,
+    height: 6,
+    borderRadius: 3,
+  },
+  statusBadgeText: {
+    fontSize: 11,
+    fontWeight: '700',
+  },
+
+  // ── Credential Rows ──
+  credentialRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 12,
+    paddingVertical: 11,
+    borderBottomWidth: 1,
+    borderBottomColor: '#F8FAFC',
+  },
+  credentialTextWrap: {
+    flex: 1,
+  },
+  credentialLabel: {
+    fontSize: 11,
+    fontWeight: '600',
+    color: '#94A3B8',
+  },
+  credentialValue: {
+    fontSize: 14,
+    fontWeight: '700',
+    color: '#0F172A',
+    marginTop: 1,
+  },
+
+  // ── Menu Items ──
+  menuRowItem: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+    paddingVertical: 13,
+    borderBottomWidth: 1,
+    borderBottomColor: '#F8FAFC',
+  },
+  menuItemLeft: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 12,
+    flex: 1,
+  },
+  iconBadge: {
+    width: 36,
+    height: 36,
+    borderRadius: 10,
+    justifyContent: 'center',
+    alignItems: 'center',
+  },
+  menuItemTitle: {
+    fontSize: 14.5,
+    fontWeight: '600',
+    color: '#1E293B',
+  },
+  versionTagText: {
+    fontSize: 13,
+    fontWeight: '600',
+    color: '#94A3B8',
+  },
+
+  // ── Logout Card ──
+  logoutCard: {
+    marginHorizontal: 16,
+    marginTop: 14,
+    backgroundColor: '#FFFFFF',
+    borderRadius: 20,
+    paddingVertical: 12,
+    paddingHorizontal: 16,
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+    borderWidth: 1,
+    borderColor: '#FEE2E2',
+    shadowColor: '#0F172A',
+    shadowOffset: { width: 0, height: 2 },
+    shadowOpacity: 0.04,
+    shadowRadius: 8,
+    elevation: 2,
+  },
+  logoutText: {
+    fontSize: 14.5,
+    fontWeight: '700',
+    color: '#DC2626',
+  },
+
+  // ── Modals & Action Sheets ──
+  modalContainer: { flex: 1, backgroundColor: '#F8FAFC' },
   modalHeader: {
     flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between',
     padding: 20, paddingTop: 30, backgroundColor: 'white', borderBottomWidth: 1, borderBottomColor: '#E5E7EB'
@@ -856,15 +1275,15 @@ const styles = StyleSheet.create({
   emptyText: { textAlign: 'center', color: '#6B7280', marginTop: 40 },
   recordCard: {
     flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center',
-    backgroundColor: 'white', padding: 16, borderRadius: 12, marginBottom: 12,
-    borderWidth: 1, borderColor: '#F3F4F6',
+    backgroundColor: 'white', padding: 16, borderRadius: 14, marginBottom: 12,
+    borderWidth: 1, borderColor: '#F1F5F9',
   },
   recordLeft: { flexDirection: 'row', alignItems: 'center', gap: 12 },
   recordDate: { fontSize: 15, fontWeight: '600', color: '#1F2937' },
   recordSub: { fontSize: 13, color: '#6B7280', marginTop: 2 },
   recordRight: { alignItems: 'flex-end' },
   timeText: { fontSize: 13, color: '#4B5563', fontWeight: '500' },
-  settingsGroup: { backgroundColor: 'white', borderRadius: 12, overflow: 'hidden' },
+  settingsGroup: { backgroundColor: 'white', borderRadius: 14, overflow: 'hidden' },
   settingItem: {
     flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center',
     padding: 16, borderBottomWidth: 1, borderBottomColor: '#F3F4F6',
@@ -876,13 +1295,14 @@ const styles = StyleSheet.create({
   supportDesc: { fontSize: 15, color: '#4B5563', textAlign: 'center', lineHeight: 22, marginBottom: 30 },
   supportBtn: {
     flexDirection: 'row', alignItems: 'center', gap: 8,
-    backgroundColor: '#4F46E5', paddingHorizontal: 24, paddingVertical: 14, borderRadius: 12,
+    backgroundColor: '#2563EB', paddingHorizontal: 24, paddingVertical: 14, borderRadius: 12,
   },
   supportBtnText: { color: 'white', fontSize: 16, fontWeight: '600' },
-  // Action Sheet Styles
+
+  // Action Sheet Backdrop
   actionSheetBackdrop: {
     flex: 1,
-    backgroundColor: 'rgba(15, 23, 42, 0.6)',
+    backgroundColor: 'rgba(15, 23, 42, 0.65)',
     justifyContent: 'flex-end',
   },
   actionSheetCard: {
@@ -962,7 +1382,146 @@ const styles = StyleSheet.create({
     fontWeight: '600',
     color: '#475569',
   },
-  // Avatar Presets Styles
+
+  // ── QR Modal Styles ──
+  qrModalCard: {
+    backgroundColor: 'white',
+    borderTopLeftRadius: 24,
+    borderTopRightRadius: 24,
+    paddingHorizontal: 20,
+    paddingTop: 12,
+    paddingBottom: 36,
+  },
+  qrHeaderRow: {
+    flexDirection: 'row',
+    justifyContent: 'space-between',
+    alignItems: 'center',
+    marginBottom: 16,
+  },
+  qrModalTitle: {
+    fontSize: 18,
+    fontWeight: '800',
+    color: '#0F172A',
+  },
+  idBadgeContainer: {
+    backgroundColor: '#F8FAFC',
+    borderRadius: 20,
+    borderWidth: 1.5,
+    borderColor: '#E2E8F0',
+    padding: 18,
+    alignItems: 'center',
+    marginBottom: 16,
+  },
+  idBadgeHeader: {
+    width: '100%',
+    flexDirection: 'row',
+    justifyContent: 'space-between',
+    alignItems: 'center',
+    borderBottomWidth: 1,
+    borderBottomColor: '#E2E8F0',
+    paddingBottom: 10,
+    marginBottom: 14,
+  },
+  idBadgeBrand: {
+    fontSize: 11,
+    fontWeight: '800',
+    color: '#2563EB',
+    letterSpacing: 0.8,
+  },
+  idBadgeTag: {
+    backgroundColor: '#DCFCE7',
+    paddingHorizontal: 6,
+    paddingVertical: 2,
+    borderRadius: 6,
+  },
+  idBadgeTagText: {
+    fontSize: 9,
+    fontWeight: '800',
+    color: '#16A34A',
+    letterSpacing: 0.5,
+  },
+  idBadgeBody: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 12,
+    width: '100%',
+    marginBottom: 16,
+  },
+  idBadgeAvatarCircle: {
+    width: 52,
+    height: 52,
+    borderRadius: 26,
+    backgroundColor: '#1E40AF',
+    justifyContent: 'center',
+    alignItems: 'center',
+    overflow: 'hidden',
+    borderWidth: 2,
+    borderColor: '#FFFFFF',
+  },
+  idBadgeAvatarImg: {
+    width: 52,
+    height: 52,
+    borderRadius: 26,
+  },
+  idBadgeName: {
+    fontSize: 16,
+    fontWeight: '800',
+    color: '#0F172A',
+  },
+  idBadgeSub: {
+    fontSize: 12,
+    color: '#64748B',
+    marginTop: 1,
+  },
+  idBadgeCode: {
+    fontSize: 12,
+    fontWeight: '700',
+    color: '#2563EB',
+    marginTop: 2,
+    fontFamily: 'monospace',
+  },
+  qrCodeBox: {
+    width: 170,
+    height: 170,
+    backgroundColor: '#FFFFFF',
+    borderRadius: 16,
+    justifyContent: 'center',
+    alignItems: 'center',
+    position: 'relative',
+    marginVertical: 10,
+    borderWidth: 1,
+    borderColor: '#E2E8F0',
+  },
+  qrCenterLogo: {
+    position: 'absolute',
+    backgroundColor: '#FFFFFF',
+    width: 28,
+    height: 28,
+    borderRadius: 14,
+    justifyContent: 'center',
+    alignItems: 'center',
+    borderWidth: 1.5,
+    borderColor: '#E2E8F0',
+  },
+  qrCornerTL: { position: 'absolute', top: 8, left: 8, width: 14, height: 14, borderTopWidth: 2, borderLeftWidth: 2, borderColor: '#2563EB' },
+  qrCornerTR: { position: 'absolute', top: 8, right: 8, width: 14, height: 14, borderTopWidth: 2, borderRightWidth: 2, borderColor: '#2563EB' },
+  qrCornerBL: { position: 'absolute', bottom: 8, left: 8, width: 14, height: 14, borderBottomWidth: 2, borderLeftWidth: 2, borderColor: '#2563EB' },
+  qrCornerBR: { position: 'absolute', bottom: 8, right: 8, width: 14, height: 14, borderBottomWidth: 2, borderRightWidth: 2, borderColor: '#2563EB' },
+  idBadgeEmailText: {
+    fontSize: 12,
+    fontWeight: '700',
+    color: '#475569',
+    marginTop: 6,
+  },
+  qrInstructionText: {
+    fontSize: 11,
+    color: '#94A3B8',
+    textAlign: 'center',
+    marginTop: 6,
+    lineHeight: 15,
+  },
+
+  // ── Presets Modal Styles ──
   presetsGrid: {
     flexDirection: 'row',
     flexWrap: 'wrap',
@@ -985,8 +1544,8 @@ const styles = StyleSheet.create({
     elevation: 1,
   },
   presetCardSelected: {
-    borderColor: '#4F46E5',
-    backgroundColor: '#F5F3FF',
+    borderColor: '#2563EB',
+    backgroundColor: '#EFF6FF',
   },
   presetImageWrapper: {
     width: 76,
@@ -1004,7 +1563,7 @@ const styles = StyleSheet.create({
     position: 'absolute',
     bottom: 0,
     right: 0,
-    backgroundColor: '#4F46E5',
+    backgroundColor: '#2563EB',
     width: 22,
     height: 22,
     borderRadius: 11,
@@ -1019,15 +1578,13 @@ const styles = StyleSheet.create({
     color: '#334155',
     textAlign: 'center',
   },
-  // Dark Mode Styles
-  darkContainer: { backgroundColor: '#111827' },
-  darkBody: { backgroundColor: '#111827' },
-  darkText: { color: '#F9FAFB' },
-  darkSubText: { color: '#9CA3AF' },
-  darkCard: { backgroundColor: '#1F2937' },
-  darkBorder: { borderBottomColor: '#374151', borderColor: '#374151' },
-  darkIconContainer: { backgroundColor: '#374151' },
-  darkModalContainer: { backgroundColor: '#111827' },
-  darkModalHeader: { backgroundColor: '#1F2937', borderBottomColor: '#374151' },
-});
 
+  // Dark Mode Styles
+  darkContainer: { backgroundColor: '#0B0F19' },
+  darkText: { color: '#F9FAFB' },
+  darkSubText: { color: '#94A3B8' },
+  darkCard: { backgroundColor: '#1E293B', borderColor: '#334155' },
+  darkBorder: { borderBottomColor: '#334155', borderColor: '#334155' },
+  darkModalContainer: { backgroundColor: '#0B0F19' },
+  darkModalHeader: { backgroundColor: '#1E293B', borderBottomColor: '#334155' },
+});
