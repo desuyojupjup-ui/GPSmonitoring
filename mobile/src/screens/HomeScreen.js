@@ -35,6 +35,7 @@ import {
 import FacialVerificationModal from '../components/FacialVerificationModal';
 import DelayIncidentModal from '../components/DelayIncidentModal';
 import SecurityWarningModal from '../components/SecurityWarningModal';
+import ActionConfirmModal from '../components/ActionConfirmModal';
 import { runPreAttendanceChecks } from '../services/securityService';
 import { writeSecurityEvent } from '../services/securityLogger';
 import { getDeviceId } from '../services/deviceInfo';
@@ -170,6 +171,7 @@ export default function HomeScreen({ navigation, route, user: propUser }) {
   const [showDelayModal, setShowDelayModal] = useState(false);
   const [securityModal, setSecurityModal] = useState({ visible: false, failedCheck: 'vpn', reason: '' });
   const [activeAnomaly, setActiveAnomaly] = useState(null);
+  const [confirmModal, setConfirmModal] = useState({ visible: false, actionType: 'check_in' });
   const [pendingSyncCount, setPendingSyncCount] = useState(0);
   const [isSyncing, setIsSyncing] = useState(false);
   const [unresolvedAnomalyCount, setUnresolvedAnomalyCount] = useState(0);
@@ -725,6 +727,67 @@ export default function HomeScreen({ navigation, route, user: propUser }) {
       unsub2();
     };
   }, [currentEmail, employee]);
+
+  const requestCheckIn = () => {
+    if (!employee) {
+      Alert.alert('Error', 'Employee profile loading...');
+      return;
+    }
+
+    if (!assignment || assignedSitesList.length === 0 || isAssignmentDatePassed(assignment)) {
+      Alert.alert(
+        'Check-In Blocked',
+        'You have no active worksite assignment scheduled for today. Past shifts that have ended or were missed cannot be checked into.',
+        [{ text: 'OK' }]
+      );
+      return;
+    }
+
+    if (isMobileFieldWithoutSite(employee, assignment, site)) {
+      Alert.alert(
+        'Check-In Blocked',
+        'You are registered as a Mobile Field Employee, but have no assigned worksite or patrol route. You cannot check in until an administrator assigns you at least one worksite.',
+        [{ text: 'OK' }]
+      );
+      return;
+    }
+
+    setConfirmModal({
+      visible: true,
+      actionType: 'check_in',
+    });
+  };
+
+  const requestCheckOut = () => {
+    if (isMobileFieldWithoutSite(employee, assignment, site)) {
+      Alert.alert(
+        'Check-Out Blocked',
+        'You are registered as a Mobile Field Employee with no assigned worksite. Check-out cannot be performed.',
+        [{ text: 'OK' }]
+      );
+      return;
+    }
+
+    if (!attendance || !attendance.id) {
+      Alert.alert('Error', 'No active check-in record found for today.');
+      return;
+    }
+
+    setConfirmModal({
+      visible: true,
+      actionType: 'check_out',
+    });
+  };
+
+  const handleConfirmAction = async () => {
+    const action = confirmModal.actionType;
+    setConfirmModal(prev => ({ ...prev, visible: false }));
+    if (action === 'check_in') {
+      await handleCheckIn();
+    } else {
+      await handleCheckOut();
+    }
+  };
 
   const handleCheckIn = async () => {
     if (!employee) {
@@ -1357,7 +1420,7 @@ export default function HomeScreen({ navigation, route, user: propUser }) {
                     backgroundColor: '#94A3B8' 
                   }
                 ]}
-                onPress={handleCheckIn}
+                onPress={requestCheckIn}
                 disabled={checking || !assignment || assignedSitesList.length === 0 || isAssignmentDatePassed(assignment)}
               >
                 {checking ? <ActivityIndicator color="#fff" /> : (
@@ -1375,7 +1438,7 @@ export default function HomeScreen({ navigation, route, user: propUser }) {
                   styles.checkOutBtn, 
                   (isCheckedOut || checking || isMobileFieldWithoutSite(employee, assignment, site)) && { opacity: 0.6, backgroundColor: isMobileFieldWithoutSite(employee, assignment, site) ? '#94A3B8' : styles.checkOutBtn.backgroundColor }
                 ]}
-                onPress={handleCheckOut}
+                onPress={requestCheckOut}
                 disabled={isCheckedOut || checking}
               >
                 {checking ? <ActivityIndicator color="#fff" /> : (
@@ -1613,6 +1676,15 @@ export default function HomeScreen({ navigation, route, user: propUser }) {
         failedCheck={securityModal.failedCheck}
         reason={securityModal.reason}
         onClose={() => setSecurityModal(prev => ({ ...prev, visible: false }))}
+      />
+
+      <ActionConfirmModal
+        visible={confirmModal.visible}
+        actionType={confirmModal.actionType}
+        message="Are you sure you want to proceed?"
+        loading={checking}
+        onConfirm={handleConfirmAction}
+        onCancel={() => setConfirmModal(prev => ({ ...prev, visible: false }))}
       />
     </View>
   );

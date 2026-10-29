@@ -13,6 +13,7 @@ import {
 import { isMobileFieldWithoutSite, checkEarlyCheckout } from '../utils/assignmentUtils';
 import { verifyGeofence } from '../services/geofence';
 import { writeSecurityEvent } from '../services/securityLogger';
+import ActionConfirmModal from '../components/ActionConfirmModal';
 import presenceService from '../services/presenceService';
 import locationLogService from '../services/locationLogService';
 import { startSession as schedulerStart, stopSession as schedulerStop } from '../services/verificationScheduler';
@@ -180,6 +181,11 @@ export default function AttendanceScreen({ navigation, route, user: propUser }) 
   const [checking, setChecking] = useState(false);
   const [filterMonth, setFilterMonth] = useState('all'); // 'all' | 'thisMonth' | 'today'
   const [showFilter, setShowFilter] = useState(false);
+  const [confirmModal, setConfirmModal] = useState({
+    visible: false,
+    actionType: 'check_in',
+    targetRecord: null,
+  });
 
   const employeeRef = useRef(null);
   const lastEmpKeyRef = useRef('');
@@ -289,7 +295,62 @@ export default function AttendanceScreen({ navigation, route, user: propUser }) 
     return () => unsub();
   }, []);
 
-  // 3. Check In
+  // 3. Confirm & Guard Handlers
+  const requestCheckIn = () => {
+    if (!employeeRef.current) return Alert.alert('Error', 'Employee profile not loaded.');
+
+    if (isMobileFieldWithoutSite(employeeRef.current, null, null)) {
+      Alert.alert(
+        'Check-In Blocked',
+        'You are registered as a Mobile Field Employee, but have no assigned worksite or patrol route. You cannot check in until an administrator assigns you at least one worksite.',
+        [{ text: 'OK' }]
+      );
+      return;
+    }
+
+    if (todayRecord && todayRecord.status !== 'Missed Shift' && todayRecord.status !== 'Absent' && todayRecord.status !== 'Missed') {
+      return Alert.alert('Already Checked In', 'You have already checked in today.');
+    }
+
+    setConfirmModal({
+      visible: true,
+      actionType: 'check_in',
+      targetRecord: null,
+    });
+  };
+
+  const requestCheckOut = (record) => {
+    if (isMobileFieldWithoutSite(employeeRef.current, null, null)) {
+      Alert.alert(
+        'Check-Out Blocked',
+        'You are registered as a Mobile Field Employee with no assigned worksite.',
+        [{ text: 'OK' }]
+      );
+      return;
+    }
+
+    const rec = record || todayRecord;
+    if (!rec) return Alert.alert('No Record', 'No active check-in found for today.');
+
+    setConfirmModal({
+      visible: true,
+      actionType: 'check_out',
+      targetRecord: rec,
+    });
+  };
+
+  const handleConfirmAction = async () => {
+    const action = confirmModal.actionType;
+    const target = confirmModal.targetRecord;
+    setConfirmModal(prev => ({ ...prev, visible: false, targetRecord: null }));
+    if (action === 'check_in') {
+      await handleCheckIn();
+    } else {
+      await handleCheckOut(target);
+    }
+  };
+
+  // 4. Check In
   const handleCheckIn = async () => {
     if (!employeeRef.current) return Alert.alert('Error', 'Employee profile not loaded.');
 
@@ -683,7 +744,7 @@ export default function AttendanceScreen({ navigation, route, user: propUser }) 
                   styles.checkInBtn, 
                   (checking || isMobileFieldWithoutSite(employee, null, null)) && { opacity: 0.6, backgroundColor: isMobileFieldWithoutSite(employee, null, null) ? '#94A3B8' : styles.checkInBtn.backgroundColor }
                 ]}
-                onPress={handleCheckIn}
+                onPress={requestCheckIn}
                 disabled={checking}
               >
                 {checking ? <ActivityIndicator color="white" size="small" /> : (
@@ -700,7 +761,7 @@ export default function AttendanceScreen({ navigation, route, user: propUser }) 
                   styles.checkOutBtn, 
                   (checking || isMobileFieldWithoutSite(employee, null, null)) && { opacity: 0.6, backgroundColor: isMobileFieldWithoutSite(employee, null, null) ? '#94A3B8' : styles.checkOutBtn.backgroundColor }
                 ]}
-                onPress={() => handleCheckOut(null)}
+                onPress={() => requestCheckOut(null)}
                 disabled={checking}
               >
                 {checking ? <ActivityIndicator color="white" size="small" /> : (
@@ -752,7 +813,7 @@ export default function AttendanceScreen({ navigation, route, user: propUser }) 
           </View>
         ) : (
           filteredRecords.map(record => (
-            <RecordCard key={record.id} record={record} onCheckOut={handleCheckOut} />
+            <RecordCard key={record.id} record={record} onCheckOut={requestCheckOut} />
           ))
         )}
       </ScrollView>
@@ -775,6 +836,15 @@ export default function AttendanceScreen({ navigation, route, user: propUser }) 
           </View>
         </TouchableOpacity>
       </Modal>
+
+      <ActionConfirmModal
+        visible={confirmModal.visible}
+        actionType={confirmModal.actionType}
+        message="Are you sure you want to proceed?"
+        loading={checking}
+        onConfirm={handleConfirmAction}
+        onCancel={() => setConfirmModal(prev => ({ ...prev, visible: false, targetRecord: null }))}
+      />
     </View>
   );
 }
