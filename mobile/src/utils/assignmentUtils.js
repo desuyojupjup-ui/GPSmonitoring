@@ -1,4 +1,4 @@
-import { auth } from '../firebase';
+import { auth, db, collection, getDocs } from '../firebase';
 
 function parseTimeToHoursMinutes(timeStr) {
   if (!timeStr || typeof timeStr !== 'string') return null;
@@ -443,6 +443,150 @@ export function checkEarlyCheckout(asgOrShift, checkTime = new Date(), graceMinu
     minutesEarly: Math.max(0, minutesEarly),
     shiftEndStr: endInfo.raw,
     shiftEndDt,
+  };
+}
+
+/**
+ * Resolves current assignment, site, shift, and today's attendance for Chatbot queries.
+ * Handles cases where employee has checked in, has an active assignment, or has site from profile.
+ */
+export async function getChatbotAssignmentContext(emp, userEmail, propUser) {
+  const currentUserName = (
+    emp?.name ||
+    propUser?.name ||
+    propUser?.displayName ||
+    auth.currentUser?.displayName ||
+    ''
+  ).trim();
+
+  // 1. Fetch Today's Attendance record
+  let todayRecord = null;
+  try {
+    const qAtt1 = await getDocs(collection(db, 'Attendance')).catch(() => null);
+    const qAtt2 = await getDocs(collection(db, 'attendance')).catch(() => null);
+    const allAtt = [...(qAtt1?.docs || []), ...(qAtt2?.docs || [])].map(d => ({ id: d.id, ...d.data() }));
+
+    const myEmail = (userEmail || emp?.email || '').toLowerCase();
+    const myName = currentUserName.toLowerCase();
+    const myId = (emp?.id || emp?.idNum || emp?.empId || '').toLowerCase();
+
+    const today = new Date();
+    today.setHours(0, 0, 0, 0);
+
+    todayRecord = allAtt.find(att => {
+      const aMail = (att.email || '').toLowerCase();
+      const aName = (att.employeeName || '').toLowerCase();
+      const aId = (att.employee_id || att.employeeId || '').toLowerCase();
+
+      const isMatch = (myEmail && aMail === myEmail) ||
+                      (myName && (aName === myName || aName.includes(myName) || myName.includes(aName))) ||
+                      (myId && aId === myId);
+      if (!isMatch) return false;
+
+      const raw = att.date || att.timeIn || att.checkIn || att.createdAt;
+      if (!raw) return false;
+      const d = raw?.toDate ? raw.toDate() : new Date(raw);
+      return !isNaN(d.getTime()) && d >= today;
+    });
+  } catch (e) {}
+
+  // 2. Fetch Assignments from database
+  let cleanDocs = [];
+  try {
+    const q1 = await getDocs(collection(db, 'Assignments')).catch(() => null);
+    const q2 = await getDocs(collection(db, 'assignments')).catch(() => null);
+    const all = [...(q1?.docs || []), ...(q2?.docs || [])].map(d => ({ id: d.id, ...d.data() }));
+    cleanDocs = all.filter(a => isAssignmentForEmployee(a, emp, userEmail, currentUserName));
+  } catch (e) {}
+
+  // Find active assignment
+  let activeAsg = cleanDocs.find(a => isAssignmentActiveToday(a));
+  if (!activeAsg && cleanDocs.length > 0) {
+    activeAsg = cleanDocs.find(a => {
+      const st = (a.status || 'Active').toLowerCase();
+      return st === 'active' || st === 'in progress' || st === 'ongoing' || st === 'assigned' || st === 'on duty' || st === 'upcoming';
+    }) || cleanDocs[0];
+  }
+
+  // 3. Resolve Site Name
+  let siteName = activeAsg?.site || activeAsg?.siteName || todayRecord?.siteName || todayRecord?.assignedSite || emp?.assignedSite || emp?.site;
+  if (siteName && typeof siteName === 'string' && siteName.includes(',')) {
+    siteName = siteName.split(',')[0].trim();
+  }
+
+  // 4. Resolve Shift
+  let shift = resolveShift(activeAsg, emp) || todayRecord?.shift || emp?.shift || '08:00 AM - 05:00 PM';
+  if (!shift || shift === 'Unassigned') shift = '08:00 AM - 05:00 PM';
+
+  // 5. Resolve Date
+  let dateStr = activeAsg?.assignDate || activeAsg?.date || 'Today';
+
+  // 6. Resolve Address
+  let address = activeAsg?.siteAddress || activeAsg?.address || todayRecord?.locationAddress || todayRecord?.actualLocation;
+  if (!address && siteName) {
+    try {
+      const qSites = await getDocs(collection(db, 'Sites')).catch(() => null);
+      if (qSites && !qSites.empty) {
+        const sMatch = qSites.docs.find(d => {
+          const sData = d.data();
+          const sN = (sData.name || d.id || '').toLowerCase();
+          return sN === siteName.toLowerCase() || sN.includes(siteName.toLowerCase()) || siteName.toLowerCase().includes(sN);
+        });
+        if (sMatch) {
+          address = sMatch.data().address;
+        }
+      }
+    } catch (_) {}
+  }
+  if (!address) address = 'Registered Worksite Address';
+
+  // 7. Format Status
+  let statusText = 'Active';
+  let checkInTimeStr = '';
+  let checkOutTimeStr = '';
+
+  if (todayRecord?.timeIn || todayRecord?.checkIn) {
+    const rawIn = todayRecord.timeIn || todayRecord.checkIn;
+    const inD = rawIn?.toDate ? rawIn.toDate() : new Date(rawIn);
+    if (!isNaN(inD.getTime())) {
+      checkInTimeStr = inD.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit', hour12: true });
+    }
+  }
+
+  if (todayRecord?.timeOut || todayRecord?.checkOut) {
+    const rawOut = todayRecord.timeOut || todayRecord.checkOut;
+    const outD = rawOut?.toDate ? rawOut.toDate() : new Date(rawOut);
+    if (!isNaN(outD.getTime())) {
+      checkOutTimeStr = outD.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit', hour12: true });
+    }
+  }
+
+  if (checkOutTimeStr) {
+    statusText = `Completed (Checked out at ${checkOutTimeStr})`;
+  } else if (checkInTimeStr) {
+    statusText = `On Duty (Checked in at ${checkInTimeStr})`;
+  } else if (activeAsg?.status) {
+    statusText = activeAsg.status;
+  }
+
+  const hasAssignment = Boolean(
+    siteName &&
+    typeof siteName === 'string' &&
+    siteName.trim().toLowerCase() !== 'unassigned' &&
+    siteName.trim().toLowerCase() !== 'none'
+  );
+
+  return {
+    hasAssignment,
+    siteName: siteName || 'Unassigned Site',
+    address,
+    shift,
+    dateStr,
+    statusText,
+    checkInTimeStr,
+    checkOutTimeStr,
+    todayRecord,
+    assignment: activeAsg,
   };
 }
 

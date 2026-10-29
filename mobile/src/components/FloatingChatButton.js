@@ -19,6 +19,7 @@ import { Ionicons } from '@expo/vector-icons';
 import * as Speech from 'expo-speech';
 import { auth, db } from '../firebase';
 import { collection, query, where, getDocs, getCleanEmployeeEmail } from '../firebase';
+import { getChatbotAssignmentContext } from '../utils/assignmentUtils';
 
 const chatbotIcon = require('../../assets/chatbot.png');
 
@@ -288,94 +289,95 @@ export default function FloatingChatButton({ user: propUser }) {
   const processBotResponse = async (text) => {
     try {
       let employee = null;
-      if (email) {
-        const qEmp = query(collection(db, 'employees'), where('email', '==', email));
-        const empSnap = await getDocs(qEmp);
-        if (!empSnap.empty) employee = empSnap.docs[0].data();
-      }
-      if (!employee && propUser?.name) {
-        const qName = query(collection(db, 'employees'), where('name', '==', propUser.name));
-        const empSnap = await getDocs(qName);
-        if (!empSnap.empty) employee = empSnap.docs[0].data();
+      try {
+        const allEmpSnap = await getDocs(collection(db, 'employees'));
+        if (allEmpSnap && !allEmpSnap.empty) {
+          const emailPrefix = (email || '').split('@')[0].toLowerCase();
+          const authUid = (auth.currentUser?.uid || '').toLowerCase();
+          const match = allEmpSnap.docs.find(d => {
+            const data = d.data();
+            const em = (data.email || '').trim().toLowerCase();
+            const en = (data.name || '').trim().toLowerCase();
+            const dUid = (data.uid || d.id || '').toLowerCase();
+            return (
+              (email && em === email.toLowerCase()) ||
+              (emailPrefix && em.startsWith(emailPrefix)) ||
+              (propUser?.name && en === propUser.name.toLowerCase()) ||
+              (auth.currentUser?.displayName && en === auth.currentUser.displayName.toLowerCase()) ||
+              (authUid && (dUid === authUid || d.id.toLowerCase() === authUid))
+            );
+          });
+          if (match) employee = { id: match.id, ...match.data() };
+        }
+      } catch (e) {}
+
+      if (!employee) {
+        if (email) {
+          const qEmp = query(collection(db, 'employees'), where('email', '==', email));
+          const empSnap = await getDocs(qEmp);
+          if (!empSnap.empty) employee = { id: empSnap.docs[0].id, ...empSnap.docs[0].data() };
+        }
       }
       if (!employee) {
         const allEmp = await getDocs(collection(db, 'employees'));
-        if (allEmp.size === 1) employee = allEmp.docs[0].data();
+        if (allEmp.size === 1) employee = { id: allEmp.docs[0].id, ...allEmp.docs[0].data() };
       }
       if (!employee) return "I could not find your employee record in the system.";
 
+      // Resolve assignment, worksite, shift, and today's attendance record
+      const asgContext = await getChatbotAssignmentContext(employee, email, propUser);
+
       // Keyword: Assignment
       if (text.includes('assignment') || text.includes('ano') || text.includes('work') || text.includes('task')) {
-        let cleanDocs = [];
-        try {
-          const q1 = await getDocs(collection(db, 'Assignments'));
-          const q2 = await getDocs(collection(db, 'assignments'));
-          const all = [...(q1?.docs || []), ...(q2?.docs || [])].map(d => ({ id: d.id, ...d.data() }));
-          cleanDocs = all.filter(a => {
-            const eMail = (a.employeeEmail || a.empEmail || '').toLowerCase();
-            const eName = (a.employeeName || a.empName || '').toLowerCase();
-            return (eMail && eMail === email?.toLowerCase()) || (eName && eName === employee?.name?.toLowerCase());
-          });
-        } catch (e) {}
-
-        const activeAsg = cleanDocs.find(a => (a.status || 'Active').toLowerCase() === 'active');
-        if (!activeAsg) return "You have no active assignments scheduled for today.";
-        return `Current Assignment:\n\nSite: ${activeAsg.site || activeAsg.siteName || 'Assigned Site'}\nShift: ${activeAsg.shift || activeAsg.shiftTime || '08:00 AM - 05:00 PM'}\nDate: ${activeAsg.assignDate || 'Today'}\nStatus: Active`;
+        if (!asgContext.hasAssignment) {
+          return "You have no active assignments scheduled for today. Please contact your operations supervisor.";
+        }
+        return `Current Assignment:\n\nSite: ${asgContext.siteName}\nShift: ${asgContext.shift}\nDate: ${asgContext.dateStr}\nStatus: ${asgContext.statusText}`;
       }
 
       // Keyword: Site / Location
       if (text.includes('site') || text.includes('location') || text.includes('nasaan') || text.includes('where')) {
-        let cleanDocs = [];
-        try {
-          const q1 = await getDocs(collection(db, 'Assignments'));
-          const q2 = await getDocs(collection(db, 'assignments'));
-          const all = [...(q1?.docs || []), ...(q2?.docs || [])].map(d => ({ id: d.id, ...d.data() }));
-          cleanDocs = all.filter(a => {
-            const eMail = (a.employeeEmail || a.empEmail || '').toLowerCase();
-            const eName = (a.employeeName || a.empName || '').toLowerCase();
-            return (eMail && eMail === email?.toLowerCase()) || (eName && eName === employee?.name?.toLowerCase());
-          });
-        } catch (e) {}
-
-        const activeAsg = cleanDocs.find(a => (a.status || 'Active').toLowerCase() === 'active');
-        if (!activeAsg) return "No active assignment found. Please contact your operations supervisor.";
-        
-        const siteName = activeAsg.site || activeAsg.siteName || 'Assigned Site';
-        const qS = query(collection(db, 'Sites'), where('name', '==', siteName));
-        const sSnap = await getDocs(qS);
-        const siteData = !sSnap.empty ? sSnap.docs[0].data() : null;
-        const address = activeAsg.siteAddress || activeAsg.address || siteData?.address || 'Cebu IT Park, Lahug, Cebu City';
-        return `Assigned Site Location:\n\nName: ${siteName}\nAddress: ${address}`;
+        if (!asgContext.hasAssignment) {
+          return "No active worksite assignment found. Please contact your operations supervisor.";
+        }
+        return `Assigned Site Location:\n\nName: ${asgContext.siteName}\nAddress: ${asgContext.address}\nShift: ${asgContext.shift}\nStatus: ${asgContext.statusText}`;
       }
 
       // Keyword: Attendance count
       if (text.includes('attendance') || text.includes('ilang') || text.includes('count') || text.includes('record')) {
-        const qAtt = query(collection(db, 'Attendance'), where('employeeName', '==', employee.name));
-        const attSnap = await getDocs(qAtt);
-        return `You have ${attSnap.size} recorded attendance check-in(s) in total.`;
+        let attCount = 0;
+        try {
+          const q1 = await getDocs(collection(db, 'Attendance')).catch(() => null);
+          const q2 = await getDocs(collection(db, 'attendance')).catch(() => null);
+          const all = [...(q1?.docs || []), ...(q2?.docs || [])];
+          const myName = (employee.name || '').toLowerCase();
+          const myEmail = (email || '').toLowerCase();
+          const seen = new Set();
+          all.forEach(d => {
+            const data = d.data();
+            const aName = (data.employeeName || '').toLowerCase();
+            const aMail = (data.email || '').toLowerCase();
+            if ((myName && aName === myName) || (myEmail && aMail === myEmail)) {
+              seen.add(d.id);
+            }
+          });
+          attCount = seen.size;
+        } catch (_) {}
+        return `You have ${attCount} recorded attendance check-in(s) in total.`;
       }
 
       // Keyword: Time In / Check in
       if (text.includes('time') || text.includes('check in') || text.includes('oras') || text.includes('clock') || text.includes('in')) {
-        const qAtt = query(collection(db, 'Attendance'), where('employeeName', '==', employee.name));
-        const attSnap = await getDocs(qAtt);
-        const today = new Date(); today.setHours(0,0,0,0);
-        const todayRec = attSnap.docs.map(d => d.data()).find(d => {
-          const raw = d.date || d.timeIn;
-          if (!raw) return false;
-          const dDate = raw.toDate ? raw.toDate() : new Date(raw);
-          return !isNaN(dDate.getTime()) && dDate >= today;
-        });
-        const rawTime = todayRec?.timeIn || todayRec?.check_in;
-        if (!rawTime) return "You have not timed in today yet. Please verify your GPS location upon arrival at your site.";
-        const d = rawTime.toDate ? rawTime.toDate() : new Date(rawTime);
-        const t = !isNaN(d.getTime()) ? d.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }) : 'Verified';
-        return `You checked in today at ${t}${todayRec.siteName ? ` at ${todayRec.siteName}` : ''}.`;
+        if (asgContext.checkInTimeStr) {
+          return `You checked in today at ${asgContext.checkInTimeStr}${asgContext.siteName ? ` at ${asgContext.siteName}` : ''}.${asgContext.checkOutTimeStr ? ` You checked out at ${asgContext.checkOutTimeStr}.` : ' Your status is currently On Duty.'}`;
+        }
+        return `You have not timed in today yet.${asgContext.hasAssignment ? ` Your scheduled site is ${asgContext.siteName} (${asgContext.shift}). Please verify your GPS location upon arrival.` : ''}`;
       }
 
       // Keyword: Status
       if (text.includes('status') || text.includes('duty') || text.includes('profile')) {
-        return `Employee Profile:\n\nStatus: ${employee.status || 'On Duty'}\nDepartment: ${employee.org || 'Technical'}\nRole: ${employee.type || 'Field Specialist'}`;
+        const dutyStatus = asgContext.checkInTimeStr && !asgContext.checkOutTimeStr ? 'On Duty' : (employee.status || 'Active');
+        return `Employee Profile:\n\nStatus: ${dutyStatus}\nAssignment Status: ${asgContext.statusText}\nSite: ${asgContext.siteName || 'Unassigned'}\nDepartment: ${employee.department || employee.org || 'Operations'}\nRole: ${employee.role || employee.type || 'Field Specialist'}`;
       }
 
       // Keyword: Delay / Report

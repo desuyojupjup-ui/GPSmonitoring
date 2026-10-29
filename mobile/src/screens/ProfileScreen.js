@@ -850,20 +850,46 @@ export default function ProfileScreen({ navigation, route, user: propUser, onLog
                 {history.length === 0 ? (
                   <Text style={[styles.emptyText, isDarkMode && styles.darkSubText]}>No recent activity logs.</Text>
                 ) : (
-                  history.map((log, i) => (
-                    <View key={i} style={[styles.recordCard, isDarkMode && styles.darkCard, isDarkMode && styles.darkBorder]}>
-                      <View style={styles.recordLeft}>
-                        <Ionicons name="location" size={20} color={isDarkMode ? '#34D399' : '#059669'} />
-                        <View>
-                          <Text style={[styles.recordDate, isDarkMode && styles.darkText]}>{log.action}</Text>
-                          <Text style={[styles.recordSub, isDarkMode && styles.darkSubText]}>{log.siteName || 'System'}</Text>
+                  history.map((log, i) => {
+                    const isAnomaly = (log.action || '').toLowerCase().includes('anomaly') || (log.status || '').toLowerCase().includes('anomaly');
+                    return (
+                      <View key={i} style={[styles.historyCard, isDarkMode && styles.darkCard, isDarkMode && styles.darkBorder]}>
+                        <View style={styles.historyCardHeader}>
+                          <View style={styles.historyIconTitleRow}>
+                            <View style={[
+                              styles.historyIconBadge,
+                              isAnomaly ? styles.historyIconBadgeAnomaly : styles.historyIconBadgeNormal
+                            ]}>
+                              <Ionicons
+                                name={isAnomaly ? "alert-circle" : "location"}
+                                size={16}
+                                color={isAnomaly ? "#EF4444" : "#10B981"}
+                              />
+                            </View>
+                            <View style={styles.historyTitleCol}>
+                              <Text style={[styles.historyActionTitle, isDarkMode && styles.darkText]} numberOfLines={2}>
+                                {log.action || 'Location Activity'}
+                              </Text>
+                            </View>
+                          </View>
+                          <View style={styles.historyTimeBadge}>
+                            <Text style={[styles.historyTimeText, isDarkMode && styles.darkSubText]}>
+                              {formatDateTime(log.timestamp || log.time || log.createdAt)}
+                            </Text>
+                          </View>
                         </View>
+
+                        {log.siteName ? (
+                          <View style={styles.historySiteRow}>
+                            <Ionicons name="navigate-outline" size={13} color={isDarkMode ? '#94A3B8' : '#64748B'} style={{ marginTop: 1 }} />
+                            <Text style={[styles.historySiteText, isDarkMode && styles.darkSubText]} numberOfLines={2}>
+                              {log.siteName}
+                            </Text>
+                          </View>
+                        ) : null}
                       </View>
-                      <Text style={[styles.timeText, isDarkMode && styles.darkSubText]}>
-                        {formatDateTime(log.timestamp || log.time || log.createdAt)}
-                      </Text>
-                    </View>
-                  ))
+                    );
+                  })
                 )}
               </View>
             )}
@@ -1201,11 +1227,93 @@ const styles = StyleSheet.create({
     backgroundColor: 'white', padding: 16, borderRadius: 14, marginBottom: 12,
     borderWidth: 1, borderColor: '#F1F5F9',
   },
-  recordLeft: { flexDirection: 'row', alignItems: 'center', gap: 12 },
+  recordLeft: { flexDirection: 'row', alignItems: 'center', gap: 12, flex: 1, minWidth: 0, marginRight: 8 },
   recordDate: { fontSize: 15, fontWeight: '600', color: '#1F2937' },
   recordSub: { fontSize: 13, color: '#6B7280', marginTop: 2 },
-  recordRight: { alignItems: 'flex-end' },
+  recordRight: { alignItems: 'flex-end', flexShrink: 0 },
   timeText: { fontSize: 13, color: '#4B5563', fontWeight: '500' },
+
+  // Responsive Location History Card styles
+  historyCard: {
+    backgroundColor: 'white',
+    padding: 14,
+    borderRadius: 14,
+    marginBottom: 10,
+    borderWidth: 1,
+    borderColor: '#F1F5F9',
+    shadowColor: '#000',
+    shadowOffset: { width: 0, height: 1 },
+    shadowOpacity: 0.03,
+    shadowRadius: 4,
+    elevation: 1,
+  },
+  historyCardHeader: {
+    flexDirection: 'row',
+    alignItems: 'flex-start',
+    justifyContent: 'space-between',
+    gap: 8,
+  },
+  historyIconTitleRow: {
+    flex: 1,
+    flexDirection: 'row',
+    alignItems: 'flex-start',
+    gap: 10,
+    minWidth: 0,
+  },
+  historyIconBadge: {
+    width: 30,
+    height: 30,
+    borderRadius: 15,
+    justifyContent: 'center',
+    alignItems: 'center',
+    flexShrink: 0,
+    marginTop: 1,
+  },
+  historyIconBadgeNormal: {
+    backgroundColor: '#ECFDF5',
+  },
+  historyIconBadgeAnomaly: {
+    backgroundColor: '#FEF2F2',
+  },
+  historyTitleCol: {
+    flex: 1,
+    minWidth: 0,
+  },
+  historyActionTitle: {
+    fontSize: 14,
+    fontWeight: '700',
+    color: '#0F172A',
+    lineHeight: 18,
+  },
+  historyTimeBadge: {
+    alignItems: 'flex-end',
+    justifyContent: 'flex-start',
+    flexShrink: 0,
+    paddingLeft: 4,
+    paddingTop: 1,
+  },
+  historyTimeText: {
+    fontSize: 11,
+    fontWeight: '600',
+    color: '#64748B',
+    lineHeight: 16,
+  },
+  historySiteRow: {
+    flexDirection: 'row',
+    alignItems: 'flex-start',
+    gap: 6,
+    marginTop: 8,
+    paddingTop: 8,
+    borderTopWidth: 1,
+    borderTopColor: '#F8FAFC',
+    paddingLeft: 40,
+  },
+  historySiteText: {
+    fontSize: 12,
+    color: '#475569',
+    flex: 1,
+    lineHeight: 16,
+  },
   settingsGroup: { backgroundColor: 'white', borderRadius: 14, overflow: 'hidden' },
   settingItem: {
     flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center',
