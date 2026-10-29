@@ -20,7 +20,8 @@ export { isEmployeeOnline, resolveEmployeeStatus, resolveEmployeeWorkType };
 function GaugeRing({ pct, a, b }) {
   const r = 17, size = 44, cx = size / 2;
   const C = 2 * Math.PI * r;
-  const off = (C * (100 - pct) / 100).toFixed(2);
+  const validPct = Math.max(0, Math.min(100, Number(pct) || 0));
+  const off = (C * (100 - validPct) / 100).toFixed(2);
   const gid = "rg" + Math.random().toString(36).slice(2, 7);
   return (
     <svg width={size} height={size} viewBox={`0 0 ${size} ${size}`} style={{ transform: 'rotate(-90deg)', flexShrink: 0 }}>
@@ -30,9 +31,12 @@ function GaugeRing({ pct, a, b }) {
           <stop offset="100%" stopColor={b} />
         </linearGradient>
       </defs>
-      <circle cx={cx} cy={cx} r={r} fill="none" stroke="currentColor" className="gauge-track" strokeWidth="5" />
-      <circle cx={cx} cy={cx} r={r} fill="none" stroke={`url(#${gid})`} strokeWidth="5" strokeLinecap="round"
-        strokeDasharray={C.toFixed(2)} strokeDashoffset={off} className="ring-prog" />
+      {/* Background Track Circle: White center with light track border instead of solid black */}
+      <circle cx={cx} cy={cx} r={r} fill="#FFFFFF" stroke="#E2E8F0" className="gauge-track" strokeWidth="4.5" />
+      {validPct > 0 && (
+        <circle cx={cx} cy={cx} r={r} fill="none" stroke={`url(#${gid})`} strokeWidth="4.5" strokeLinecap="round"
+          strokeDasharray={C.toFixed(2)} strokeDashoffset={off} className="ring-prog" />
+      )}
     </svg>
   );
 }
@@ -1868,7 +1872,7 @@ export default function Dashboard() {
       delta: totalEmp ? `${Math.round((onDutyCount / totalEmp) * 100)}%` : '0%',
       trend: onDutyCount > 0 ? 'up' : 'flat',
       icon: CheckCircle,
-      color: onDutyCount > 0 ? '#10b981' : '#94A3B8',
+      color: '#10b981',
       pct: totalEmp ? Math.round(onDutyCount / totalEmp * 100) : 0,
       onClick: () => setDrilldownType('on_duty'),
       helperText: 'Click to view active on-duty personnel'
@@ -1879,7 +1883,7 @@ export default function Dashboard() {
       delta: totalEmp ? `${Math.round((onSiteCount / totalEmp) * 100)}%` : '0%',
       trend: onSiteCount > 0 ? 'up' : 'flat',
       icon: MapPin,
-      color: onSiteCount > 0 ? '#f59e0b' : '#94A3B8',
+      color: '#f59e0b',
       pct: totalEmp ? Math.round(onSiteCount / totalEmp * 100) : 0,
       onClick: () => setDrilldownType('on_site'),
       helperText: 'Click to view personnel on site'
@@ -1901,7 +1905,7 @@ export default function Dashboard() {
       delta: totalEmp ? `${Math.round((offlineCount / totalEmp) * 100)}%` : '0%',
       trend: offlineCount > 0 ? 'flat' : 'flat',
       icon: WifiOff,
-      color: offlineCount > 0 ? '#f43f5e' : '#94A3B8',
+      color: '#f43f5e',
       pct: totalEmp ? Math.round(offlineCount / totalEmp * 100) : 0,
       onClick: () => setDrilldownType('offline'),
       helperText: 'Click to view offline personnel roster'

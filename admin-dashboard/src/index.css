@@ -135,8 +135,16 @@ body.dark-mode .trend-pill.trend-flat {
   background: rgba(148, 163, 184, 0.15);
 }
 
+.gauge-track {
+  stroke: #E2E8F0;
+  color: #E2E8F0;
+  fill: #FFFFFF;
+}
+
 body.dark-mode .gauge-track {
+  stroke: rgba(255, 255, 255, 0.1) !important;
   color: rgba(255, 255, 255, 0.1) !important;
+  fill: #1E293B !important;
 }
 
 /* ─── Work Type & Geofence Intelligence Cards Dark Mode ─── */
