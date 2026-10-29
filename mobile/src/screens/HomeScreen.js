@@ -1287,23 +1287,28 @@ export default function HomeScreen({ navigation, route, user: propUser }) {
           {weather && (
             <View style={styles.modernWeatherBox}>
               <View style={styles.weatherIconTempRow}>
-                <Ionicons name={weather.icon || 'partly-sunny-outline'} size={18} color="#FDE047" />
+                <Ionicons name={weather.icon || 'partly-sunny-outline'} size={17} color="#FDE047" />
                 <Text style={styles.modernWeatherTemp}>{weather.temp}</Text>
+                {(() => {
+                  const rawCond = (weather.condition || '')
+                    .replace(/overcast/gi, '')
+                    .replace(/^[•\s-]+|[•\s-]+$/g, '')
+                    .trim();
+                  return rawCond ? (
+                    <Text style={styles.modernWeatherConditionInline} numberOfLines={1}>
+                      • {rawCond}
+                    </Text>
+                  ) : null;
+                })()}
               </View>
-              {(() => {
-                const rawCond = (weather.condition || '')
-                  .replace(/overcast/gi, '')
-                  .replace(/^[•\s-]+|[•\s-]+$/g, '')
-                  .trim();
-                const subtitle = weather.location
-                  ? (rawCond ? `${rawCond} • ${weather.location}` : weather.location)
-                  : rawCond;
-                return subtitle ? (
-                  <Text style={styles.modernWeatherCondition} numberOfLines={1}>
-                    {subtitle}
+              {weather.location ? (
+                <View style={styles.weatherLocationRow}>
+                  <Ionicons name="location-sharp" size={11} color="#C7D2FE" />
+                  <Text style={styles.modernWeatherLocation} numberOfLines={1}>
+                    {weather.location}
                   </Text>
-                ) : null;
-              })()}
+                </View>
+              ) : null}
             </View>
           )}
         </View>
@@ -1834,29 +1839,41 @@ const styles = StyleSheet.create({
     paddingRight: 10,
   },
   modernWeatherBox: {
-    alignItems: 'flex-end',
+    alignItems: 'flex-start',
     justifyContent: 'center',
     backgroundColor: 'rgba(255, 255, 255, 0.12)',
-    paddingHorizontal: 12,
-    paddingVertical: 6,
+    paddingHorizontal: 10,
+    paddingVertical: 5,
     borderRadius: 14,
   },
   weatherIconTempRow: {
     flexDirection: 'row',
     alignItems: 'center',
-    gap: 5,
+    gap: 4,
   },
   modernWeatherTemp: {
     color: '#FFFFFF',
-    fontSize: 16,
+    fontSize: 15,
     fontWeight: '800',
     letterSpacing: -0.2,
   },
-  modernWeatherCondition: {
+  modernWeatherConditionInline: {
     color: '#E0E7FF',
+    fontSize: 11.5,
+    fontWeight: '600',
+    maxWidth: 110,
+  },
+  weatherLocationRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 3,
+    marginTop: 2,
+    paddingLeft: 1,
+  },
+  modernWeatherLocation: {
+    color: '#C7D2FE',
     fontSize: 11,
     fontWeight: '500',
-    marginTop: 1,
     maxWidth: 130,
   },
   actionNavGroup: {
