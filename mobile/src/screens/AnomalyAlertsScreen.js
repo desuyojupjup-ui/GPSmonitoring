@@ -530,11 +530,11 @@ export default function AnomalyAlertsScreen({ navigation, route, user: propUser 
               <Text style={styles.headerTitle}>Anomaly Alerts</Text>
               {isFieldEmployee ? (
                 <View style={{ backgroundColor: 'rgba(255, 255, 255, 0.22)', paddingHorizontal: 6, paddingVertical: 2, borderRadius: 6 }}>
-                  <Text style={{ color: '#FFFFFF', fontSize: 10, fontWeight: '700' }}>🚚 Mobile Field</Text>
+                  <Text style={{ color: '#FFFFFF', fontSize: 10, fontWeight: '700' }}>Mobile Field</Text>
                 </View>
               ) : (
                 <View style={{ backgroundColor: 'rgba(255, 255, 255, 0.22)', paddingHorizontal: 6, paddingVertical: 2, borderRadius: 6 }}>
-                  <Text style={{ color: '#FFFFFF', fontSize: 10, fontWeight: '700' }}>🏢 Fixed Site</Text>
+                  <Text style={{ color: '#FFFFFF', fontSize: 10, fontWeight: '700' }}>Fixed Site</Text>
                 </View>
               )}
             </View>
@@ -631,7 +631,7 @@ export default function AnomalyAlertsScreen({ navigation, route, user: propUser 
                       <Text style={styles.alertCategory}>{item.category}</Text>
                       {item.category === 'Fixed Geofence Boundary Breach' && (
                         <View style={{ backgroundColor: '#FEF3C7', paddingHorizontal: 6, paddingVertical: 1.5, borderRadius: 4, borderWidth: 0.5, borderColor: '#FDE68A' }}>
-                          <Text style={{ color: '#92400E', fontSize: 10, fontWeight: '700' }}>🏢 Fixed Site Policy</Text>
+                          <Text style={{ color: '#92400E', fontSize: 10, fontWeight: '700' }}>Fixed Site Policy</Text>
                         </View>
                       )}
                     </View>

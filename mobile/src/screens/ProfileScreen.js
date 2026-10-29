@@ -105,7 +105,7 @@ export default function ProfileScreen({ navigation, route, user: propUser, onLog
     ''
   ).toString().toLowerCase();
   const isFieldEmployee = empWorkType.includes('mobile') || empWorkType.includes('field');
-  const employeeTypeLabel = isFieldEmployee ? '🚚 Mobile Field Employee' : '🏢 Fixed Employee';
+  const employeeTypeLabel = isFieldEmployee ? 'Mobile Field Employee' : 'Fixed Employee';
 
   const lastEmpKeyRef = React.useRef('');
   useEffect(() => {
