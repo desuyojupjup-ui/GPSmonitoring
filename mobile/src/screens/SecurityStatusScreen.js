@@ -104,14 +104,23 @@ export default function SecurityStatusScreen({ navigation, route, user: propUser
           collection(db, 'ai_analysis'),
           (snap) => {
             const all = snap.docs.map(d => ({ id: d.id, ...d.data() }));
-            // Match current employee or device fallback
-            const mine = all.filter(e =>
-              !emp?.id ||
-              e.employeeId === emp.id ||
-              e.employeeEmail === emp.email ||
-              e.employeeName === emp.name ||
-              emp.id === 'emp_fallback'
-            );
+            // Match current employee strictly
+            const mine = all.filter(e => {
+              const eId = (e.employeeId || e.userId || '').toString().trim().toLowerCase();
+              const eEmail = (e.employeeEmail || e.email || '').toString().trim().toLowerCase();
+              const eName = (e.employeeName || '').toString().trim().toLowerCase();
+
+              const myIds = [emp?.id, emp?.idNum, emp?.empId, emp?.employeeId, auth.currentUser?.uid]
+                .filter(x => Boolean(x) && x !== 'emp_fallback').map(x => String(x).trim().toLowerCase());
+              const myEmails = [emp?.email, email, auth.currentUser?.email]
+                .filter(Boolean).map(x => String(x).trim().toLowerCase());
+              const myName = (emp?.name || auth.currentUser?.displayName || '').trim().toLowerCase();
+
+              if (eId && myIds.length > 0) return myIds.includes(eId);
+              if (eEmail && myEmails.length > 0) return myEmails.includes(eEmail);
+              if (!eId && !eEmail && eName && myName) return eName === myName;
+              return false;
+            });
             mine.sort((a, b) => {
               const ta = a.createdAt?.toDate ? a.createdAt.toDate() : new Date(a.createdAt || a.timestamp || 0);
               const tb = b.createdAt?.toDate ? b.createdAt.toDate() : new Date(b.createdAt || b.timestamp || 0);

@@ -197,19 +197,55 @@ export default function ChatbotScreen({ route, user: propUser }) {
       ) {
         let userAnomalies = [];
         try {
-          const myId = (employee?.id || employee?.idNum || employee?.empId || '').toLowerCase();
-          const myName = (employee?.name || propUser?.name || auth.currentUser?.displayName || '').toLowerCase();
-          const myEmail = (email || '').toLowerCase();
+          const myIds = [
+            employee?.id,
+            employee?.idNum,
+            employee?.empId,
+            employee?.employeeId,
+            employee?.uid,
+            propUser?.id,
+            propUser?.uid,
+            propUser?.empId,
+            auth.currentUser?.uid,
+          ].filter(x => x !== undefined && x !== null && String(x).trim() !== '' && String(x).trim() !== 'emp_fallback')
+           .map(x => String(x).trim().toLowerCase());
+
+          const myEmails = [
+            email,
+            employee?.email,
+            employee?.workEmail,
+            propUser?.email,
+            auth.currentUser?.email,
+          ].filter(Boolean).map(e => String(e).trim().toLowerCase());
+
+          const genericWords = ['employee', 'user', 'guard', 'staff', 'admin', 'officer', 'field employee', 'security'];
+          const myNames = [
+            employee?.name,
+            employee?.displayName,
+            propUser?.name,
+            auth.currentUser?.displayName,
+          ].filter(Boolean).map(n => String(n).trim().toLowerCase())
+           .filter(n => n.length >= 2 && !genericWords.includes(n));
 
           const isMatch = (item) => {
-            const aId = (item.employeeId || item.employee_id || item.empId || '').toLowerCase();
-            const aName = (item.employeeName || item.name || '').toLowerCase();
-            const aEmail = (item.employeeEmail || item.email || '').toLowerCase();
-            return (
-              (myId && aId && (aId === myId || aId.includes(myId))) ||
-              (myName && aName && (aName === myName || aName.includes(myName) || myName.includes(aName))) ||
-              (myEmail && aEmail && (aEmail === myEmail || aEmail.includes(myEmail)))
-            );
+            const aIds = [item.employeeId, item.employee_id, item.empId, item.userId, item.uid]
+              .filter(x => x !== undefined && x !== null && String(x).trim() !== '' && String(x).trim() !== 'emp_fallback')
+              .map(x => String(x).trim().toLowerCase());
+            const aEmails = [item.employeeEmail, item.email, item.empEmail, item.userEmail]
+              .filter(Boolean).map(e => String(e).trim().toLowerCase());
+            const aNames = [item.employeeName, item.empName, item.userName]
+              .filter(Boolean).map(n => String(n).trim().toLowerCase());
+
+            if (aIds.length > 0) {
+              if (myIds.length > 0) return aIds.some(id => myIds.includes(id));
+            }
+            if (aEmails.length > 0) {
+              if (myEmails.length > 0) return aEmails.some(e => myEmails.includes(e));
+            }
+            if (aIds.length === 0 && aEmails.length === 0 && myNames.length > 0 && aNames.length > 0) {
+              return aNames.some(n => myNames.includes(n));
+            }
+            return false;
           };
 
           const [snapAi, snapLogs] = await Promise.all([

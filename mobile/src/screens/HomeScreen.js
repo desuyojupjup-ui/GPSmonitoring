@@ -259,27 +259,90 @@ export default function HomeScreen({ navigation, route, user: propUser }) {
 
   // ── Track Unresolved Anomaly Alerts for Employee ──
   useEffect(() => {
-    const emailToMatch = currentEmail?.toLowerCase() || '';
-    const nameToMatch = displayName?.toLowerCase() || '';
-    const empId = employee?.id || auth.currentUser?.uid || '';
+    const rawEmails = [
+      currentEmail,
+      employee?.email,
+      employee?.workEmail,
+      user?.email,
+      auth.currentUser?.email,
+    ].filter(Boolean).map(e => String(e).trim().toLowerCase());
+    const validEmails = Array.from(new Set(rawEmails));
+
+    const rawIds = [
+      employee?.id,
+      employee?.idNum,
+      employee?.empId,
+      employee?.employeeId,
+      employee?.uid,
+      user?.id,
+      user?.uid,
+      user?.empId,
+      auth.currentUser?.uid,
+    ].filter(x => x !== undefined && x !== null && String(x).trim() !== '' && String(x).trim() !== 'emp_fallback')
+     .map(x => String(x).trim().toLowerCase());
+    const validIds = Array.from(new Set(rawIds));
+
+    const genericWords = ['employee', 'user', 'guard', 'staff', 'admin', 'officer', 'field employee', 'security'];
+    const cleanNames = [
+      employee?.name,
+      employee?.displayName,
+      displayName,
+      user?.name,
+      auth.currentUser?.displayName,
+    ].filter(Boolean).map(n => String(n).trim().toLowerCase())
+     .filter(n => n.length >= 2 && !genericWords.includes(n));
+    const validNames = Array.from(new Set(cleanNames));
+
+    const checkMatches = (d) => {
+      const itemIds = [
+        d.employeeId,
+        d.employee_id,
+        d.employeeUid,
+        d.empId,
+        d.userId,
+        d.userUid,
+        d.guardId,
+        d.uid,
+      ].filter(x => x !== undefined && x !== null && String(x).trim() !== '' && String(x).trim() !== 'emp_fallback')
+       .map(x => String(x).trim().toLowerCase());
+
+      const itemEmails = [
+        d.employeeEmail,
+        d.email,
+        d.empEmail,
+        d.userEmail,
+      ].filter(Boolean).map(e => String(e).trim().toLowerCase());
+
+      const itemNames = [
+        d.employeeName,
+        d.empName,
+        d.userName,
+      ].filter(Boolean).map(n => String(n).trim().toLowerCase());
+
+      if (itemIds.length > 0) {
+        if (validIds.length > 0) {
+          return itemIds.some(id => validIds.includes(id));
+        }
+      }
+
+      if (itemEmails.length > 0) {
+        if (validEmails.length > 0) {
+          return itemEmails.some(ie => validEmails.includes(ie));
+        }
+      }
+
+      if (itemIds.length === 0 && itemEmails.length === 0 && validNames.length > 0 && itemNames.length > 0) {
+        return itemNames.some(iName => validNames.includes(iName));
+      }
+
+      return false;
+    };
 
     const unsub = onSnapshot(collection(db, 'ai_analysis'), (snapshot) => {
       let count = 0;
       snapshot.forEach(docSnap => {
         const d = docSnap.data();
-        const matchesEmployee = (
-          (d.employeeId && d.employeeId === empId) ||
-          (d.userId && d.userId === empId) ||
-          (emailToMatch && (
-            (d.employeeEmail && d.employeeEmail.toLowerCase() === emailToMatch) ||
-            (d.userEmail && d.userEmail.toLowerCase() === emailToMatch) ||
-            (d.email && d.email.toLowerCase() === emailToMatch)
-          )) ||
-          (nameToMatch && (
-            (d.employeeName && d.employeeName.toLowerCase().includes(nameToMatch)) ||
-            (d.userName && d.userName.toLowerCase().includes(nameToMatch))
-          ))
-        );
+        const matchesEmployee = checkMatches(d);
         if (matchesEmployee && !d.employeeResponse && d.status !== 'Resolved' && d.status !== 'Approved') {
           // If alert is already viewed or marked as read by employee, remove badge!
           if (d.read === true || d.viewedByEmployee === true) {

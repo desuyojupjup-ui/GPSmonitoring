@@ -72,33 +72,58 @@ export default function AnomalyAlertsScreen({ navigation, route, user: propUser 
 
   const empParam = route?.params?.employee || employeeRecord || propUser || {};
 
-  const cleanAuthEmail = (auth.currentUser?.email || '').toLowerCase();
-  const rawEmpEmail = (empParam?.email || route?.params?.user?.email || propUser?.email || '').toLowerCase();
+  const cleanAuthEmail = (auth.currentUser?.email || '').toLowerCase().trim();
+  const rawEmpEmail = (empParam?.email || route?.params?.user?.email || propUser?.email || '').toLowerCase().trim();
   const currentEmail = rawEmpEmail || (cleanAuthEmail && !cleanAuthEmail.includes('admin@') ? cleanAuthEmail : (cleanAuthEmail || ''));
 
-  const currentUserName = (
-    empParam?.name ||
-    empParam?.displayName ||
-    route?.params?.user?.name ||
-    propUser?.name ||
-    auth.currentUser?.displayName ||
-    ''
-  ).trim().toLowerCase();
+  const empEmails = Array.from(new Set([
+    currentEmail,
+    cleanAuthEmail,
+    employeeRecord?.email,
+    employeeRecord?.workEmail,
+    empParam?.email,
+    route?.params?.user?.email,
+    propUser?.email,
+  ].filter(x => Boolean(x) && String(x).trim() !== '').map(e => String(e).trim().toLowerCase())));
 
-  const empIds = [
+  const empIds = Array.from(new Set([
+    employeeRecord?.id,
+    employeeRecord?.idNum,
+    employeeRecord?.empId,
+    employeeRecord?.employeeId,
+    employeeRecord?.uid,
     empParam?.id,
     empParam?.idNum,
     empParam?.empId,
     empParam?.employeeId,
     empParam?.uid,
     route?.params?.user?.id,
+    route?.params?.user?.uid,
+    route?.params?.user?.empId,
     propUser?.id,
+    propUser?.uid,
+    propUser?.empId,
     auth.currentUser?.uid,
   ].filter(x => x !== undefined && x !== null && String(x).trim() !== '' && String(x).trim() !== 'emp_fallback')
-   .map(x => String(x).trim().toLowerCase());
+   .map(x => String(x).trim().toLowerCase())));
 
-  const emailPrefixes = [currentEmail, cleanAuthEmail]
-    .filter(Boolean)
+  const genericNameWords = ['employee', 'user', 'guard', 'staff', 'admin', 'officer', 'field employee', 'personnel', 'security'];
+  const empNames = Array.from(new Set([
+    employeeRecord?.name,
+    employeeRecord?.displayName,
+    employeeRecord?.fullName,
+    empParam?.name,
+    empParam?.displayName,
+    route?.params?.user?.name,
+    propUser?.name,
+    auth.currentUser?.displayName,
+  ].filter(x => Boolean(x) && String(x).trim() !== '')
+   .map(n => String(n).trim().toLowerCase())
+   .filter(n => n.length >= 2 && !genericNameWords.includes(n))));
+
+  const currentUserName = empNames[0] || '';
+
+  const emailPrefixes = empEmails
     .map(e => e.split('@')[0].trim().toLowerCase())
     .filter(Boolean);
 
@@ -148,10 +173,11 @@ export default function AnomalyAlertsScreen({ navigation, route, user: propUser 
     let logDocs = [];
     let facialDocs = [];
 
+    // Strictly match anomaly records that belong to THIS employee only
     const matchesEmployee = (item) => {
       if (!item) return false;
 
-      // 1. Match by Employee ID (e.g., "102", UID, empId)
+      // 1. Gather all candidate IDs from the item
       const itemIds = [
         item.employeeId,
         item.employee_id,
@@ -161,48 +187,60 @@ export default function AnomalyAlertsScreen({ navigation, route, user: propUser 
         item.userUid,
         item.guardId,
         item.uid,
-      ].filter(x => x !== undefined && x !== null && String(x).trim() !== '')
+      ].filter(x => x !== undefined && x !== null && String(x).trim() !== '' && String(x).trim() !== 'emp_fallback')
        .map(x => String(x).trim().toLowerCase());
 
-      if (empIds.length > 0 && itemIds.some(id => empIds.includes(id))) {
-        return true;
-      }
-
-      // 2. Match by Email or Email prefix
+      // 2. Gather all candidate emails from the item
       const itemEmails = [
         item.employeeEmail,
         item.email,
         item.empEmail,
         item.userEmail,
-      ].filter(Boolean).map(e => String(e).trim().toLowerCase());
+      ].filter(x => Boolean(x) && String(x).trim() !== '')
+       .map(e => String(e).trim().toLowerCase());
 
-      for (const iEmail of itemEmails) {
-        if (currentEmail && iEmail === currentEmail) return true;
-        const iPrefix = iEmail.split('@')[0].trim();
-        if (iPrefix && emailPrefixes.includes(iPrefix)) return true;
-      }
-
-      // 3. Match by Name (exact, substring, or token overlap)
+      // 3. Gather candidate employee names
       const itemNames = [
         item.employeeName,
         item.empName,
-        item.name,
         item.userName,
-        item.user,
-        item.guard,
-        item.assignedTo,
-      ].filter(Boolean).map(n => String(n).trim().toLowerCase());
+        item.employeeName ? null : item.name,
+      ].filter(x => Boolean(x) && String(x).trim() !== '')
+       .map(n => String(n).trim().toLowerCase())
+       .filter(n => !genericNameWords.includes(n) && !n.includes('verification') && !n.includes('anomaly') && !n.includes('attendance') && !n.includes('telemetry'));
 
-      if (currentUserName && currentUserName.length >= 2) {
+      // ── STRICT RULE 1: ID Matching & Conflict Rejection ──
+      // If the alert record explicitly specifies an employee ID:
+      if (itemIds.length > 0) {
+        if (empIds.length > 0) {
+          const hasMatchingId = itemIds.some(id => empIds.includes(id));
+          if (hasMatchingId) return true;
+          // ID Conflict: the alert explicitly belongs to another employee ID!
+          return false;
+        }
+      }
+
+      // ── STRICT RULE 2: Email Matching & Conflict Rejection ──
+      // If the alert record explicitly specifies an employee Email:
+      if (itemEmails.length > 0) {
+        if (empEmails.length > 0) {
+          const hasMatchingEmail = itemEmails.some(ie => empEmails.includes(ie));
+          if (hasMatchingEmail) return true;
+          // Email Conflict: the alert explicitly belongs to another employee Email!
+          return false;
+        }
+      }
+
+      // ── STRICT RULE 3: Exact Full Name Matching (Fallback only when item lacks both ID and Email) ──
+      if (itemIds.length === 0 && itemEmails.length === 0 && empNames.length > 0 && itemNames.length > 0) {
         for (const iName of itemNames) {
-          if (iName === currentUserName) return true;
-          if (iName.includes(currentUserName) || currentUserName.includes(iName)) return true;
-
-          const stopWords = new Set(['employee', 'user', 'guard', 'staff', 'admin', 'officer']);
-          const myTokens = currentUserName.split(/\s+/).filter(t => t.length >= 3 && !stopWords.has(t));
-          const itemTokens = iName.split(/\s+/).filter(t => t.length >= 3 && !stopWords.has(t));
-          if (myTokens.length > 0 && itemTokens.length > 0) {
-            if (myTokens.some(mt => itemTokens.includes(mt))) return true;
+          for (const myName of empNames) {
+            if (iName === myName) return true;
+            const parts = myName.split(/\s+/);
+            if (parts.length > 1) {
+              const reversed = parts.slice().reverse().join(' ');
+              if (iName === reversed) return true;
+            }
           }
         }
       }
@@ -216,6 +254,7 @@ export default function AnomalyAlertsScreen({ navigation, route, user: propUser 
       // 1. Process ai_analysis documents
       aiDocs.forEach((d) => {
         if (!matchesEmployee(d)) return;
+        if (isFieldEmployee && isOutsideGeofenceAlert(d)) return;
 
         const id = d.id;
         const type = d.type || d.eventType || d.title || 'Security Anomaly';
@@ -244,6 +283,7 @@ export default function AnomalyAlertsScreen({ navigation, route, user: propUser 
       // 2. Process ActivityLogs with anomaly status or security types
       logDocs.forEach((d) => {
         if (!matchesEmployee(d)) return;
+        if (isFieldEmployee && isOutsideGeofenceAlert(d)) return;
 
         const isAnomaly = d.type === 'Security Anomaly' || d.type === 'Anomaly' || d.status === 'Warning' || d.status === 'Error' || (d.action && (d.action.includes('Anomaly') || d.action.includes('Failed') || d.action.includes('Flagged')));
         if (!isAnomaly) return;
@@ -275,6 +315,7 @@ export default function AnomalyAlertsScreen({ navigation, route, user: propUser 
       // 3. Process facial_verifications for missed or failed verification
       facialDocs.forEach((d) => {
         if (!matchesEmployee(d)) return;
+        if (isFieldEmployee && isOutsideGeofenceAlert(d)) return;
         const isProblem = d.verificationResult === 'missed' || d.verificationResult === 'failed' || d.verificationStatus === 'missed';
         if (!isProblem) return;
 
@@ -333,7 +374,7 @@ export default function AnomalyAlertsScreen({ navigation, route, user: propUser 
       unsubLogs();
       unsubFacial();
     };
-  }, [currentEmail, currentUserName, empIds.join(','), employeeRecord]);
+  }, [currentEmail, empEmails.join(','), empIds.join(','), empNames.join(','), isFieldEmployee, employeeRecord]);
 
   // ── Record view timestamp so unread badge is cleared while preserving all alert data ──
   useEffect(() => {
