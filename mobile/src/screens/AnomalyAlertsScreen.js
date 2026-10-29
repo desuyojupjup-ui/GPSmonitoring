@@ -31,6 +31,10 @@ import {
   ensureAuthenticatedSession,
   getCleanEmployeeEmail,
 } from '../firebase';
+import {
+  personalizeAnomalyDescription,
+  personalizeAnomalyTitle,
+} from '../utils/assignmentUtils';
 
 const GENERAL_PRESET_REASONS = [
   'Network / Cellular Connection Drop',
@@ -257,18 +261,19 @@ export default function AnomalyAlertsScreen({ navigation, route, user: propUser 
         if (isFieldEmployee && isOutsideGeofenceAlert(d)) return;
 
         const id = d.id;
-        const type = d.type || d.eventType || d.title || 'Security Anomaly';
+        const rawType = d.type || d.eventType || d.title || 'Security Anomaly';
+        const type = personalizeAnomalyTitle(rawType, empNames);
         const severity = d.severity === 'Critical' ? 'High' : (d.severity || 'Medium');
         const status = d.employeeResponse ? (d.status === 'Resolved' ? 'Resolved' : 'Responded') : (d.status || 'Active');
 
         map.set(id, {
           id,
-          title: d.title || type,
+          title: personalizeAnomalyTitle(d.title || type, empNames),
           type,
-          category: categorizeAnomaly(type),
+          category: categorizeAnomaly(rawType),
           severity,
           status,
-          description: d.description || d.reason || 'Unusual system telemetry detected during shift.',
+          description: personalizeAnomalyDescription(d.description || d.reason || 'Unusual system telemetry detected during your shift.', empNames),
           location: d.location || d.siteName || 'Assigned Worksite',
           timestamp: d.timestamp || d.createdAt,
           employeeResponse: d.employeeResponse || null,
@@ -290,16 +295,17 @@ export default function AnomalyAlertsScreen({ navigation, route, user: propUser 
 
         const id = d.anomalyId || d.id;
         if (!map.has(id)) {
-          const type = d.title || d.action || 'Telemetry Discrepancy';
+          const rawType = d.title || d.action || 'Telemetry Discrepancy';
+          const type = personalizeAnomalyTitle(rawType, empNames);
           const status = d.employeeResponse ? (d.status === 'Resolved' ? 'Resolved' : 'Responded') : (d.status || 'Active');
           map.set(id, {
             id,
-            title: d.title || d.action || 'Security Anomaly',
+            title: personalizeAnomalyTitle(d.title || d.action || 'Security Anomaly', empNames),
             type,
-            category: categorizeAnomaly(type),
+            category: categorizeAnomaly(rawType),
             severity: d.severity || 'Medium',
             status,
-            description: d.description || d.action || 'Unusual activity flagged by monitoring service.',
+            description: personalizeAnomalyDescription(d.description || d.action || 'Unusual activity flagged by monitoring service for your shift.', empNames),
             location: d.siteName || d.location || 'Assigned Worksite',
             timestamp: d.timestamp || d.createdAt,
             employeeResponse: d.employeeResponse || null,
@@ -332,9 +338,9 @@ export default function AnomalyAlertsScreen({ navigation, route, user: propUser 
             category: 'Missed Selfie Verification',
             severity: isMissed ? 'High' : 'Medium',
             status,
-            description: isMissed 
-              ? 'A scheduled 30-minute random selfie verification prompt expired without an employee response.' 
-              : 'Facial verification confidence fell below threshold or could not be validated.',
+            description: personalizeAnomalyDescription(isMissed 
+              ? 'A scheduled 30-minute random selfie verification prompt expired without your response.' 
+              : 'Facial verification confidence fell below threshold or could not be validated.', empNames),
             location: d.siteName || 'Worksite Post',
             timestamp: d.timestamp || d.submittedAt,
             employeeResponse: d.employeeResponse || null,

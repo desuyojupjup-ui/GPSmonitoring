@@ -19,7 +19,7 @@ import { Ionicons } from '@expo/vector-icons';
 import * as Speech from 'expo-speech';
 import { auth, db } from '../firebase';
 import { collection, query, where, getDocs, getCleanEmployeeEmail } from '../firebase';
-import { getChatbotAssignmentContext } from '../utils/assignmentUtils';
+import { getChatbotAssignmentContext, personalizeAnomalyDescription, personalizeAnomalyTitle } from '../utils/assignmentUtils';
 
 const chatbotIcon = require('../../assets/chatbot.png');
 
@@ -422,8 +422,10 @@ export default function FloatingChatButton({ user: propUser }) {
 
         const count = activeUserAnoms.length;
         const latest = activeUserAnoms[0];
-        const title = latest.title || latest.type || latest.action || 'Security Anomaly';
-        const desc = latest.description || latest.details || latest.reason || 'Unusual telemetry variance flagged.';
+        const rawTitle = latest.title || latest.type || latest.action || 'Security Anomaly';
+        const title = personalizeAnomalyTitle(rawTitle, myNames);
+        const rawDesc = latest.description || latest.details || latest.reason || 'Unusual telemetry variance flagged.';
+        const desc = personalizeAnomalyDescription(rawDesc, myNames);
 
         let explanation = `⚠️ Active Anomaly Alerts (${count} Requiring Response):\n\n• Latest: ${title}\n• Severity: ${latest.severity || 'Medium'}\n• Details: ${desc}\n\n`;
 

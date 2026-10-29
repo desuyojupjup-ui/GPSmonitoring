@@ -15,7 +15,7 @@ import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { Ionicons } from '@expo/vector-icons';
 import * as Speech from 'expo-speech';
 import { auth, db, collection, query, where, getDocs, getCleanEmployeeEmail } from '../firebase';
-import { getChatbotAssignmentContext } from '../utils/assignmentUtils';
+import { getChatbotAssignmentContext, personalizeAnomalyDescription, personalizeAnomalyTitle } from '../utils/assignmentUtils';
 
 const VOICE_COMMANDS = [
   { id: 'vc1', label: 'What is my assignment?', query: 'What is my assignment?' },
@@ -280,8 +280,10 @@ export default function ChatbotScreen({ route, user: propUser }) {
 
         const count = activeUserAnoms.length;
         const latest = activeUserAnoms[0];
-        const title = latest.title || latest.type || latest.action || 'Security Anomaly';
-        const desc = latest.description || latest.details || latest.reason || 'Unusual telemetry variance flagged.';
+        const rawTitle = latest.title || latest.type || latest.action || 'Security Anomaly';
+        const title = personalizeAnomalyTitle(rawTitle, myNames);
+        const rawDesc = latest.description || latest.details || latest.reason || 'Unusual telemetry variance flagged.';
+        const desc = personalizeAnomalyDescription(rawDesc, myNames);
 
         let explanation = `⚠️ Active Anomaly Alerts (${count} Requiring Response):\n\n• Latest: ${title}\n• Severity: ${latest.severity || 'Medium'}\n• Details: ${desc}\n\n`;
 
