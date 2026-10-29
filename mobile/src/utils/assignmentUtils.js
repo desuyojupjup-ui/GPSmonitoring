@@ -499,13 +499,14 @@ export async function getChatbotAssignmentContext(emp, userEmail, propUser) {
     cleanDocs = all.filter(a => isAssignmentForEmployee(a, emp, userEmail, currentUserName));
   } catch (e) {}
 
-  // Find active assignment
+  // Find active assignment strictly for TODAY or active non-passed shifts
   let activeAsg = cleanDocs.find(a => isAssignmentActiveToday(a));
   if (!activeAsg && cleanDocs.length > 0) {
     activeAsg = cleanDocs.find(a => {
       const st = (a.status || 'Active').toLowerCase();
-      return st === 'active' || st === 'in progress' || st === 'ongoing' || st === 'assigned' || st === 'on duty' || st === 'upcoming';
-    }) || cleanDocs[0];
+      const isActiveStatus = st === 'active' || st === 'in progress' || st === 'ongoing' || st === 'assigned' || st === 'on duty' || st === 'upcoming';
+      return isActiveStatus && !isAssignmentDatePassed(a);
+    }) || null;
   }
 
   // 3. Resolve Site Name
@@ -561,9 +562,12 @@ export async function getChatbotAssignmentContext(emp, userEmail, propUser) {
     }
   }
 
-  if (checkOutTimeStr) {
+  const isCheckedIn = Boolean(checkInTimeStr && !checkOutTimeStr);
+  const isCheckedOut = Boolean(checkOutTimeStr);
+
+  if (isCheckedOut) {
     statusText = `Completed (Checked out at ${checkOutTimeStr})`;
-  } else if (checkInTimeStr) {
+  } else if (isCheckedIn) {
     statusText = `On Duty (Checked in at ${checkInTimeStr})`;
   } else if (activeAsg?.status) {
     statusText = activeAsg.status;
@@ -585,6 +589,8 @@ export async function getChatbotAssignmentContext(emp, userEmail, propUser) {
     statusText,
     checkInTimeStr,
     checkOutTimeStr,
+    isCheckedIn,
+    isCheckedOut,
     todayRecord,
     assignment: activeAsg,
   };

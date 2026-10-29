@@ -327,15 +327,107 @@ export default function FloatingChatButton({ user: propUser }) {
       // Resolve assignment, worksite, shift, and today's attendance record
       const asgContext = await getChatbotAssignmentContext(employee, email, propUser);
 
-      // Keyword: Assignment
-      if (text.includes('assignment') || text.includes('ano') || text.includes('work') || text.includes('task')) {
-        if (!asgContext.hasAssignment) {
-          return "You have no active assignments scheduled for today. Please contact your operations supervisor.";
+      // Keyword 1: Anomaly / Geofence / Shift Overtime / Alert / Violation (Handled first to avoid collisions)
+      if (
+        text.includes('anomal') ||
+        text.includes('alert') ||
+        text.includes('violation') ||
+        text.includes('geofence') ||
+        text.includes('outside') ||
+        text.includes('overtime') ||
+        text.includes('flagged')
+      ) {
+        let userAnomalies = [];
+        try {
+          const myId = (employee?.id || employee?.idNum || employee?.empId || '').toLowerCase();
+          const myName = (employee?.name || propUser?.name || auth.currentUser?.displayName || '').toLowerCase();
+          const myEmail = (email || '').toLowerCase();
+
+          const isMatch = (item) => {
+            const aId = (item.employeeId || item.employee_id || item.empId || '').toLowerCase();
+            const aName = (item.employeeName || item.name || '').toLowerCase();
+            const aEmail = (item.employeeEmail || item.email || '').toLowerCase();
+            return (
+              (myId && aId && (aId === myId || aId.includes(myId))) ||
+              (myName && aName && (aName === myName || aName.includes(myName) || myName.includes(aName))) ||
+              (myEmail && aEmail && (aEmail === myEmail || aEmail.includes(myEmail)))
+            );
+          };
+
+          const [snapAi, snapLogs] = await Promise.all([
+            getDocs(collection(db, 'ai_analysis')).catch(() => ({ docs: [] })),
+            getDocs(collection(db, 'ActivityLogs')).catch(() => ({ docs: [] })),
+          ]);
+
+          snapAi.docs.forEach(d => {
+            const data = d.data();
+            if (isMatch(data)) {
+              userAnomalies.push({ id: d.id, ...data, source: 'ai_analysis' });
+            }
+          });
+
+          snapLogs.docs.forEach(d => {
+            const data = d.data();
+            const isAnomaly = data.type === 'Security Anomaly' || data.type === 'Anomaly' || data.status === 'Warning' || data.status === 'Error' || (data.action && (data.action.includes('Anomaly') || data.action.includes('Failed') || data.action.includes('Flagged')));
+            if (isAnomaly && isMatch(data)) {
+              userAnomalies.push({ id: d.id, ...data, source: 'ActivityLogs' });
+            }
+          });
+        } catch (_) {}
+
+        const activeUserAnoms = userAnomalies.filter(a => {
+          const st = (a.status || '').toLowerCase();
+          return st !== 'resolved' && st !== 'dismissed' && !a.employeeResponse;
+        });
+
+        if (activeUserAnoms.length === 0) {
+          return "✅ All clear! You have no unresolved anomaly alerts. Your GPS telemetry, geofence perimeter standing, and shift hours are all in normal status.";
         }
-        return `Current Assignment:\n\nSite: ${asgContext.siteName}\nShift: ${asgContext.shift}\nDate: ${asgContext.dateStr}\nStatus: ${asgContext.statusText}`;
+
+        const count = activeUserAnoms.length;
+        const latest = activeUserAnoms[0];
+        const title = latest.title || latest.type || latest.action || 'Security Anomaly';
+        const desc = latest.description || latest.details || latest.reason || 'Unusual telemetry variance flagged.';
+
+        let explanation = `⚠️ Active Anomaly Alerts (${count} Requiring Response):\n\n• Latest: ${title}\n• Severity: ${latest.severity || 'Medium'}\n• Details: ${desc}\n\n`;
+
+        if (latest.eventType === 'UNAUTHORIZED_LOCATION' || (latest.type || '').includes('Geofence')) {
+          explanation += "💡 AI Explanation:\nYou were detected outside your assigned worksite geofence perimeter.\n\n🎯 Recommended Actions:\n1. Open 'Anomaly Alerts' from your Home screen to submit an explanation.\n2. Return within the site perimeter to clear the boundary flag.";
+        } else if (latest.eventType === 'OVERTIME_SHIFT_EXCEEDED' || (latest.type || '').includes('Overtime')) {
+          explanation += "💡 AI Explanation:\nYour scheduled shift end time has elapsed, but you are still clocked in.\n\n🎯 Recommended Actions:\n1. If your shift is completed, please proceed to the Attendance screen and tap 'Check Out Now'.\n2. If authorized for overtime, inform your supervisor to approve the extension.";
+        } else {
+          explanation += "💡 Recommended Actions:\nPlease open the 'Anomaly Alerts' screen on your Home dashboard to review your alerts and submit an explanation or photo proof.";
+        }
+
+        return explanation;
       }
 
-      // Keyword: Site / Location
+      // Keyword 2: Assignment
+      if (
+        text.includes('assignment') ||
+        text.includes('task') ||
+        text.includes('work') ||
+        /\b(ano|anong)\s+(ang\s+)?(assignment|task|work|shift)/i.test(text)
+      ) {
+        // If she is done checkout: do NOT respond with the current assignment
+        if (asgContext.isCheckedOut) {
+          return `You have already checked out and completed your shift for today${asgContext.checkOutTimeStr ? ` (Checked out at ${asgContext.checkOutTimeStr})` : ''}. You have no active ongoing assignments at this time.`;
+        }
+
+        // Only respond with current assignment if she is checked in
+        if (asgContext.isCheckedIn) {
+          return `Current Assignment:\n\nSite: ${asgContext.siteName}\nShift: ${asgContext.shift}\nDate: ${asgContext.dateStr}\nStatus: On Duty (Checked in at ${asgContext.checkInTimeStr})`;
+        }
+
+        // If not checked in yet
+        if (asgContext.hasAssignment) {
+          return `You are currently not checked in. You have a scheduled shift at ${asgContext.siteName} (${asgContext.shift}) for today. Please check in upon arrival at your assigned site.`;
+        }
+
+        return "You have no active assignments scheduled for today. Please contact your operations supervisor.";
+      }
+
+      // Keyword 3: Site / Location
       if (text.includes('site') || text.includes('location') || text.includes('nasaan') || text.includes('where')) {
         if (!asgContext.hasAssignment) {
           return "No active worksite assignment found. Please contact your operations supervisor.";
@@ -343,7 +435,7 @@ export default function FloatingChatButton({ user: propUser }) {
         return `Assigned Site Location:\n\nName: ${asgContext.siteName}\nAddress: ${asgContext.address}\nShift: ${asgContext.shift}\nStatus: ${asgContext.statusText}`;
       }
 
-      // Keyword: Attendance count
+      // Keyword 4: Attendance count
       if (text.includes('attendance') || text.includes('ilang') || text.includes('count') || text.includes('record')) {
         let attCount = 0;
         try {
@@ -366,7 +458,7 @@ export default function FloatingChatButton({ user: propUser }) {
         return `You have ${attCount} recorded attendance check-in(s) in total.`;
       }
 
-      // Keyword: Time In / Check in
+      // Keyword 5: Time In / Check in
       if (text.includes('time') || text.includes('check in') || text.includes('oras') || text.includes('clock') || text.includes('in')) {
         if (asgContext.checkInTimeStr) {
           return `You checked in today at ${asgContext.checkInTimeStr}${asgContext.siteName ? ` at ${asgContext.siteName}` : ''}.${asgContext.checkOutTimeStr ? ` You checked out at ${asgContext.checkOutTimeStr}.` : ' Your status is currently On Duty.'}`;
@@ -374,66 +466,15 @@ export default function FloatingChatButton({ user: propUser }) {
         return `You have not timed in today yet.${asgContext.hasAssignment ? ` Your scheduled site is ${asgContext.siteName} (${asgContext.shift}). Please verify your GPS location upon arrival.` : ''}`;
       }
 
-      // Keyword: Status
+      // Keyword 6: Status
       if (text.includes('status') || text.includes('duty') || text.includes('profile')) {
         const dutyStatus = asgContext.checkInTimeStr && !asgContext.checkOutTimeStr ? 'On Duty' : (employee.status || 'Active');
         return `Employee Profile:\n\nStatus: ${dutyStatus}\nAssignment Status: ${asgContext.statusText}\nSite: ${asgContext.siteName || 'Unassigned'}\nDepartment: ${employee.department || employee.org || 'Operations'}\nRole: ${employee.role || employee.type || 'Field Specialist'}`;
       }
 
-      // Keyword: Delay / Report
+      // Keyword 7: Delay / Report
       if (text.includes('delay') || text.includes('roadblock') || text.includes('traffic') || text.includes('incident') || text.includes('report')) {
         return "To report a delay or roadblock, tap the 'Report Incident / Delay' button on your Home screen to notify your supervisor.";
-      }
-
-      // Keyword: Anomaly / Geofence / Shift Overtime / Alert / Violation
-      if (
-        text.includes('anomaly') ||
-        text.includes('alert') ||
-        text.includes('violation') ||
-        text.includes('geofence') ||
-        text.includes('outside') ||
-        text.includes('overtime') ||
-        text.includes('shift') ||
-        text.includes('flagged')
-      ) {
-        let userAnomalies = [];
-        try {
-          const snap = await getDocs(collection(db, 'ai_analysis'));
-          userAnomalies = snap.docs
-            .map(d => ({ id: d.id, ...d.data() }))
-            .filter(a => {
-              const aId = (a.employeeId || '').toLowerCase();
-              const aName = (a.employeeName || '').toLowerCase();
-              const aEmail = (a.employeeEmail || '').toLowerCase();
-              const myId = (employee.id || '').toLowerCase();
-              const myName = (employee.name || '').toLowerCase();
-              const myEmail = (email || '').toLowerCase();
-              return (
-                (myId && aId === myId) ||
-                (myName && (aName === myName || aName.includes(myName))) ||
-                (myEmail && aEmail === myEmail)
-              );
-            });
-        } catch (_) {}
-
-        const activeUserAnoms = userAnomalies.filter(a => a.status !== 'Resolved' && a.status !== 'Dismissed');
-
-        if (activeUserAnoms.length === 0) {
-          return "✅ All clear! You have no active anomaly alerts. Your GPS telemetry, geofence perimeter standing, and shift hours are all in normal status.";
-        }
-
-        const latest = activeUserAnoms[0];
-        let explanation = `⚠️ Active Anomaly Alert Detected:\n\nType: ${latest.type || 'Security Alert'}\nDetails: ${latest.description || 'Telemetry variance flagged'}\nSeverity: ${latest.severity || 'Medium'}\n\n`;
-
-        if (latest.eventType === 'UNAUTHORIZED_LOCATION' || (latest.type || '').includes('Geofence')) {
-          explanation += "💡 AI Explanation:\nYou were detected outside your assigned worksite geofence perimeter.\n\n🎯 Recommended Actions:\n1. If this was an authorized errand, task, or GPS drift, tap 'Anomaly Alerts' on your Home screen to submit an explanation.\n2. Return within the site perimeter to clear the boundary flag.";
-        } else if (latest.eventType === 'OVERTIME_SHIFT_EXCEEDED' || (latest.type || '').includes('Overtime')) {
-          explanation += "💡 AI Explanation:\nYour scheduled shift end time has elapsed, but you are still clocked in.\n\n🎯 Recommended Actions:\n1. If your shift is completed, please proceed to the Attendance screen and tap 'Check Out Now'.\n2. If authorized for overtime, inform your supervisor to approve the extension.";
-        } else {
-          explanation += "💡 Recommended Actions:\nOpen the Anomaly Alerts screen on your Home dashboard to review the alert and submit a dispute explanation with photo proof.";
-        }
-
-        return explanation;
       }
 
       return "I can assist you with Voice Commands:\n\n• What is my assignment?\n• Where is my site location?\n• What time did I check in?\n• Show my attendance count\n• What is my status?\n• Do I have any anomalies?\n\nTap the microphone icon anytime to speak a command.";
