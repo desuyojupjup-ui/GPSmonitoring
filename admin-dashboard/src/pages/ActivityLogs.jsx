@@ -1046,7 +1046,7 @@ export default function ActivityLogs() {
       {/* MODAL 1: INSPECTION MODAL */}
       {selectedLog && (
         <div style={{
-          position: 'fixed', inset: 0, background: 'rgba(15, 23, 42, 0.6)', backdropFilter: 'blur(4px)',
+          position: 'fixed', inset: 0, background: 'rgba(15, 23, 42, 0.65)',
           display: 'flex', alignItems: 'center', justifyContent: 'center', zIndex: 9999, padding: '20px'
         }}>
           <div style={{
@@ -1161,7 +1161,7 @@ export default function ActivityLogs() {
       {/* MODAL 2: ADD NEW AUDIT NOTE MODAL */}
       {showAddModal && (
         <div style={{
-          position: 'fixed', inset: 0, background: 'rgba(15, 23, 42, 0.6)', backdropFilter: 'blur(4px)',
+          position: 'fixed', inset: 0, background: 'rgba(15, 23, 42, 0.65)',
           display: 'flex', alignItems: 'center', justifyContent: 'center', zIndex: 9999, padding: '20px'
         }}>
           <div style={{

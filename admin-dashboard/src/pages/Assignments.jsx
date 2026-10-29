@@ -1715,8 +1715,7 @@ export default function Assignments() {
         <div style={{
           position: 'fixed',
           inset: 0,
-          background: 'rgba(15, 23, 42, 0.55)',
-          backdropFilter: 'blur(10px)',
+          background: 'rgba(15, 23, 42, 0.65)',
           display: 'flex',
           alignItems: 'center',
           justifyContent: 'center',
