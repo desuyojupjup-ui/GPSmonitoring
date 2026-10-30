@@ -51,6 +51,7 @@ import {
 } from '../services/verificationScheduler';
 import presenceService from '../services/presenceService';
 import locationLogService from '../services/locationLogService';
+import { fetchCurrentWeather } from '../services/weatherService';
 
 
 
@@ -174,6 +175,7 @@ export default function HomeScreen({ navigation, route, user: propUser }) {
   const [pendingSyncCount, setPendingSyncCount] = useState(0);
   const [isSyncing, setIsSyncing] = useState(false);
   const [unresolvedAnomalyCount, setUnresolvedAnomalyCount] = useState(0);
+  const [weather, setWeather] = useState(null);
   const currentAttendanceIdRef = useRef(null);
 
   const hasSetOnline = useRef(false);
@@ -191,6 +193,21 @@ export default function HomeScreen({ navigation, route, user: propUser }) {
     || formattedEmailName
     || 'Employee';
 
+  useEffect(() => {
+    let active = true;
+    fetchCurrentWeather().then(w => {
+      if (active && w) setWeather(w);
+    });
+    const interval = setInterval(() => {
+      fetchCurrentWeather().then(w => {
+        if (active && w) setWeather(w);
+      });
+    }, 10 * 60 * 1000);
+    return () => {
+      active = false;
+      clearInterval(interval);
+    };
+  }, []);
 
   useEffect(() => {
     getPendingSyncCount().then(setPendingSyncCount);
@@ -1257,7 +1274,7 @@ export default function HomeScreen({ navigation, route, user: propUser }) {
           </View>
         </View>
 
-        {/* Row 2: Greeting & Employee Name */}
+        {/* Row 2: Greeting & Employee Name on Left, Weather Forecast on Right */}
         <View style={styles.headerGreetingRow}>
           <View style={styles.greetingLeftCol}>
             <Text style={styles.greeting}>{getGreeting()}</Text>
@@ -1266,6 +1283,34 @@ export default function HomeScreen({ navigation, route, user: propUser }) {
               <Image source={require('../../assets/wave.png')} style={styles.waveIcon} />
             </View>
           </View>
+
+          {weather && (
+            <View style={styles.modernWeatherBox}>
+              <View style={styles.weatherIconTempRow}>
+                <Ionicons name={weather.icon || 'partly-sunny-outline'} size={17} color="#FDE047" />
+                <Text style={styles.modernWeatherTemp}>{weather.temp}</Text>
+                {(() => {
+                  const rawCond = (weather.condition || '')
+                    .replace(/overcast/gi, '')
+                    .replace(/^[•\s-]+|[•\s-]+$/g, '')
+                    .trim();
+                  return rawCond ? (
+                    <Text style={styles.modernWeatherConditionInline} numberOfLines={1}>
+                      • {rawCond}
+                    </Text>
+                  ) : null;
+                })()}
+              </View>
+              {weather.location ? (
+                <View style={styles.weatherLocationRow}>
+                  <Ionicons name="location-sharp" size={11} color="#C7D2FE" />
+                  <Text style={styles.modernWeatherLocation} numberOfLines={1}>
+                    {weather.location}
+                  </Text>
+                </View>
+              ) : null}
+            </View>
+          )}
         </View>
 
         {/* Offline Sync Banner Indicator */}
@@ -1792,6 +1837,44 @@ const styles = StyleSheet.create({
   greetingLeftCol: {
     flex: 1,
     paddingRight: 10,
+  },
+  modernWeatherBox: {
+    alignItems: 'flex-start',
+    justifyContent: 'center',
+    backgroundColor: 'rgba(255, 255, 255, 0.12)',
+    paddingHorizontal: 10,
+    paddingVertical: 5,
+    borderRadius: 14,
+  },
+  weatherIconTempRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 4,
+  },
+  modernWeatherTemp: {
+    color: '#FFFFFF',
+    fontSize: 15,
+    fontWeight: '800',
+    letterSpacing: -0.2,
+  },
+  modernWeatherConditionInline: {
+    color: '#E0E7FF',
+    fontSize: 11.5,
+    fontWeight: '600',
+    maxWidth: 110,
+  },
+  weatherLocationRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 3,
+    marginTop: 2,
+    paddingLeft: 1,
+  },
+  modernWeatherLocation: {
+    color: '#C7D2FE',
+    fontSize: 11,
+    fontWeight: '500',
+    maxWidth: 130,
   },
   actionNavGroup: {
     flexDirection: 'row',
