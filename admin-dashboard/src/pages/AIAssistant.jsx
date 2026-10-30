@@ -2,7 +2,7 @@ import React, { useState, useRef, useEffect } from 'react';
 import { Bot, Send, User, BarChart2, Users, MapPin, Clock, AlertCircle } from 'lucide-react';
 import { db, collection, onSnapshot, query } from '../firebase';
 import { resolveAssignmentStatus } from './Assignments';
-import { isEmployeeOnline, resolveEmployeeStatus } from '../utils/statusUtils';
+import { isEmployeeOnline, resolveEmployeeStatus, isEmployeeOnSite } from '../utils/statusUtils';
 
 const QUICK_PROMPTS = [
   { label: '🔴 Offline employees', query: 'who is offline' },
@@ -114,7 +114,7 @@ export default function AIAssistant() {
       // 3. On Site
       if (text.includes('on site') || text.includes('onsite')) {
         if (employees.length === 0) return '👥 No employee records found in the database.';
-        const onSite = employees.filter(e => isEmployeeOnline(e) && (e.status === 'On Site' || e.geofenceStatus === 'Inside Assigned Site'));
+        const onSite = employees.filter(e => isEmployeeOnSite(e, sites, assignments));
         if (onSite.length === 0) return '📍 **No employees are currently verified On Site.**';
         return (
           `📍 **${onSite.length} employee(s)** currently On Site:\n\n` +

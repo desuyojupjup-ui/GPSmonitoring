@@ -4,7 +4,7 @@ import { MessageSquare, X, Bot, Send, User, Minimize2, AlertTriangle, ShieldAler
 import chatbotIcon from '../assets/chatbot.png';
 import { db, collection, onSnapshot, query } from '../firebase';
 import { resolveAssignmentStatus } from '../pages/Assignments';
-import { isEmployeeOnline, resolveEmployeeStatus } from '../utils/statusUtils';
+import { isEmployeeOnline, resolveEmployeeStatus, isEmployeeOnSite } from '../utils/statusUtils';
 
 const QUICK_PROMPTS = [
   'Show detected anomalies',
@@ -408,11 +408,7 @@ export default function FloatingChatButton() {
       // 8. On Site inquiry
       if (text.includes('on site') || text.includes('onsite')) {
         if (employees.length === 0) return '👥 No employee records found in the database.';
-        const onSite = employees.filter(
-          (e) =>
-            isEmployeeOnline(e) &&
-            (e.status === 'On Site' || e.geofenceStatus === 'Inside Assigned Site')
-        );
+        const onSite = employees.filter((e) => isEmployeeOnSite(e, sites, assignments));
         if (onSite.length === 0) return '📍 **No employees are currently verified On Site.**';
         return (
           `📍 **${onSite.length} employee(s) currently On Site:**\n\n` +

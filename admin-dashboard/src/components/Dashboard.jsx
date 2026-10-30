@@ -14,8 +14,8 @@ import { db, collection, onSnapshot, query, limit, doc, updateDoc, addDoc, serve
 import { showToast } from '../utils/toast';
 import MapTracking from './MapTracking';
 import { resolveAssignmentStatus } from '../pages/Assignments';
-import { isEmployeeOnline, resolveEmployeeStatus, resolveEmployeeWorkType } from '../utils/statusUtils';
-export { isEmployeeOnline, resolveEmployeeStatus, resolveEmployeeWorkType };
+import { isEmployeeOnline, resolveEmployeeStatus, resolveEmployeeWorkType, isEmployeeOnSite } from '../utils/statusUtils';
+export { isEmployeeOnline, resolveEmployeeStatus, resolveEmployeeWorkType, isEmployeeOnSite };
 
 function GaugeRing({ pct, a, b }) {
   const r = 17, size = 44, cx = size / 2;
@@ -537,8 +537,8 @@ function DashboardDrilldownModal({
       items: employees.filter(e => resolveEmployeeWorkType(e, assignments) === 'Fixed Site Employee'),
       pills: [
         { label: 'Fixed Staff', filterKey: 'All', value: employees.filter(e => resolveEmployeeWorkType(e, assignments) === 'Fixed Site Employee').length },
-        { label: 'On Site', filterKey: 'On Duty', value: employees.filter(e => resolveEmployeeWorkType(e, assignments) === 'Fixed Site Employee' && resolveEmployeeStatus(e) === 'On Site').length, color: '#10B981' },
-        { label: 'On Duty', filterKey: 'On Duty', value: employees.filter(e => resolveEmployeeWorkType(e, assignments) === 'Fixed Site Employee' && ['On Duty', 'On Site'].includes(resolveEmployeeStatus(e))).length, color: '#3B82F6' },
+        { label: 'On Site', filterKey: 'On Duty', value: employees.filter(e => resolveEmployeeWorkType(e, assignments) === 'Fixed Site Employee' && isEmployeeOnSite(e, sites, assignments)).length, color: '#10B981' },
+        { label: 'On Duty', filterKey: 'On Duty', value: employees.filter(e => resolveEmployeeWorkType(e, assignments) === 'Fixed Site Employee' && ['On Duty', 'On Site'].includes(resolveEmployeeStatus(e, sites, assignments))).length, color: '#3B82F6' },
         { label: 'Assigned Sites', value: sites.length, color: '#6366F1' }
       ]
     },
@@ -625,9 +625,9 @@ function DashboardDrilldownModal({
       subtitle: 'Employees currently present and confirmed inside their assigned facility perimeter.',
       icon: MapPin,
       color: '#F59E0B',
-      items: employees.filter(e => resolveEmployeeStatus(e) === 'On Site' || (resolveEmployeeStatus(e) === 'On Duty' && e.geofenceStatus === 'Inside Assigned Site')),
+      items: employees.filter(e => isEmployeeOnSite(e, sites, assignments)),
       pills: [
-        { label: 'On Site Verified', value: employees.filter(e => resolveEmployeeStatus(e) === 'On Site' || (resolveEmployeeStatus(e) === 'On Duty' && e.geofenceStatus === 'Inside Assigned Site')).length, color: '#F59E0B' },
+        { label: 'On Site Verified', value: employees.filter(e => isEmployeeOnSite(e, sites, assignments)).length, color: '#F59E0B' },
         { label: 'Active Facilities', value: sites.length, color: '#3B82F6' }
       ]
     },
@@ -1820,18 +1820,15 @@ export default function Dashboard() {
   // On Duty includes On Duty, On Site, and In Transit (working workforce)
   const onDutyEmployees = useMemo(() => {
     return employees.filter(e => {
-      const s = resolveEmployeeStatus(e);
+      const s = resolveEmployeeStatus(e, sites, assignments, tick);
       return s === 'On Duty' || s === 'On Site' || s === 'In Transit';
     });
-  }, [employees, tick]);
+  }, [employees, sites, assignments, tick]);
   const onDutyCount = onDutyEmployees.length;
 
   const onSiteEmployees = useMemo(() => {
-    return employees.filter(e => {
-      const s = resolveEmployeeStatus(e);
-      return s === 'On Site' || (s === 'On Duty' && (e.geofenceStatus === 'Inside Assigned Site' || e.geofenceStatus === 'Inside'));
-    });
-  }, [employees, tick]);
+    return employees.filter(e => isEmployeeOnSite(e, sites, assignments, tick));
+  }, [employees, sites, assignments, tick]);
   const onSiteCount = onSiteEmployees.length;
 
   const offlineEmployees = useMemo(() => {
@@ -1933,10 +1930,7 @@ export default function Dashboard() {
   }, [mobileEmployees, tick]);
   const mobileActiveCount = mobileActiveEmployees.length;
 
-  const fixedOnSite = fixedEmployees.filter(e => {
-    const s = resolveEmployeeStatus(e);
-    return s === 'On Site' || (s === 'On Duty' && e.geofenceStatus === 'Inside Assigned Site');
-  }).length;
+  const fixedOnSite = fixedEmployees.filter(e => isEmployeeOnSite(e, sites, assignments, tick)).length;
 
   const buildingSitesCount = sites.filter(s => {
     const r = typeof s.radius === 'number' ? s.radius : (parseInt(s.radius) || 100);

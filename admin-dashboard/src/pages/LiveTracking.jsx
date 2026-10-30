@@ -5,6 +5,7 @@ import L from 'leaflet';
 import { Search, Navigation, Wifi, WifiOff, MapPin, Crosshair, ChevronRight, ChevronLeft, Layers, ShieldAlert, CheckCircle2, Clock, BatteryCharging, Zap, Compass, RotateCcw, X, Phone, UserCheck, Shield, Building2, Truck, Activity, Users, Radio } from 'lucide-react';
 import 'leaflet/dist/leaflet.css';
 import { db, collection, onSnapshot, query } from '../firebase';
+import { isEmployeeOnSite } from '../utils/statusUtils';
 
 // Google Maps Style Status Palette
 const STATUS_COLORS = {
@@ -54,10 +55,27 @@ export function isEmployeeOnline(emp, customNow) {
   return false;
 }
 
-export function getEmployeeStatus(emp, customNow) {
-  const now = (typeof customNow === 'number' && customNow > 1000000000000) ? customNow : Date.now();
+export function getEmployeeStatus(emp, sitesOrNow, customNow) {
+  let now = Date.now();
+  let sites = [];
+  if (typeof sitesOrNow === 'number' && sitesOrNow > 1000000000000) {
+    now = sitesOrNow;
+  } else if (Array.isArray(sitesOrNow)) {
+    sites = sitesOrNow;
+    if (typeof customNow === 'number' && customNow > 1000000000000) {
+      now = customNow;
+    }
+  }
+
   if (!isEmployeeOnline(emp, now)) return 'Offline';
-  return (emp.status && emp.status !== 'Offline') ? emp.status : 'On Duty';
+  const raw = (emp.status || '').trim();
+  if (raw === 'Offline') return 'Offline';
+  if (raw === 'In Transit') return 'In Transit';
+
+  if (isEmployeeOnSite(emp, sites, [], now)) {
+    return 'On Site';
+  }
+  return 'On Duty';
 }
 
 // Custom Premium Google-style Teardrop Marker Pin (Vector SVG, NO Emojis)
@@ -200,7 +218,7 @@ export default function LiveTracking() {
 
   const filtered = employees.filter(emp => {
     const matchS = emp.name?.toLowerCase().includes(search.toLowerCase()) || emp.idNum?.includes(search);
-    const effStatus = getEmployeeStatus(emp);
+    const effStatus = getEmployeeStatus(emp, sites);
     const matchF = filter === 'all' || effStatus.toLowerCase().replace(' ', '') === filter.toLowerCase().replace(' ', '');
     return matchS && matchF;
   });
@@ -229,10 +247,10 @@ export default function LiveTracking() {
 
   const FILTER_OPTIONS = [
     { id: 'all', label: 'All', icon: Users, color: '#1A73E8', count: employees.length },
-    { id: 'onsite', label: 'On Site', icon: MapPin, color: '#1E8E3E', count: employees.filter(e => getEmployeeStatus(e) === 'On Site').length },
-    { id: 'onduty', label: 'On Duty', icon: Activity, color: '#1A73E8', count: employees.filter(e => getEmployeeStatus(e) === 'On Duty').length },
-    { id: 'intransit', label: 'In Transit', icon: Truck, color: '#F9AB00', count: employees.filter(e => getEmployeeStatus(e) === 'In Transit').length },
-    { id: 'offline', label: 'Offline', icon: WifiOff, color: '#70757A', count: employees.filter(e => getEmployeeStatus(e) === 'Offline').length },
+    { id: 'onsite', label: 'On Site', icon: MapPin, color: '#1E8E3E', count: employees.filter(e => isEmployeeOnSite(e, sites)).length },
+    { id: 'onduty', label: 'On Duty', icon: Activity, color: '#1A73E8', count: employees.filter(e => getEmployeeStatus(e, sites) === 'On Duty').length },
+    { id: 'intransit', label: 'In Transit', icon: Truck, color: '#F9AB00', count: employees.filter(e => getEmployeeStatus(e, sites) === 'In Transit').length },
+    { id: 'offline', label: 'Offline', icon: WifiOff, color: '#70757A', count: employees.filter(e => getEmployeeStatus(e, sites) === 'Offline').length },
   ];
 
   return (
