@@ -169,6 +169,18 @@ export default function AnomalyAlertsScreen({ navigation, route, user: propUser 
     );
   };
 
+  // Helper: Normalize alert status so only explicitly resolved items show resolved
+  const normalizeAlertStatus = (rawStatus, hasEmployeeResponse) => {
+    const s = String(rawStatus || '').trim().toLowerCase();
+    if (s === 'resolved' || s === 'dismissed' || s === 'approved' || s === 'closed') {
+      return 'Resolved';
+    }
+    if (hasEmployeeResponse || s === 'responded' || s === 'under review' || s === 'under_review') {
+      return 'Responded';
+    }
+    return 'Pending Response';
+  };
+
   // ── Real-Time Listener for Employee Anomaly Alerts ──
   useEffect(() => {
     ensureAuthenticatedSession();
@@ -264,7 +276,7 @@ export default function AnomalyAlertsScreen({ navigation, route, user: propUser 
         const rawType = d.type || d.eventType || d.title || 'Security Anomaly';
         const type = personalizeAnomalyTitle(rawType, empNames);
         const severity = d.severity === 'Critical' ? 'High' : (d.severity || 'Medium');
-        const status = d.employeeResponse ? (d.status === 'Resolved' ? 'Resolved' : 'Responded') : (d.status || 'Active');
+        const status = normalizeAlertStatus(d.status, Boolean(d.employeeResponse));
 
         map.set(id, {
           id,
@@ -293,29 +305,51 @@ export default function AnomalyAlertsScreen({ navigation, route, user: propUser 
         const isAnomaly = d.type === 'Security Anomaly' || d.type === 'Anomaly' || d.status === 'Warning' || d.status === 'Error' || (d.action && (d.action.includes('Anomaly') || d.action.includes('Failed') || d.action.includes('Flagged')));
         if (!isAnomaly) return;
 
+        // Skip if directly linked to an existing ai_analysis alert
+        if (d.anomalyId && map.has(d.anomalyId)) return;
+
         const id = d.anomalyId || d.id;
-        if (!map.has(id)) {
-          const rawType = d.title || d.action || 'Telemetry Discrepancy';
-          const type = personalizeAnomalyTitle(rawType, empNames);
-          const status = d.employeeResponse ? (d.status === 'Resolved' ? 'Resolved' : 'Responded') : (d.status || 'Active');
-          map.set(id, {
-            id,
-            title: personalizeAnomalyTitle(d.title || d.action || 'Security Anomaly', empNames),
-            type,
-            category: categorizeAnomaly(rawType),
-            severity: d.severity || 'Medium',
-            status,
-            description: personalizeAnomalyDescription(d.description || d.action || 'Unusual activity flagged by monitoring service for your shift.', empNames),
-            location: d.siteName || d.location || 'Assigned Worksite',
-            timestamp: d.timestamp || d.createdAt,
-            employeeResponse: d.employeeResponse || null,
-            respondedAt: d.respondedAt || null,
-            responsePhoto: d.responsePhoto || null,
-            read: d.read || d.viewedByEmployee || false,
-            viewedByEmployee: d.viewedByEmployee || d.read || false,
-            sourceCollection: 'ActivityLogs',
+        if (map.has(id)) return;
+
+        // Deduplicate early departure / checkout logs if an early departure alert already exists in map
+        const isEarlyDepartureLog = (d.action && (d.action.includes('Early Departure') || d.action.includes('Early Check-Out'))) ||
+                                    (d.title && (d.title.includes('Early Departure') || d.title.includes('Early Check-Out')));
+        if (isEarlyDepartureLog) {
+          const logTs = getTsMillis(d.timestamp || d.createdAt);
+          const alreadyHasEarlyAlert = Array.from(map.values()).some((existing) => {
+            const isEarlyAnomaly = (existing.type && (existing.type.includes('Early') || existing.type.includes('Departure'))) ||
+                                   (existing.title && (existing.title.includes('Early') || existing.title.includes('Departure')));
+            if (!isEarlyAnomaly) return false;
+            const exTs = getTsMillis(existing.timestamp);
+            return Math.abs(exTs - logTs) < 30 * 60 * 1000;
           });
+
+          if (alreadyHasEarlyAlert) {
+            // Skip redundant check-out log so employee only sees the primary actionable alert
+            return;
+          }
         }
+
+        const rawType = d.title || d.action || 'Telemetry Discrepancy';
+        const type = personalizeAnomalyTitle(rawType, empNames);
+        const status = normalizeAlertStatus(d.status, Boolean(d.employeeResponse));
+        map.set(id, {
+          id,
+          title: personalizeAnomalyTitle(d.title || d.action || 'Security Anomaly', empNames),
+          type,
+          category: categorizeAnomaly(rawType),
+          severity: d.severity || 'Medium',
+          status,
+          description: personalizeAnomalyDescription(d.description || d.action || 'Unusual activity flagged by monitoring service for your shift.', empNames),
+          location: d.siteName || d.location || 'Assigned Worksite',
+          timestamp: d.timestamp || d.createdAt,
+          employeeResponse: d.employeeResponse || null,
+          respondedAt: d.respondedAt || null,
+          responsePhoto: d.responsePhoto || null,
+          read: d.read || d.viewedByEmployee || false,
+          viewedByEmployee: d.viewedByEmployee || d.read || false,
+          sourceCollection: 'ActivityLogs',
+        });
       });
 
       // 3. Process facial_verifications for missed or failed verification
@@ -329,7 +363,7 @@ export default function AnomalyAlertsScreen({ navigation, route, user: propUser 
         if (!map.has(id)) {
           const isMissed = d.verificationResult === 'missed' || d.verificationStatus === 'missed';
           const title = isMissed ? 'Missed Selfie Verification' : 'Selfie Verification Discrepancy';
-          const status = d.employeeResponse ? (d.status === 'Resolved' ? 'Resolved' : 'Responded') : (d.status || 'Active');
+          const status = normalizeAlertStatus(d.status, Boolean(d.employeeResponse));
 
           map.set(id, {
             id,
@@ -611,9 +645,9 @@ export default function AnomalyAlertsScreen({ navigation, route, user: propUser 
           </View>
         ) : (
           filteredAlerts.map((item) => {
-            const isPending = item.status === 'Pending Response' || item.status === 'Active';
-            const isResponded = item.status === 'Responded';
             const isResolved = item.status === 'Resolved' || item.status === 'Dismissed';
+            const isResponded = item.status === 'Responded';
+            const isPending = !isResolved && !isResponded;
 
             const severityColor = item.severity === 'High' ? '#EF4444' : (item.severity === 'Medium' ? '#F59E0B' : '#3B82F6');
             const categoryMeta = getCategoryMeta(item.category);
@@ -659,18 +693,18 @@ export default function AnomalyAlertsScreen({ navigation, route, user: propUser 
                 {/* Status Indicator Banner */}
                 <View style={[
                   styles.statusBanner,
-                  isPending ? styles.statusBannerPending : (isResponded ? styles.statusBannerResponded : styles.statusBannerResolved)
+                  isResolved ? styles.statusBannerResolved : (isResponded ? styles.statusBannerResponded : styles.statusBannerPending)
                 ]}>
                   <Ionicons
-                    name={isPending ? 'alert-circle' : (isResponded ? 'chatbubble-ellipses' : 'checkmark-circle')}
+                    name={isResolved ? 'checkmark-circle' : (isResponded ? 'chatbubble-ellipses' : 'alert-circle')}
                     size={16}
-                    color={isPending ? '#EF4444' : (isResponded ? '#4F46E5' : '#10B981')}
+                    color={isResolved ? '#10B981' : (isResponded ? '#4F46E5' : '#EF4444')}
                   />
                   <Text style={[
                     styles.statusBannerText,
-                    { color: isPending ? '#B91C1C' : (isResponded ? '#4338CA' : '#047857') }
+                    { color: isResolved ? '#047857' : (isResponded ? '#4338CA' : '#B91C1C') }
                   ]}>
-                    {isPending ? 'Action Needed: Explanation required' : (isResponded ? 'Response Submitted: Under Review' : 'Alert Resolved')}
+                    {isResolved ? 'Alert Resolved' : (isResponded ? 'Response Submitted: Under Review' : 'Action Needed: Explanation required')}
                   </Text>
                 </View>
 

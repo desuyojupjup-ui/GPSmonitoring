@@ -1066,9 +1066,10 @@ export default function HomeScreen({ navigation, route, user: propUser }) {
         }
       } catch (_) {}
 
+      let anomalyDocId = null;
       if (earlyInfo.isEarly) {
         const departureDesc = `Employee checked out early at ${now.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit', hour12: true })} before scheduled shift end (${earlyInfo.shiftEndStr}; ${earlyInfo.minutesEarly}m early departure).`;
-        await writeSecurityEvent({
+        anomalyDocId = await writeSecurityEvent({
           eventType: 'EARLY_CHECKOUT',
           employee: {
             id: employee.id,
@@ -1120,7 +1121,8 @@ export default function HomeScreen({ navigation, route, user: propUser }) {
         site_id: site?.id || 'Unknown',
         siteName: attendance.siteName || site?.name || assignment?.site || 'Unassigned Site',
         action: earlyInfo.isEarly ? 'Check Out (Early Departure)' : 'Check Out',
-        type: earlyInfo.isEarly ? 'Security Anomaly' : 'Attendance',
+        type: 'Attendance',
+        anomalyId: anomalyDocId || null,
         timestamp: serverTimestamp(),
         status: earlyInfo.isEarly ? 'Warning' : 'Normal',
         details: earlyInfo.isEarly ? `Early departure: ${earlyInfo.minutesEarly}m before ${earlyInfo.shiftEndStr}` : 'Shift Completed'
