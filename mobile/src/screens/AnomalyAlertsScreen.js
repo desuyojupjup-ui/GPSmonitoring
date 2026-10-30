@@ -136,22 +136,33 @@ export default function AnomalyAlertsScreen({ navigation, route, user: propUser 
     .map(e => e.split('@')[0].trim().toLowerCase())
     .filter(Boolean);
 
-  // ── Sync Employee Work Type (Fixed Site vs Mobile Field) ──
+  // ── Sync Employee Record & Work Type strictly for the currently logged-in user ──
   useEffect(() => {
     const unsub = onSnapshot(collection(db, 'employees'), (snap) => {
-      const emailLower = (currentEmail || '').toLowerCase();
-      const uid = (auth.currentUser?.uid || '').toLowerCase();
-      snap.forEach((d) => {
+      if (snap.empty) return;
+      const uid = (auth.currentUser?.uid || '').toLowerCase().trim();
+      const emailLower = (currentEmail || cleanAuthEmail || '').toLowerCase().trim();
+      const explicitParamId = (route?.params?.employee?.id || route?.params?.user?.id || propUser?.id || '').toLowerCase().trim();
+
+      // Find ONLY the exact document belonging to this employee (preventing any cross-employee overwrite)
+      const match = snap.docs.find((d) => {
         const data = d.data();
-        const dEmail = (data.email || '').toLowerCase();
-        const dId = (d.id || '').toLowerCase();
-        if (dId === uid || empIds.includes(dId) || (dEmail && (dEmail === emailLower || emailPrefixes.includes(dEmail.split('@')[0])))) {
-          setEmployeeRecord({ id: d.id, ...data });
-        }
+        const dId = (d.id || '').toLowerCase().trim();
+        const dUid = (data.uid || data.firebaseUid || '').toString().toLowerCase().trim();
+        const dEmail = (data.email || data.empEmail || '').toLowerCase().trim();
+
+        if (uid && (dId === uid || dUid === uid)) return true;
+        if (explicitParamId && (dId === explicitParamId || dUid === explicitParamId)) return true;
+        if (emailLower && dEmail && dEmail === emailLower) return true;
+        return false;
       });
+
+      if (match) {
+        setEmployeeRecord({ id: match.id, ...match.data() });
+      }
     }, () => {});
     return () => unsub();
-  }, [currentEmail, empIds.join(',')]);
+  }, [currentEmail, cleanAuthEmail, route?.params?.employee?.id, route?.params?.user?.id, propUser?.id]);
 
   const empWorkType = (employeeRecord?.workType || employeeRecord?.employeeType || employeeRecord?.type || empParam?.workType || '').toString().toLowerCase();
   const isFieldEmployee = empWorkType.includes('mobile') || empWorkType.includes('field');
@@ -235,7 +246,6 @@ export default function AnomalyAlertsScreen({ navigation, route, user: propUser 
         item.userName,
         item.employee?.name,
         item.user?.name,
-        item.employeeName ? null : item.name,
       ].filter(x => Boolean(x) && String(x).trim() !== '')
        .map(n => String(n).trim().toLowerCase())
        .filter(n => !genericNameWords.includes(n) && !n.includes('verification') && !n.includes('anomaly') && !n.includes('attendance') && !n.includes('telemetry') && !n.includes('employee'));

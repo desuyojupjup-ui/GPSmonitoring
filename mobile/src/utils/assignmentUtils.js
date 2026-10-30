@@ -701,30 +701,43 @@ export function personalizeAnomalyDescription(text, empNames = []) {
   if (!text || typeof text !== 'string') return text || '';
   let out = text;
 
+  // 0. "Employee [Name] checked out early / departed early / left early" -> "You checked out early..."
+  out = out.replace(/Employee(?:\s+[A-Za-z0-9\s,\.\-']+?)?\s+checked out early/gi, 'You checked out early');
+  out = out.replace(/Employee(?:\s+[A-Za-z0-9\s,\.\-']+?)?\s+checked out/gi, 'You checked out');
+  out = out.replace(/Employee(?:\s+[A-Za-z0-9\s,\.\-']+?)?\s+clocked out early/gi, 'You clocked out early');
+  out = out.replace(/Employee(?:\s+[A-Za-z0-9\s,\.\-']+?)?\s+clocked out/gi, 'You clocked out');
+  out = out.replace(/Employee(?:\s+[A-Za-z0-9\s,\.\-']+?)?\s+departed early/gi, 'You departed early');
+  out = out.replace(/Employee(?:\s+[A-Za-z0-9\s,\.\-']+?)?\s+departed/gi, 'You departed');
+  out = out.replace(/Employee(?:\s+[A-Za-z0-9\s,\.\-']+?)?\s+left early/gi, 'You left early');
+  out = out.replace(/Employee(?:\s+[A-Za-z0-9\s,\.\-']+?)?\s+left/gi, 'You left');
+  out = out.replace(/Employee(?:\s+[A-Za-z0-9\s,\.\-']+?)?\s+is still clocked in/gi, 'You are still clocked in');
+  out = out.replace(/Employee(?:\s+[A-Za-z0-9\s,\.\-']+?)?\s+clocked in/gi, 'You clocked in');
+  out = out.replace(/Employee(?:\s+[A-Za-z0-9\s,\.\-']+?)?\s+stepped outside/gi, 'You stepped outside');
+
   // 1. "Employee <Name> did not check in" -> "You did not check in"
-  out = out.replace(/Employee\s+[A-Za-z0-9\s,\.\-']+?\s+did not check in/gi, 'You did not check in');
+  out = out.replace(/Employee(?:\s+[A-Za-z0-9\s,\.\-']+?)?\s+did not check in/gi, 'You did not check in');
   out = out.replace(/Employee\s+did not check in/gi, 'You did not check in');
 
   // 2. "Employee <Name> checked in but failed to check out" -> "You checked in but failed to check out"
-  out = out.replace(/Employee\s+[A-Za-z0-9\s,\.\-']+?\s+checked in but failed to check out/gi, 'You checked in but failed to check out');
+  out = out.replace(/Employee(?:\s+[A-Za-z0-9\s,\.\-']+?)?\s+checked in but failed to check out/gi, 'You checked in but failed to check out');
   out = out.replace(/Employee\s+checked in but failed to check out/gi, 'You checked in but failed to check out');
 
   // 3. "Employee <Name> failed to check in / check out"
-  out = out.replace(/Employee\s+[A-Za-z0-9\s,\.\-']+?\s+failed to check in/gi, 'You failed to check in');
+  out = out.replace(/Employee(?:\s+[A-Za-z0-9\s,\.\-']+?)?\s+failed to check in/gi, 'You failed to check in');
   out = out.replace(/Employee\s+failed to check in/gi, 'You failed to check in');
-  out = out.replace(/Employee\s+[A-Za-z0-9\s,\.\-']+?\s+failed to check out/gi, 'You failed to check out');
+  out = out.replace(/Employee(?:\s+[A-Za-z0-9\s,\.\-']+?)?\s+failed to check out/gi, 'You failed to check out');
   out = out.replace(/Employee\s+failed to check out/gi, 'You failed to check out');
 
   // 4. "Employee <Name> has not checked in / checked out"
-  out = out.replace(/Employee\s+[A-Za-z0-9\s,\.\-']+?\s+has not checked in/gi, 'You have not checked in');
+  out = out.replace(/Employee(?:\s+[A-Za-z0-9\s,\.\-']+?)?\s+has not checked in/gi, 'You have not checked in');
   out = out.replace(/Employee\s+has not checked in/gi, 'You have not checked in');
-  out = out.replace(/Employee\s+[A-Za-z0-9\s,\.\-']+?\s+has not checked out/gi, 'You have not checked out');
+  out = out.replace(/Employee(?:\s+[A-Za-z0-9\s,\.\-']+?)?\s+has not checked out/gi, 'You have not checked out');
   out = out.replace(/Employee\s+has not checked out/gi, 'You have not checked out');
 
   // 5. "Employee <Name> is/was outside the assigned geofence" -> "You are/were outside the assigned geofence"
-  out = out.replace(/Employee\s+[A-Za-z0-9\s,\.\-']+?\s+is outside/gi, 'You are outside');
+  out = out.replace(/Employee(?:\s+[A-Za-z0-9\s,\.\-']+?)?\s+is outside/gi, 'You are outside');
   out = out.replace(/Employee\s+is outside/gi, 'You are outside');
-  out = out.replace(/Employee\s+[A-Za-z0-9\s,\.\-']+?\s+was outside/gi, 'You were outside');
+  out = out.replace(/Employee(?:\s+[A-Za-z0-9\s,\.\-']+?)?\s+was outside/gi, 'You were outside');
   out = out.replace(/Employee\s+was outside/gi, 'You were outside');
 
   // 6. Replace specific employee names if present
@@ -737,12 +750,19 @@ export function personalizeAnomalyDescription(text, empNames = []) {
     out = out.replace(new RegExp(`assigned to (?:Employee\\s+)?${escaped}`, 'gi'), 'assigned to you');
     out = out.replace(new RegExp(`^${escaped}\\s+did not check in`, 'gi'), 'You did not check in');
     out = out.replace(new RegExp(`^${escaped}\\s+checked in but failed to check out`, 'gi'), 'You checked in but failed to check out');
+    out = out.replace(new RegExp(`^${escaped}\\s+checked out early`, 'gi'), 'You checked out early');
+    out = out.replace(new RegExp(`^${escaped}\\s+checked out`, 'gi'), 'You checked out');
+    out = out.replace(new RegExp(`^${escaped}\\s+departed early`, 'gi'), 'You departed early');
+    out = out.replace(new RegExp(`^${escaped}\\s+left early`, 'gi'), 'You left early');
+    out = out.replace(new RegExp(`^${escaped}\\s+is still clocked in`, 'gi'), 'You are still clocked in');
+    out = out.replace(new RegExp(`^${escaped}\\s+clocked out`, 'gi'), 'You clocked out');
+    out = out.replace(new RegExp(`^${escaped}\\s+stepped outside`, 'gi'), 'You stepped outside');
     out = out.replace(new RegExp(`^${escaped}\\s+is outside`, 'gi'), 'You are outside');
     out = out.replace(new RegExp(`^${escaped}\\s+was outside`, 'gi'), 'You were outside');
   });
 
-  out = out.replace(/flagged for (?:Field )?Employee/gi, 'flagged for your shift');
-  out = out.replace(/detected for (?:Field )?Employee/gi, 'detected on your device');
+  out = out.replace(/flagged for (?:Field |Fixed |Fixed Site )?Employee/gi, 'flagged for your shift');
+  out = out.replace(/detected for (?:Field |Fixed |Fixed Site )?Employee/gi, 'detected on your device');
 
   // 7. Adjust pronouns
   out = out.replace(/\bfor his assignment\b/gi, 'for your assignment');
@@ -759,6 +779,14 @@ export function personalizeAnomalyDescription(text, empNames = []) {
   out = out.replace(/\bher location\b/gi, 'your location');
   out = out.replace(/\bwithout an employee response\b/gi, 'without your response');
 
+  // 8. Catch-all starting with generic "Employee "
+  out = out.replace(/^Employee\s+checked\s+out\s+early/i, 'You checked out early');
+  out = out.replace(/^Employee\s+checked\s+out/i, 'You checked out');
+  out = out.replace(/^Employee\s+departed\s+early/i, 'You departed early');
+  out = out.replace(/^Employee\s+left\s+early/i, 'You left early');
+  out = out.replace(/^Employee\s+is\s+outside/i, 'You are outside');
+  out = out.replace(/^Employee\s+was\s+outside/i, 'You were outside');
+
   if (out.length > 0) {
     out = out.charAt(0).toUpperCase() + out.slice(1);
   }
@@ -773,8 +801,10 @@ export function personalizeAnomalyTitle(title, empNames = []) {
     if (!name || name.length < 2) return;
     const escaped = name.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
     out = out.replace(new RegExp(`\\s+(?:for|-)\\s+(?:Employee\\s+)?${escaped}`, 'gi'), '');
+    out = out.replace(new RegExp(`^${escaped}:?\\s*`, 'gi'), '');
   });
-  out = out.replace(/\s+for\s+(?:Field\s+)?Employee/gi, '');
+  out = out.replace(/\s+for\s+(?:Field\s+|Fixed\s+|Fixed\s+Site\s+)?Employee/gi, '');
+  out = out.replace(/^(?:Field\s+|Fixed\s+|Fixed\s+Site\s+)?Employee\s+/i, '');
   out = out.replace(/^AI Anomaly:\s*/i, '');
   return out.trim();
 }

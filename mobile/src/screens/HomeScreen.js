@@ -1088,7 +1088,7 @@ export default function HomeScreen({ navigation, route, user: propUser }) {
 
       let anomalyDocId = null;
       if (earlyInfo.isEarly) {
-        const departureDesc = `Employee checked out early at ${now.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit', hour12: true })} before scheduled shift end (${earlyInfo.shiftEndStr}; ${earlyInfo.minutesEarly}m early departure).`;
+        const departureDesc = `You checked out early at ${now.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit', hour12: true })} before scheduled shift end (${earlyInfo.shiftEndStr}; ${earlyInfo.minutesEarly}m early departure).`;
         anomalyDocId = await writeSecurityEvent({
           eventType: 'EARLY_CHECKOUT',
           employee: {
