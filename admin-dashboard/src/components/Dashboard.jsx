@@ -537,8 +537,8 @@ function DashboardDrilldownModal({
       items: employees.filter(e => resolveEmployeeWorkType(e, assignments) === 'Fixed Site Employee'),
       pills: [
         { label: 'Fixed Staff', filterKey: 'All', value: employees.filter(e => resolveEmployeeWorkType(e, assignments) === 'Fixed Site Employee').length },
-        { label: 'On Site', filterKey: 'On Duty', value: employees.filter(e => resolveEmployeeWorkType(e, assignments) === 'Fixed Site Employee' && isEmployeeOnSite(e, sites, assignments)).length, color: '#10B981' },
-        { label: 'On Duty', filterKey: 'On Duty', value: employees.filter(e => resolveEmployeeWorkType(e, assignments) === 'Fixed Site Employee' && ['On Duty', 'On Site'].includes(resolveEmployeeStatus(e, sites, assignments))).length, color: '#3B82F6' },
+        { label: 'On Site', filterKey: 'On Duty', value: employees.filter(e => resolveEmployeeWorkType(e, assignments) === 'Fixed Site Employee' && isEmployeeOnSite(e, sites, assignments, attendance)).length, color: '#10B981' },
+        { label: 'On Duty', filterKey: 'On Duty', value: employees.filter(e => resolveEmployeeWorkType(e, assignments) === 'Fixed Site Employee' && ['On Duty', 'On Site'].includes(resolveEmployeeStatus(e, sites, assignments, attendance))).length, color: '#3B82F6' },
         { label: 'Assigned Sites', value: sites.length, color: '#6366F1' }
       ]
     },
@@ -587,12 +587,12 @@ function DashboardDrilldownModal({
       subtitle: 'Workforce currently clocked in, verified on duty, on site, or in operational transit.',
       icon: CheckCircle,
       color: '#10B981',
-      items: employees.filter(e => ['On Duty', 'On Site', 'In Transit'].includes(resolveEmployeeStatus(e))),
+      items: employees.filter(e => ['On Duty', 'On Site', 'In Transit'].includes(resolveEmployeeStatus(e, sites, assignments, attendance))),
       pills: [
-        { label: 'Total On Duty', filterKey: 'All', value: employees.filter(e => ['On Duty', 'On Site', 'In Transit'].includes(resolveEmployeeStatus(e))).length, color: '#10B981' },
-        { label: 'On Site', value: employees.filter(e => resolveEmployeeStatus(e) === 'On Site').length, color: '#3B82F6' },
-        { label: 'In Transit', value: employees.filter(e => resolveEmployeeStatus(e) === 'In Transit').length, color: '#F59E0B' },
-        { label: 'Active Ratio', value: `${employees.length > 0 ? Math.round((employees.filter(e => ['On Duty', 'On Site', 'In Transit'].includes(resolveEmployeeStatus(e))).length / employees.length) * 100) : 0}%`, color: '#6366F1' }
+        { label: 'Total On Duty', filterKey: 'All', value: employees.filter(e => ['On Duty', 'On Site', 'In Transit'].includes(resolveEmployeeStatus(e, sites, assignments, attendance))).length, color: '#10B981' },
+        { label: 'On Site', value: employees.filter(e => isEmployeeOnSite(e, sites, assignments, attendance)).length, color: '#3B82F6' },
+        { label: 'In Transit', value: employees.filter(e => resolveEmployeeStatus(e, sites, assignments, attendance) === 'In Transit').length, color: '#F59E0B' },
+        { label: 'Active Ratio', value: `${employees.length > 0 ? Math.round((employees.filter(e => ['On Duty', 'On Site', 'In Transit'].includes(resolveEmployeeStatus(e, sites, assignments, attendance))).length / employees.length) * 100) : 0}%`, color: '#6366F1' }
       ]
     },
     offline: {
@@ -625,9 +625,9 @@ function DashboardDrilldownModal({
       subtitle: 'Employees currently present and confirmed inside their assigned facility perimeter.',
       icon: MapPin,
       color: '#F59E0B',
-      items: employees.filter(e => isEmployeeOnSite(e, sites, assignments)),
+      items: employees.filter(e => isEmployeeOnSite(e, sites, assignments, attendance)),
       pills: [
-        { label: 'On Site Verified', value: employees.filter(e => isEmployeeOnSite(e, sites, assignments)).length, color: '#F59E0B' },
+        { label: 'On Site Verified', value: employees.filter(e => isEmployeeOnSite(e, sites, assignments, attendance)).length, color: '#F59E0B' },
         { label: 'Active Facilities', value: sites.length, color: '#3B82F6' }
       ]
     },
@@ -1817,18 +1817,18 @@ export default function Dashboard() {
   // Compute Active Stats
   const totalEmp = employees.length;
 
-  // On Duty includes On Duty, On Site, and In Transit (working workforce)
+  // On Duty includes On Duty, On Site, and In Transit (working workforce, excluding completed checkouts)
   const onDutyEmployees = useMemo(() => {
     return employees.filter(e => {
-      const s = resolveEmployeeStatus(e, sites, assignments, tick);
+      const s = resolveEmployeeStatus(e, sites, assignments, attendance, tick);
       return s === 'On Duty' || s === 'On Site' || s === 'In Transit';
     });
-  }, [employees, sites, assignments, tick]);
+  }, [employees, sites, assignments, attendance, tick]);
   const onDutyCount = onDutyEmployees.length;
 
   const onSiteEmployees = useMemo(() => {
-    return employees.filter(e => isEmployeeOnSite(e, sites, assignments, tick));
-  }, [employees, sites, assignments, tick]);
+    return employees.filter(e => isEmployeeOnSite(e, sites, assignments, attendance, tick));
+  }, [employees, sites, assignments, attendance, tick]);
   const onSiteCount = onSiteEmployees.length;
 
   const offlineEmployees = useMemo(() => {
@@ -1930,7 +1930,7 @@ export default function Dashboard() {
   }, [mobileEmployees, tick]);
   const mobileActiveCount = mobileActiveEmployees.length;
 
-  const fixedOnSite = fixedEmployees.filter(e => isEmployeeOnSite(e, sites, assignments, tick)).length;
+  const fixedOnSite = fixedEmployees.filter(e => isEmployeeOnSite(e, sites, assignments, attendance, tick)).length;
 
   const buildingSitesCount = sites.filter(s => {
     const r = typeof s.radius === 'number' ? s.radius : (parseInt(s.radius) || 100);

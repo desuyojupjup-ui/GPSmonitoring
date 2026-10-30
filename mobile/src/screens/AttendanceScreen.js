@@ -563,9 +563,15 @@ export default function AttendanceScreen({ navigation, route, user: propUser }) 
       await updateDoc(doc(db, 'attendance', rec.id), checkoutPayload).catch(() => { });
 
       if (emp?.id && emp.id !== 'emp_fallback') {
-        await updateDoc(doc(db, 'employees', emp.id), { status: 'Online', lastActive: Date.now(), isOnline: true }).catch(() => { });
-        presenceService.setCurrentStatus('Online');
-        presenceService.sendHeartbeat(true, 'Online');
+        await updateDoc(doc(db, 'employees', emp.id), {
+          status: 'Completed',
+          attendanceStatus: 'Completed',
+          lastCheckOut: Date.now(),
+          lastActive: Date.now(),
+          isOnline: true
+        }).catch(() => { });
+        presenceService.setCurrentStatus('Completed');
+        presenceService.sendHeartbeat(true, 'Completed');
       }
 
       await addDoc(collection(db, 'ActivityLogs'), {

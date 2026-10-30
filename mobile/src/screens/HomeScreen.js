@@ -1127,12 +1127,14 @@ export default function HomeScreen({ navigation, route, user: propUser }) {
 
       if (employee.id && employee.id !== 'emp_fallback') {
         await updateDoc(doc(db, 'employees', employee.id), {
-          status: 'Online',
+          status: 'Completed',
+          attendanceStatus: 'Completed',
+          lastCheckOut: Date.now(),
           lastActive: Date.now(),
           isOnline: true
         });
-        presenceService.setCurrentStatus('Online');
-        presenceService.sendHeartbeat(true, 'Online');
+        presenceService.setCurrentStatus('Completed');
+        presenceService.sendHeartbeat(true, 'Completed');
       }
 
       await addDoc(collection(db, 'ActivityLogs'), {
