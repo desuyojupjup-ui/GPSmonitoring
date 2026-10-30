@@ -5,6 +5,7 @@ import Swal from 'sweetalert2';
 import { db, collection, onSnapshot, addDoc, updateDoc, deleteDoc, doc, query, createSecondaryAuthUser } from '../firebase';
 import { showToast, showConfirmDelete } from '../utils/toast';
 import { ResponsiveContainer, PieChart, Pie, Cell, BarChart, Bar, XAxis, YAxis, Tooltip, CartesianGrid } from 'recharts';
+import { hasEmployeeCheckedOut } from '../utils/statusUtils';
 
 const CustomPieTooltip = ({ active, payload }) => {
   if (active && payload && payload.length) {
@@ -121,6 +122,7 @@ export function isEmployeeOnline(emp, customNow) {
 export function getEmployeeStatus(emp, customNow) {
   const now = (typeof customNow === 'number' && customNow > 1000000000000) ? customNow : Date.now();
   if (!isEmployeeOnline(emp, now)) return 'Offline';
+  if (hasEmployeeCheckedOut(emp)) return 'Completed';
   return (emp.status && emp.status !== 'Offline') ? emp.status : 'Online';
 }
 

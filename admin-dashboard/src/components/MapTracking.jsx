@@ -16,6 +16,7 @@ const STATUS_COLORS = {
   'On Site': '#10B981',
   'On Duty': '#3B82F6',
   'In Transit': '#F59E0B',
+  'Completed': '#10B981',
   'Offline': '#9CA3AF',
 };
 
@@ -83,7 +84,7 @@ function MapFocusController({ focusedEmployee, locations = {} }) {
   return null;
 }
 
-export default function MapTracking({ employees = [], sites = [], locations = {}, onFullscreen, focusedEmployee = null, onClearFocus = null }) {
+export default function MapTracking({ employees = [], sites = [], attendance = [], locations = {}, onFullscreen, focusedEmployee = null, onClearFocus = null }) {
   const mappableEmployees = employees.filter(e => (e.lat && e.lng) || locations[e.id]);
   const mappableLocations = mappableEmployees.map(emp => ({
     lat: emp.lat || locations[emp.id]?.lat,
@@ -111,7 +112,7 @@ export default function MapTracking({ employees = [], sites = [], locations = {}
         {mappableEmployees.map(emp => {
           const lat = emp.lat || locations[emp.id]?.lat;
           const lng = emp.lng || locations[emp.id]?.lng;
-          const status = resolveEmployeeStatus(emp);
+          const status = resolveEmployeeStatus(emp, sites, [], attendance);
           return (
             <Marker key={emp.id} position={[lat, lng]} icon={createEmojiIcon(getInitials(emp.name), STATUS_COLORS[status] || '#9CA3AF', emp.profilePic)}>
               <Popup>
@@ -176,6 +177,7 @@ export default function MapTracking({ employees = [], sites = [], locations = {}
           { label: 'On Site',    color: '#10B981' },
           { label: 'On Duty',    color: '#3B82F6' },
           { label: 'In Transit', color: '#F59E0B' },
+          { label: 'Completed',  color: '#10B981' },
           { label: 'Offline',    color: '#9CA3AF' },
         ].map(l => (
           <div key={l.label} className="legend-premium-item">
