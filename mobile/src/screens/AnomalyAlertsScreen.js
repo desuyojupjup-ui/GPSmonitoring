@@ -111,7 +111,12 @@ export default function AnomalyAlertsScreen({ navigation, route, user: propUser 
   ].filter(x => x !== undefined && x !== null && String(x).trim() !== '' && String(x).trim() !== 'emp_fallback')
    .map(x => String(x).trim().toLowerCase())));
 
-  const genericNameWords = ['employee', 'user', 'guard', 'staff', 'admin', 'officer', 'field employee', 'personnel', 'security'];
+  const genericNameWords = [
+    'employee', 'user', 'guard', 'staff', 'admin', 'officer',
+    'field employee', 'fixed employee', 'fixed site employee', 'mobile employee', 'mobile field employee',
+    'personnel', 'security', 'unassigned', 'unknown', 'system', 'test', 'demo'
+  ];
+
   const empNames = Array.from(new Set([
     employeeRecord?.name,
     employeeRecord?.displayName,
@@ -123,7 +128,7 @@ export default function AnomalyAlertsScreen({ navigation, route, user: propUser 
     auth.currentUser?.displayName,
   ].filter(x => Boolean(x) && String(x).trim() !== '')
    .map(n => String(n).trim().toLowerCase())
-   .filter(n => n.length >= 2 && !genericNameWords.includes(n))));
+   .filter(n => n.length >= 2 && !genericNameWords.includes(n) && !n.includes('employee'))));
 
   const currentUserName = empNames[0] || '';
 
@@ -193,7 +198,7 @@ export default function AnomalyAlertsScreen({ navigation, route, user: propUser 
     const matchesEmployee = (item) => {
       if (!item) return false;
 
-      // 1. Gather all candidate IDs from the item
+      // 1. Gather all candidate IDs from the item (including nested employee object)
       const itemIds = [
         item.employeeId,
         item.employee_id,
@@ -203,52 +208,60 @@ export default function AnomalyAlertsScreen({ navigation, route, user: propUser 
         item.userUid,
         item.guardId,
         item.uid,
+        item.employee?.id,
+        item.employee?.employeeId,
+        item.employee?.uid,
+        item.user?.id,
+        item.user?.uid,
+        item.guard?.id,
       ].filter(x => x !== undefined && x !== null && String(x).trim() !== '' && String(x).trim() !== 'emp_fallback')
        .map(x => String(x).trim().toLowerCase());
 
-      // 2. Gather all candidate emails from the item
+      // 2. Gather all candidate emails from the item (including nested employee object)
       const itemEmails = [
         item.employeeEmail,
         item.email,
         item.empEmail,
         item.userEmail,
+        item.employee?.email,
+        item.user?.email,
       ].filter(x => Boolean(x) && String(x).trim() !== '')
        .map(e => String(e).trim().toLowerCase());
 
-      // 3. Gather candidate employee names
+      // 3. Gather candidate employee names (excluding generic terms like 'Fixed Site Employee')
       const itemNames = [
         item.employeeName,
         item.empName,
         item.userName,
+        item.employee?.name,
+        item.user?.name,
         item.employeeName ? null : item.name,
       ].filter(x => Boolean(x) && String(x).trim() !== '')
        .map(n => String(n).trim().toLowerCase())
-       .filter(n => !genericNameWords.includes(n) && !n.includes('verification') && !n.includes('anomaly') && !n.includes('attendance') && !n.includes('telemetry'));
+       .filter(n => !genericNameWords.includes(n) && !n.includes('verification') && !n.includes('anomaly') && !n.includes('attendance') && !n.includes('telemetry') && !n.includes('employee'));
 
       // ── STRICT RULE 1: ID Matching & Conflict Rejection ──
       // If the alert record explicitly specifies an employee ID:
       if (itemIds.length > 0) {
-        if (empIds.length > 0) {
-          const hasMatchingId = itemIds.some(id => empIds.includes(id));
-          if (hasMatchingId) return true;
-          // ID Conflict: the alert explicitly belongs to another employee ID!
-          return false;
+        if (empIds.length > 0 && itemIds.some(id => empIds.includes(id))) {
+          return true;
         }
+        // ID Conflict: the alert explicitly belongs to another employee ID!
+        return false;
       }
 
       // ── STRICT RULE 2: Email Matching & Conflict Rejection ──
       // If the alert record explicitly specifies an employee Email:
       if (itemEmails.length > 0) {
-        if (empEmails.length > 0) {
-          const hasMatchingEmail = itemEmails.some(ie => empEmails.includes(ie));
-          if (hasMatchingEmail) return true;
-          // Email Conflict: the alert explicitly belongs to another employee Email!
-          return false;
+        if (empEmails.length > 0 && itemEmails.some(ie => empEmails.includes(ie))) {
+          return true;
         }
+        // Email Conflict: the alert explicitly belongs to another employee Email!
+        return false;
       }
 
       // ── STRICT RULE 3: Exact Full Name Matching (Fallback only when item lacks both ID and Email) ──
-      if (itemIds.length === 0 && itemEmails.length === 0 && empNames.length > 0 && itemNames.length > 0) {
+      if (empNames.length > 0 && itemNames.length > 0) {
         for (const iName of itemNames) {
           for (const myName of empNames) {
             if (iName === myName) return true;
@@ -261,6 +274,7 @@ export default function AnomalyAlertsScreen({ navigation, route, user: propUser 
         }
       }
 
+      // No reliable match to this employee: reject so other employees' alerts never appear
       return false;
     };
 

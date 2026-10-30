@@ -10,7 +10,7 @@ import {
   auth, db, collection, onSnapshot, addDoc, updateDoc,
   doc, serverTimestamp, getDocs, query, orderBy, getCleanEmployeeEmail
 } from '../firebase';
-import { isMobileFieldWithoutSite, checkEarlyCheckout } from '../utils/assignmentUtils';
+import { isMobileFieldWithoutSite, checkEarlyCheckout, checkLateCheckIn, isAttendanceRecordFlagged } from '../utils/assignmentUtils';
 import { verifyGeofence } from '../services/geofence';
 import { writeSecurityEvent } from '../services/securityLogger';
 import ActionConfirmModal from '../components/ActionConfirmModal';
@@ -409,6 +409,11 @@ export default function AttendanceScreen({ navigation, route, user: propUser }) 
       const resolvedSiteName = matchedSite?.name || activeLocationAddress || emp.assignedSite || emp.site || 'Active Field Location';
       const activeAddressToSave = activeLocationAddress || matchedSite?.address || resolvedSiteName;
 
+      const shiftToUse = emp.shift || emp.scheduledShift || '08:00 AM - 05:00 PM';
+      const lateInfo = checkLateCheckIn(shiftToUse, new Date(), 5);
+      const isLate = lateInfo.isLate;
+      const statusText = isLate ? 'Late' : 'On Site';
+
       const attData = {
         employee_id: emp.id,
         employeeId: emp.id,
@@ -420,11 +425,15 @@ export default function AttendanceScreen({ navigation, route, user: propUser }) 
         assignedSite: emp.assignedSite || emp.site || 'Unassigned Site',
         actualLocation: activeAddressToSave,
         locationAddress: activeAddressToSave,
-        shift: emp.shift || emp.scheduledShift || '08:00 AM - 05:00 PM',
+        shift: shiftToUse,
         date: serverTimestamp(),
         timeIn: serverTimestamp(),
         timeOut: null,
-        status: 'On Site',
+        status: statusText,
+        isLate: isLate,
+        late: isLate,
+        minutesLate: isLate ? lateInfo.minutesLate : 0,
+        anomalyFlag: isLate ? 'Late Check-In' : null,
         inFence: Boolean(matchedSite),
         latitude: loc.coords.latitude,
         longitude: loc.coords.longitude,
@@ -604,8 +613,8 @@ export default function AttendanceScreen({ navigation, route, user: propUser }) 
 
   const daysWorked = thisMonthRecs.filter(r => r.status !== 'Missed Shift' && r.status !== 'Absent' && r.status !== 'Missed').length;
   const missedCount = thisMonthRecs.filter(r => r.status === 'Missed Shift' || r.status === 'Absent' || r.status === 'Missed').length;
-  const onTimeCount = thisMonthRecs.filter(r => r.status === 'On Site' || r.status === 'Completed' || r.status === 'Present').length;
-  const lateCount = thisMonthRecs.filter(r => r.status === 'Late' || r.status === 'Flagged').length;
+  const lateCount = thisMonthRecs.filter(r => isAttendanceRecordFlagged(r)).length;
+  const onTimeCount = Math.max(0, daysWorked - lateCount);
   const totalShifts = daysWorked + missedCount;
   const monthRate = totalShifts > 0 ? Math.round((onTimeCount / totalShifts) * 100) : 100;
 

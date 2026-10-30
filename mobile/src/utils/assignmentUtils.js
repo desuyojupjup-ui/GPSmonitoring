@@ -446,6 +446,102 @@ export function checkEarlyCheckout(asgOrShift, checkTime = new Date(), graceMinu
   };
 }
 
+export function parseAttendanceTimestamp(ts) {
+  if (!ts) return null;
+  if (ts instanceof Date) return isNaN(ts.getTime()) ? null : ts;
+  if (typeof ts?.toDate === 'function') {
+    try { const d = ts.toDate(); if (d instanceof Date && !isNaN(d.getTime())) return d; } catch (_) {}
+  }
+  if (typeof ts === 'number') {
+    const d = new Date(ts);
+    return isNaN(d.getTime()) ? null : d;
+  }
+  if (typeof ts === 'object' && ts !== null) {
+    if (typeof ts.seconds === 'number') {
+      return new Date(ts.seconds * 1000 + (ts.nanoseconds ? Math.floor(ts.nanoseconds / 1e6) : 0));
+    }
+    if (typeof ts._seconds === 'number') {
+      return new Date(ts._seconds * 1000 + (ts._nanoseconds ? Math.floor(ts._nanoseconds / 1e6) : 0));
+    }
+  }
+  if (typeof ts === 'string') {
+    const d = new Date(ts);
+    return isNaN(d.getTime()) ? null : d;
+  }
+  return null;
+}
+
+export function checkLateCheckIn(asgOrShift, checkTime = new Date(), graceMinutes = 5) {
+  let shiftStr = typeof asgOrShift === 'string' ? asgOrShift : (asgOrShift?.shift || asgOrShift?.scheduledShift || '');
+  let startStr = typeof asgOrShift === 'object' ? (asgOrShift?.shiftStart || asgOrShift?.startTime || '') : '';
+  if (!startStr && shiftStr) {
+    const parts = shiftStr.split(/\s*[-~]|(?:\s+to\s+)\s*/i).filter(Boolean);
+    if (parts.length >= 1) {
+      startStr = parts[0].trim();
+    }
+  }
+  if (!startStr) startStr = '08:00 AM';
+  const parsed = parseTimeToHoursMinutes(startStr);
+  const now = checkTime instanceof Date ? checkTime : (parseAttendanceTimestamp(checkTime) || new Date(checkTime));
+  const shiftStartDt = new Date(now.getFullYear(), now.getMonth(), now.getDate(), parsed?.hours ?? 8, parsed?.minutes ?? 0, parsed?.seconds ?? 0);
+  const diffMs = now.getTime() - shiftStartDt.getTime();
+  const minutesLate = Math.round(diffMs / 60000);
+
+  return {
+    isLate: minutesLate >= graceMinutes,
+    minutesLate: Math.max(0, minutesLate),
+    shiftStartStr: startStr,
+    shiftStartDt,
+  };
+}
+
+export function isAttendanceRecordFlagged(r) {
+  if (!r) return false;
+
+  // 1. Explicit early check-out flags
+  if (r.earlyCheckOut === true || r.earlyDeparture === true) return true;
+  if (typeof r.minutesEarly === 'number' && r.minutesEarly >= 5) return true;
+
+  // 2. Explicit late check-in flags
+  if (r.isLate === true || r.late === true) return true;
+  if (typeof r.minutesLate === 'number' && r.minutesLate >= 5) return true;
+  if (typeof r.lateMinutes === 'number' && r.lateMinutes >= 5) return true;
+
+  // 3. Status flags
+  const st = (r.status || '').toString().trim().toLowerCase();
+  if (st === 'late' || st === 'flagged' || st === 'missed shift' || st === 'missed' || st === 'absent') {
+    return true;
+  }
+
+  // 4. Anomaly flags in record
+  const aFlag = (r.anomalyFlag || '').toString().toLowerCase();
+  if (aFlag.includes('early') || aFlag.includes('late') || aFlag.includes('anomaly')) {
+    return true;
+  }
+
+  const shiftStr = r.shift || '08:00 AM - 05:00 PM';
+
+  // 5. Time-based late check-in detection from raw timeIn
+  if (r.timeIn) {
+    const timeInDate = parseAttendanceTimestamp(r.timeIn);
+    if (timeInDate) {
+      const lateCheck = checkLateCheckIn(shiftStr, timeInDate, 5);
+      if (lateCheck.isLate) return true;
+    }
+  }
+
+  // 6. Time-based early check-out detection from raw timeOut
+  if (r.timeOut) {
+    const timeOutDate = parseAttendanceTimestamp(r.timeOut);
+    if (timeOutDate) {
+      const earlyCheck = checkEarlyCheckout(shiftStr, timeOutDate, 5);
+      if (earlyCheck.isEarly) return true;
+    }
+  }
+
+  return false;
+}
+
 /**
  * Resolves current assignment, site, shift, and today's attendance for Chatbot queries.
  * Handles cases where employee has checked in, has an active assignment, or has site from profile.

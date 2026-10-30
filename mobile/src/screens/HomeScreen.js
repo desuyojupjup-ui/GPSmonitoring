@@ -40,7 +40,7 @@ import { runPreAttendanceChecks } from '../services/securityService';
 import { writeSecurityEvent } from '../services/securityLogger';
 import { getDeviceId } from '../services/deviceInfo';
 import { getPendingSyncCount, syncOfflineRecords, clearOfflineQueue } from '../services/offlineSyncService';
-import { isAssignmentDatePassed, isAssignmentActiveToday, resolveShift, isAssignmentForEmployee, deduplicateAssignments, isMobileFieldWithoutSite, checkEarlyCheckout } from '../utils/assignmentUtils';
+import { isAssignmentDatePassed, isAssignmentActiveToday, resolveShift, isAssignmentForEmployee, deduplicateAssignments, isMobileFieldWithoutSite, checkEarlyCheckout, checkLateCheckIn, isAttendanceRecordFlagged } from '../utils/assignmentUtils';
 import {
   startSession as schedulerStart,
   stopSession as schedulerStop,
@@ -308,6 +308,12 @@ export default function HomeScreen({ navigation, route, user: propUser }) {
         d.userUid,
         d.guardId,
         d.uid,
+        d.employee?.id,
+        d.employee?.employeeId,
+        d.employee?.uid,
+        d.user?.id,
+        d.user?.uid,
+        d.guard?.id,
       ].filter(x => x !== undefined && x !== null && String(x).trim() !== '' && String(x).trim() !== 'emp_fallback')
        .map(x => String(x).trim().toLowerCase());
 
@@ -316,27 +322,34 @@ export default function HomeScreen({ navigation, route, user: propUser }) {
         d.email,
         d.empEmail,
         d.userEmail,
+        d.employee?.email,
+        d.user?.email,
       ].filter(Boolean).map(e => String(e).trim().toLowerCase());
 
       const itemNames = [
         d.employeeName,
         d.empName,
         d.userName,
-      ].filter(Boolean).map(n => String(n).trim().toLowerCase());
+        d.employee?.name,
+        d.user?.name,
+      ].filter(Boolean).map(n => String(n).trim().toLowerCase())
+       .filter(n => !n.includes('employee') && !n.includes('verification') && !n.includes('anomaly') && !n.includes('attendance'));
 
       if (itemIds.length > 0) {
-        if (validIds.length > 0) {
-          return itemIds.some(id => validIds.includes(id));
+        if (validIds.length > 0 && itemIds.some(id => validIds.includes(id))) {
+          return true;
         }
+        return false;
       }
 
       if (itemEmails.length > 0) {
-        if (validEmails.length > 0) {
-          return itemEmails.some(ie => validEmails.includes(ie));
+        if (validEmails.length > 0 && itemEmails.some(ie => validEmails.includes(ie))) {
+          return true;
         }
+        return false;
       }
 
-      if (itemIds.length === 0 && itemEmails.length === 0 && validNames.length > 0 && itemNames.length > 0) {
+      if (validNames.length > 0 && itemNames.length > 0) {
         return itemNames.some(iName => validNames.includes(iName));
       }
 
@@ -939,7 +952,10 @@ export default function HomeScreen({ navigation, route, user: propUser }) {
 
   const processCheckIn = async (lat, lng, inFence, activeSite, activeLocationAddress) => {
     try {
-      const statusText = inFence ? 'On Site' : 'Flagged';
+      const shiftToUse = assignment?.shift || employee?.shift || '08:00 AM - 05:00 PM';
+      const lateInfo = checkLateCheckIn(shiftToUse, new Date(), 5);
+      const isLate = lateInfo.isLate;
+      const statusText = inFence ? (isLate ? 'Late' : 'On Site') : 'Flagged';
       // Priority for site display:
       // 1. If employee's GPS matches a recognized worksite fence, display that worksite name
       // 2. If out of fence or in field, display the reverse-geocoded active physical location address
@@ -958,11 +974,15 @@ export default function HomeScreen({ navigation, route, user: propUser }) {
         assignedSite: site?.name || assignment?.site || 'Unassigned Site',
         actualLocation: activeAddressToSave,
         locationAddress: activeAddressToSave,
-        shift: assignment?.shift || employee?.shift || '08:00 AM - 05:00 PM',
+        shift: shiftToUse,
         date: serverTimestamp(),
         timeIn: serverTimestamp(),
         timeOut: null,
         status: statusText,
+        isLate: isLate,
+        late: isLate,
+        minutesLate: isLate ? lateInfo.minutesLate : 0,
+        anomalyFlag: isLate ? 'Late Check-In' : null,
         inFence: inFence,
         latitude: lat,
         longitude: lng
@@ -1234,8 +1254,8 @@ export default function HomeScreen({ navigation, route, user: propUser }) {
   });
 
   const daysWorked = currentMonthRecords.length;
-  const onTimeCount = currentMonthRecords.filter(r => r.status === 'Present' || r.status === 'Completed' || r.status === 'On Site').length;
-  const flaggedCount = currentMonthRecords.filter(r => r.status === 'Late' || r.status === 'Flagged' || r.status === 'Missed').length;
+  const flaggedCount = currentMonthRecords.filter(r => isAttendanceRecordFlagged(r)).length;
+  const onTimeCount = Math.max(0, daysWorked - flaggedCount);
   const monthlyRate = daysWorked > 0 ? ((onTimeCount / daysWorked) * 100).toFixed(1) : '100.0';
 
   return (
