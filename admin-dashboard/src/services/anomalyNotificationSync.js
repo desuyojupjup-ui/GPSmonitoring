@@ -213,6 +213,27 @@ export function startAnomalyNotificationSync(onNewAlert) {
           const isOnDuty = emp.status === 'On Duty' || emp.isOnline === true;
           if (!isOnDuty) return;
 
+          // Only alert anomaly if employee has an active scheduled shift today
+          const shiftStr = (emp.shift || emp.scheduledShift || emp.shiftTime || '').toString().trim().toLowerCase();
+          if (!shiftStr || shiftStr === 'flexible' || shiftStr === 'unassigned' || shiftStr === 'none' || shiftStr === 'no shift scheduled') {
+            return;
+          }
+
+          // If recurring workDays specified, ensure today is a scheduled workday
+          if (Array.isArray(emp.workDays) && emp.workDays.length > 0) {
+            const dayNames = ['Sunday', 'Monday', 'Tuesday', 'Wednesday', 'Thursday', 'Friday', 'Saturday'];
+            const dayAbbrs = ['Sun', 'Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat'];
+            const dayIdx = new Date().getDay();
+            const full = dayNames[dayIdx].toLowerCase();
+            const abbr = dayAbbrs[dayIdx].toLowerCase();
+            const isWorkDay = emp.workDays.some(w => {
+              if (!w || typeof w !== 'string') return false;
+              const cl = w.trim().toLowerCase();
+              return cl === full || cl === abbr || full.startsWith(cl) || cl.startsWith(abbr);
+            });
+            if (!isWorkDay) return;
+          }
+
           const lat = emp.lat ?? emp.latitude;
           const lng = emp.lng ?? emp.longitude;
           if (lat == null || lng == null || isNaN(Number(lat)) || isNaN(Number(lng))) return;
@@ -301,8 +322,23 @@ export function startAnomalyNotificationSync(onNewAlert) {
 
           // ── Check Beyond Scheduled Shift Hours ──
           if (isOnDuty) {
-            const shiftStr = emp.shift || emp.shiftTime || emp.scheduledShift || '';
-            if (shiftStr) {
+            const shiftStr = (emp.shift || emp.shiftTime || emp.scheduledShift || '').toString().trim();
+            const sLower = shiftStr.toLowerCase();
+            if (shiftStr && sLower !== 'flexible' && sLower !== 'unassigned' && sLower !== 'none' && sLower !== 'no shift scheduled') {
+              if (Array.isArray(emp.workDays) && emp.workDays.length > 0) {
+                const dayNames = ['Sunday', 'Monday', 'Tuesday', 'Wednesday', 'Thursday', 'Friday', 'Saturday'];
+                const dayAbbrs = ['Sun', 'Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat'];
+                const dayIdx = new Date().getDay();
+                const full = dayNames[dayIdx].toLowerCase();
+                const abbr = dayAbbrs[dayIdx].toLowerCase();
+                const isWorkDay = emp.workDays.some(w => {
+                  if (!w || typeof w !== 'string') return false;
+                  const cl = w.trim().toLowerCase();
+                  return cl === full || cl === abbr || full.startsWith(cl) || cl.startsWith(abbr);
+                });
+                if (!isWorkDay) return;
+              }
+
               const parts = shiftStr.split(/\s*[-~]|(?:\s+to\s+)\s*/i).filter(Boolean);
               const endStr = parts.length >= 2 ? parts[1].trim() : (parts.length === 1 ? parts[0].trim() : '');
               const endMatch = endStr.match(/(\d{1,2}):(\d{2})(?:\s*([AP]M))?/i);
@@ -368,13 +404,12 @@ export function startAnomalyNotificationSync(onNewAlert) {
       if (!docs) return;
       docs.forEach((d) => {
         const raw = { id: d.id, ...d.data() };
-        const hasExplicitShift = Boolean(
-          raw.shift &&
-          raw.shift !== 'Unassigned' &&
-          raw.shift !== 'Flexible' &&
-          raw.shift !== 'No Shift Scheduled'
-        );
-        if (hasExplicitShift && (raw.earlyCheckOut || raw.anomalyFlag === 'Early Check-Out' || raw.earlyDeparture || (raw.minutesEarly && raw.minutesEarly >= 15))) {
+        const rawShift = (raw.shift || '').toString().trim().toLowerCase();
+        if (!rawShift || rawShift === 'flexible' || rawShift === 'unassigned' || rawShift === 'none' || rawShift === 'no shift scheduled') {
+          return;
+        }
+
+        if (raw.earlyCheckOut || raw.anomalyFlag === 'Early Check-Out' || raw.earlyDeparture || (raw.minutesEarly && raw.minutesEarly >= 5)) {
           const attId = raw.id;
           const alertKey = `early_co_${attId}`;
           if (lastAdminGeofenceAlertTime.has(alertKey)) return;

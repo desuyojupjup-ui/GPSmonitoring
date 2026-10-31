@@ -3,12 +3,13 @@
 // best-effort and never throw to the caller (offline writes queue & sync
 // automatically via the Firestore SDK / offline AsyncStorage fallback).
 // ──────────────────────────────────────────────────────────────────────────
-import { collection, addDoc, serverTimestamp, doc, updateDoc, ensureAuthenticatedSession } from '../firebase';
+import { collection, addDoc, serverTimestamp, doc, getDoc, updateDoc, ensureAuthenticatedSession } from '../firebase';
 import { db } from '../firebase';
 import { SECURITY } from './securityConfig';
 import { getSeverityForEventType, describeEvent } from './securityRiskScorer';
 import AsyncStorage from '@react-native-async-storage/async-storage';
 import { queueOfflineRecord } from './offlineSyncService';
+import { hasActiveShiftSchedule } from '../utils/assignmentUtils';
 
 const C = SECURITY.COLLECTIONS;
 
@@ -100,7 +101,23 @@ export async function writeSecurityEvent(params) {
     relatedAttendanceId = null,
     customDescription = null,
     extra = {},
-  } = params;
+  // 1. Shift Schedule Enforcement: Only alert anomaly if the employee has an active scheduled shift
+  // (Prevents unnecessary data storage & false alerts when employee has no scheduled shift)
+  let hasSchedule = hasActiveShiftSchedule(assignment, employee);
+  if (!hasSchedule && employee?.id && employee.id !== 'emp_fallback') {
+    try {
+      const snap = await getDoc(doc(db, 'employees', employee.id)).catch(() => null);
+      if (snap && snap.exists()) {
+        const d = snap.data();
+        hasSchedule = hasActiveShiftSchedule(assignment, { ...employee, ...d });
+      }
+    } catch (_) {}
+  }
+
+  if (!hasSchedule) {
+    console.log(`[securityLogger] Suppressed ${eventType} anomaly: Employee ${employee.name || employee.id || ''} has no active shift schedule today.`);
+    return null;
+  }
 
   // Dedup: same employee + same event within 60s
   const dedupKey = `${employee.id || 'emp'}_${eventType}`;

@@ -8,6 +8,7 @@ import {
   orderBy as realOrderBy,
   limit as realLimit,
   getDocs as realGetDocs,
+  getDoc as realGetDoc,
   onSnapshot as realOnSnapshot,
   addDoc as realAddDoc,
   updateDoc as realUpdateDoc,
@@ -533,6 +534,19 @@ export const getDocs = async (_q) => {
     empty: items.length === 0,
     docs: items.map(item => ({ id: item.id, data: () => item })),
     forEach: (cb) => items.map(item => ({ id: item.id, data: () => item })).forEach(cb)
+  };
+};
+
+export const getDoc = async (_docRef) => {
+  if (isRealFirebaseConfigured) return await realGetDoc(_docRef);
+  const path = _docRef?.path || _docRef?.colPath || 'employees';
+  const id = _docRef?.id;
+  const items = await getLocalCollection(path);
+  const item = items.find(i => i.id === id);
+  return {
+    exists: () => Boolean(item),
+    data: () => item || null,
+    id,
   };
 };
 

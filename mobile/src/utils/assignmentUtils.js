@@ -205,6 +205,59 @@ export function isAssignmentActiveToday(asg, targetDate = new Date()) {
 }
 
 /**
+ * Determines whether an employee has an explicit, active scheduled shift for today.
+ * Returns false if:
+ * - Schedule is 'Flexible', 'Unassigned', 'None', or 'No Shift Scheduled'
+ * - Assignment has passed or is completed/cancelled
+ * - Recurring workDays array is specified and today is NOT one of the scheduled workDays
+ * - No assignment and no shift time is assigned to the employee
+ *
+ * @param {object} [assignment]
+ * @param {object} [employee]
+ * @param {Date} [targetDate=new Date()]
+ * @returns {boolean}
+ */
+export function hasActiveShiftSchedule(assignment, employee, targetDate = new Date()) {
+  const shiftStr = (
+    assignment?.shift ||
+    assignment?.shiftTime ||
+    assignment?.scheduledShift ||
+    assignment?.schedule ||
+    employee?.shift ||
+    employee?.scheduledShift ||
+    employee?.shiftTime ||
+    ''
+  ).toString().trim();
+
+  if (!shiftStr) return false;
+
+  const sLower = shiftStr.toLowerCase();
+  if (
+    sLower === 'flexible' ||
+    sLower === 'unassigned' ||
+    sLower === 'none' ||
+    sLower === 'no shift scheduled'
+  ) {
+    return false;
+  }
+
+  // Check recurring workDays on assignment or employee
+  const workDays = assignment?.workDays || assignment?.effectiveWorkDays || employee?.workDays;
+  if (Array.isArray(workDays) && workDays.length > 0) {
+    if (!isDayInWorkDays(workDays, targetDate)) {
+      return false; // Today is not a scheduled workday
+    }
+  }
+
+  // Check if assignment has passed or is inactive
+  if (assignment && isAssignmentDatePassed(assignment, targetDate)) {
+    return false;
+  }
+
+  return true;
+}
+
+/**
  * Format a single time string (e.g. "08:00", "17:00", "17:00:00", "8:00 AM") into 12-hour format "hh:mm AM/PM"
  */
 export function formatSingleTimeToken(t) {
