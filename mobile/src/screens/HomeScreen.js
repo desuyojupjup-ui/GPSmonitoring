@@ -962,6 +962,14 @@ export default function HomeScreen({ navigation, route, user: propUser }) {
       // 3. Fallback to assigned site or Active Field Location
       const resolvedSiteName = activeSite?.name || (inFence ? (site?.name || assignment?.site) : (activeLocationAddress || site?.name || 'Active Field Location'));
       const activeAddressToSave = activeLocationAddress || activeSite?.address || site?.address || resolvedSiteName;
+      const siteToUse = activeSite || site || {
+        id: activeSite?.id || site?.id || 'Unknown',
+        name: resolvedSiteName,
+        siteName: resolvedSiteName,
+        address: activeAddressToSave,
+        latitude: lat,
+        longitude: lng,
+      };
 
       const newAtt = {
         employee_id: employee.id,
@@ -1008,8 +1016,8 @@ export default function HomeScreen({ navigation, route, user: propUser }) {
       await addDoc(collection(db, 'ActivityLogs'), {
         employee_id: employee.id,
         employeeName: employee.name,
-        site_id: site?.id || 'Unknown',
-        siteName: site?.name || assignment?.site || 'Unassigned Site',
+        site_id: siteToUse?.id || site?.id || 'Unknown',
+        siteName: resolvedSiteName || siteToUse?.name || site?.name || assignment?.site || 'Unassigned Site',
         action: 'Check In',
         type: 'Attendance',
         timestamp: serverTimestamp(),
