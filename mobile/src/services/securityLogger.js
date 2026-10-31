@@ -101,6 +101,8 @@ export async function writeSecurityEvent(params) {
     relatedAttendanceId = null,
     customDescription = null,
     extra = {},
+  } = params;
+
   // 1. Shift Schedule Enforcement: Only alert anomaly if the employee has an active scheduled shift
   // (Prevents unnecessary data storage & false alerts when employee has no scheduled shift)
   let hasSchedule = hasActiveShiftSchedule(assignment, employee);
