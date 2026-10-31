@@ -1,8 +1,8 @@
 import React, { useState, useEffect } from 'react';
 import { useLocation } from 'react-router-dom';
-import { Search, Plus, Edit2, Trash2, X, Maximize, Download, UserCheck, Clock, AlertTriangle, UserX, MapPin, Navigation, Building2, Truck, ShieldAlert, Database, RefreshCw, Users, PieChart as PieIcon, BarChart3, Activity, UserPlus, User, Mail, Lock, IdCard, Briefcase, Shield, Sliders, Check, ChevronRight, ChevronLeft, Eye, EyeOff, AlertCircle, CheckCircle2 } from 'lucide-react';
+import { Search, Plus, Edit2, Trash2, X, Maximize, Download, UserCheck, Clock, AlertTriangle, UserX, MapPin, Navigation, Building2, Truck, ShieldAlert, Database, RefreshCw, Users, PieChart as PieIcon, BarChart3, Activity, UserPlus, User, Mail, Lock, IdCard, Briefcase, Shield, Sliders, Check, ChevronRight, ChevronLeft, Eye, EyeOff, AlertCircle, CheckCircle2, Calendar } from 'lucide-react';
 import Swal from 'sweetalert2';
-import { db, collection, onSnapshot, addDoc, updateDoc, deleteDoc, doc, query, createSecondaryAuthUser } from '../firebase';
+import { db, collection, onSnapshot, addDoc, updateDoc, deleteDoc, doc, query, getDocs, createSecondaryAuthUser } from '../firebase';
 import { showToast, showConfirmDelete } from '../utils/toast';
 import { ResponsiveContainer, PieChart, Pie, Cell, BarChart, Bar, XAxis, YAxis, Tooltip, CartesianGrid } from 'recharts';
 import { hasEmployeeCheckedOut } from '../utils/statusUtils';
@@ -136,6 +136,53 @@ const GEOFENCE_STATUS_STYLE = {
   'Outside Assigned Site': { bg: '#FEE2E2', color: '#991B1B' },
 };
 
+export const to12hTime = (t) => {
+  if (!t) return '';
+  const m = String(t).trim().match(/^(\d{1,2}):(\d{2})(?:\s*([AaPp][Mm]))?/);
+  if (!m) return t;
+  let h = parseInt(m[1], 10);
+  const min = m[2];
+  const ampm = m[3] ? m[3].toUpperCase() : (h >= 12 ? 'PM' : 'AM');
+  h = h % 12 || 12;
+  return `${String(h).padStart(2, '0')}:${min} ${ampm}`;
+};
+
+export const to24hTime = (t) => {
+  if (!t) return '08:00';
+  const ampmMatch = String(t).trim().match(/^(\d{1,2}):(\d{2})(?::\d{2})?\s*([AaPp][Mm])/);
+  if (ampmMatch) {
+    let h = parseInt(ampmMatch[1], 10);
+    const m = ampmMatch[2];
+    const ampm = ampmMatch[3].toUpperCase();
+    if (ampm === 'PM' && h < 12) h += 12;
+    if (ampm === 'AM' && h === 12) h = 0;
+    return `${String(h).padStart(2, '0')}:${m}`;
+  }
+  const h24Match = String(t).trim().match(/^(\d{1,2}):(\d{2})/);
+  if (h24Match) {
+    return `${String(parseInt(h24Match[1], 10)).padStart(2, '0')}:${h24Match[2]}`;
+  }
+  return '08:00';
+};
+
+export const calculateShiftHours = (start24, end24) => {
+  if (!start24 || !end24) return null;
+  const [sh, sm] = String(start24).split(':').map(Number);
+  const [eh, em] = String(end24).split(':').map(Number);
+  if (isNaN(sh) || isNaN(sm) || isNaN(eh) || isNaN(em)) return null;
+  const startMinutes = sh * 60 + sm;
+  let endMinutes = eh * 60 + em;
+  const isOvernight = endMinutes <= startMinutes;
+  if (isOvernight) {
+    endMinutes += 24 * 60;
+  }
+  const diffMinutes = endMinutes - startMinutes;
+  const hours = Math.floor(diffMinutes / 60);
+  const mins = diffMinutes % 60;
+  const timeStr = mins === 0 ? `${hours} hrs` : `${hours}h ${mins}m`;
+  return isOvernight ? `${timeStr} (overnight)` : timeStr;
+};
+
 const EMPTY = {
   name: '', email: '', password: '', idNum: '', org: '', type: '', status: 'Offline', joined: '',
   workType: 'Fixed Site Employee',
@@ -144,6 +191,11 @@ const EMPTY = {
   geofenceRadius: 100,
   assignedRoute: '',
   assignedDestinations: [],
+  shiftStart: '08:00',
+  shiftEnd: '17:00',
+  shift: '08:00 AM - 05:00 PM',
+  shiftTime: '08:00 AM - 05:00 PM',
+  workDays: ['Mon', 'Tue', 'Wed', 'Thu', 'Fri'],
 };
 
 export const calculatePasswordStrength = (pass) => {
@@ -376,7 +428,15 @@ export default function Employees() {
   const location = useLocation();
 
   const openAdd  = () => { 
-    setForm({ ...EMPTY, assignedSites: [] }); 
+    setForm({ 
+      ...EMPTY, 
+      assignedSites: [],
+      shiftStart: '08:00',
+      shiftEnd: '17:00',
+      shift: '08:00 AM - 05:00 PM',
+      shiftTime: '08:00 AM - 05:00 PM',
+      workDays: ['Mon', 'Tue', 'Wed', 'Thu', 'Fri'],
+    }); 
     setEditId(null); 
     setShowPassword(false);
     setModalTab('info'); 
@@ -390,10 +450,31 @@ export default function Employees() {
     } else if (emp.assignedSite) {
       sitesArr = emp.assignedSite.split(',').map(s => s.trim()).filter(Boolean);
     }
+
+    let sStart = emp.shiftStart ? to24hTime(emp.shiftStart) : '08:00';
+    let sEnd = emp.shiftEnd ? to24hTime(emp.shiftEnd) : '17:00';
+    if (!emp.shiftStart && (emp.shift || emp.shiftTime)) {
+      const parts = (emp.shift || emp.shiftTime || '').split(/\s*[-~]|(?:\s+to\s+)\s*/i).filter(Boolean);
+      if (parts.length >= 2) {
+        sStart = to24hTime(parts[0]);
+        sEnd = to24hTime(parts[1]);
+      }
+    }
+
+    const formattedShift = `${to12hTime(sStart)} - ${to12hTime(sEnd)}`;
+    const empWorkDays = Array.isArray(emp.workDays) && emp.workDays.length > 0
+      ? emp.workDays
+      : (emp.scheduleDays || ['Mon', 'Tue', 'Wed', 'Thu', 'Fri']);
+
     setForm({ 
       ...EMPTY, 
       ...emp, 
-      assignedSites: sitesArr 
+      assignedSites: sitesArr,
+      shiftStart: sStart,
+      shiftEnd: sEnd,
+      shift: emp.shift || formattedShift,
+      shiftTime: emp.shiftTime || emp.shift || formattedShift,
+      workDays: empWorkDays,
     }); 
     setEditId(emp.id); 
     setShowPassword(false);
@@ -444,7 +525,16 @@ export default function Employees() {
     setIsSaving(true);
     try {
       const isMobile = form.workType === 'Mobile Field Employee';
+      const isFixed = form.workType === 'Fixed Site Employee';
       const existing = editId ? employees.find(e => e.id === editId) : null;
+
+      const sStartFormatted = to12hTime(form.shiftStart || '08:00');
+      const sEndFormatted = to12hTime(form.shiftEnd || '17:00');
+      const computedShift = `${sStartFormatted} - ${sEndFormatted}`;
+      const effectiveWorkDays = Array.isArray(form.workDays) && form.workDays.length > 0
+        ? form.workDays
+        : ['Mon', 'Tue', 'Wed', 'Thu', 'Fri'];
+
       const dataToSave = {
         ...form,
         name: (form.name || '').trim(),
@@ -452,7 +542,15 @@ export default function Employees() {
         idNum: cleanIdNum,
         assignedSites: isMobile ? (existing?.assignedSites || []) : (form.assignedSite ? [form.assignedSite] : []),
         assignedSite: isMobile ? (existing?.assignedSite || '') : (form.assignedSite || ''),
-        assignedDestinations: isMobile ? (existing?.assignedDestinations || []) : []
+        assignedDestinations: isMobile ? (existing?.assignedDestinations || []) : [],
+        ...(isFixed ? {
+          shiftStart: form.shiftStart || '08:00',
+          shiftEnd: form.shiftEnd || '17:00',
+          shift: computedShift,
+          shiftTime: computedShift,
+          workDays: effectiveWorkDays,
+          schedule: `${computedShift} (${effectiveWorkDays.join(', ')})`,
+        } : {})
       };
 
       if (form.password && cleanEmail) {
@@ -470,6 +568,60 @@ export default function Employees() {
         await addDoc(collection(db, 'employees'), newEmp);
         showToast('Employee Created', 'New employee added to database.', 'success');
       }
+
+      // Sync fixed employee shift & site to Assignments / assignments if site is assigned
+      if (isFixed && form.assignedSite) {
+        try {
+          const asgPayload = {
+            empName: dataToSave.name,
+            empEmail: dataToSave.email,
+            empId: dataToSave.idNum || '',
+            employeeName: dataToSave.name,
+            employeeEmail: dataToSave.email,
+            employeeId: dataToSave.idNum || '',
+            employeeType: 'On-Site',
+            workType: 'Fixed Site Employee',
+            site: form.assignedSite,
+            siteName: form.assignedSite,
+            assignedSites: [form.assignedSite],
+            shiftStart: sStartFormatted,
+            shiftEnd: sEndFormatted,
+            shift: computedShift,
+            shiftTime: computedShift,
+            workDays: effectiveWorkDays,
+            schedule: `${computedShift} (${effectiveWorkDays.join(', ')})`,
+            priority: 'Medium',
+            status: 'Active',
+            assignedDate: new Date().toISOString().split('T')[0],
+            assignDate: new Date().toISOString().split('T')[0],
+          };
+
+          const collectionsToCheck = ['Assignments', 'assignments'];
+          for (const colName of collectionsToCheck) {
+            try {
+              const snap = await getDocs(collection(db, colName));
+              const matchingDoc = snap.docs.find(d => {
+                const data = d.data();
+                const dEmail = (data.empEmail || data.employeeEmail || '').toLowerCase();
+                const dId = data.empId || data.employeeId || '';
+                return (cleanEmail && dEmail === cleanEmail) || (cleanIdNum && dId === cleanIdNum);
+              });
+              if (matchingDoc) {
+                await updateDoc(doc(db, colName, matchingDoc.id), asgPayload).catch(() => {});
+              } else if (colName === 'Assignments') {
+                const asgRef = await addDoc(collection(db, 'Assignments'), asgPayload);
+                await addDoc(collection(db, 'assignments'), { ...asgPayload, id: asgRef.id, assignmentId: asgRef.id }).catch(() => {});
+                break;
+              }
+            } catch (err) {
+              console.warn(`Error syncing to ${colName}:`, err);
+            }
+          }
+        } catch (asgErr) {
+          console.warn('Assignments sync warning:', asgErr);
+        }
+      }
+
       setModal(false);
     } catch (e) {
       console.warn('Save error:', e);
@@ -609,6 +761,12 @@ export default function Employees() {
                             <WTIcon size={11} />
                             {emp.workType === 'Fixed Site Employee' ? 'Fixed Site' : 'Mobile Field'}
                           </div>
+                          {emp.workType === 'Fixed Site Employee' && (emp.shift || emp.shiftTime) && (
+                            <div style={{ display:'flex', alignItems:'center', gap:4, fontSize:10, color:'#64748B', marginTop:4, fontWeight:500, whiteSpace:'nowrap' }}>
+                              <Clock size={10} color="#94A3B8" />
+                              <span>{emp.shift || emp.shiftTime}</span>
+                            </div>
+                          )}
                         </td>
                         <td style={{ padding:'12px 14px' }}>
                           {emp.workType === 'Fixed Site Employee' && emp.geofenceStatus ? (
@@ -1554,6 +1712,233 @@ export default function Employees() {
                     </div>
                   )}
 
+                  {form.workType === 'Fixed Site Employee' && (
+                    <div style={{ background: '#F8FAFC', borderRadius: 16, padding: 18, border: '1px solid #E2E8F0', marginTop: 4 }}>
+                      <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 14 }}>
+                        <div style={{ fontSize: 12, fontWeight: 700, color: '#1E5ADB', display: 'flex', alignItems: 'center', gap: 6 }}>
+                          <Clock size={15} /> Shift Time Schedule & Working Hours
+                        </div>
+                        {calculateShiftHours(form.shiftStart, form.shiftEnd) && (
+                          <span style={{ fontSize: 11, fontWeight: 700, color: '#1E5ADB', background: '#EFF6FF', padding: '3px 9px', borderRadius: 8, display: 'inline-flex', alignItems: 'center', gap: 4 }}>
+                            ⏱️ {calculateShiftHours(form.shiftStart, form.shiftEnd)} / shift
+                          </span>
+                        )}
+                      </div>
+
+                      {/* Quick Shift Presets */}
+                      <div style={{ marginBottom: 14 }}>
+                        <label style={{ fontSize: 10, fontWeight: 700, color: '#64748B', display: 'block', marginBottom: 6, textTransform: 'uppercase', letterSpacing: '0.04em' }}>
+                          Quick Shift Presets
+                        </label>
+                        <div style={{ display: 'grid', gridTemplateColumns: 'repeat(4, 1fr)', gap: 8 }}>
+                          {[
+                            { label: 'Day Shift', start: '08:00', end: '17:00', time: '8:00 AM - 5:00 PM' },
+                            { label: 'Morning', start: '06:00', end: '14:00', time: '6:00 AM - 2:00 PM' },
+                            { label: 'Afternoon', start: '14:00', end: '22:00', time: '2:00 PM - 10:00 PM' },
+                            { label: 'Night Shift', start: '22:00', end: '06:00', time: '10:00 PM - 6:00 AM' },
+                          ].map(preset => {
+                            const isSelected = form.shiftStart === preset.start && form.shiftEnd === preset.end;
+                            return (
+                              <button
+                                key={preset.label}
+                                type="button"
+                                onClick={() => {
+                                  setForm(p => ({
+                                    ...p,
+                                    shiftStart: preset.start,
+                                    shiftEnd: preset.end,
+                                    shift: `${to12hTime(preset.start)} - ${to12hTime(preset.end)}`,
+                                    shiftTime: `${to12hTime(preset.start)} - ${to12hTime(preset.end)}`,
+                                  }));
+                                }}
+                                style={{
+                                  padding: '8px 6px',
+                                  borderRadius: 10,
+                                  border: isSelected ? '1.5px solid #1E5ADB' : '1px solid #E2E8F0',
+                                  background: isSelected ? '#EFF6FF' : '#FFFFFF',
+                                  color: isSelected ? '#1E5ADB' : '#334155',
+                                  cursor: 'pointer',
+                                  textAlign: 'center',
+                                  transition: 'all 0.15s ease',
+                                }}
+                              >
+                                <div style={{ fontSize: 11, fontWeight: 700 }}>{preset.label}</div>
+                                <div style={{ fontSize: 9, color: isSelected ? '#1D4ED8' : '#64748B', marginTop: 2, fontWeight: 500 }}>
+                                  {preset.time}
+                                </div>
+                              </button>
+                            );
+                          })}
+                        </div>
+                      </div>
+
+                      {/* Custom Time Range Pickers */}
+                      <div style={{ display: 'grid', gridTemplateColumns: '1fr auto 1fr', gap: 10, alignItems: 'center', marginBottom: 14 }}>
+                        <div>
+                          <label style={{ fontSize: 11, fontWeight: 700, color: '#475569', display: 'block', marginBottom: 6 }}>
+                            Shift Start Time
+                          </label>
+                          <div style={{ position: 'relative' }}>
+                            <Clock size={15} color="#94A3B8" style={{ position: 'absolute', left: 12, top: 12 }} />
+                            <input
+                              type="time"
+                              value={form.shiftStart || '08:00'}
+                              onChange={e => {
+                                const val = e.target.value;
+                                setForm(p => {
+                                  const sEnd = p.shiftEnd || '17:00';
+                                  return {
+                                    ...p,
+                                    shiftStart: val,
+                                    shift: `${to12hTime(val)} - ${to12hTime(sEnd)}`,
+                                    shiftTime: `${to12hTime(val)} - ${to12hTime(sEnd)}`,
+                                  };
+                                });
+                              }}
+                              style={{
+                                width: '100%',
+                                padding: '10px 14px 10px 38px',
+                                borderRadius: 12,
+                                border: '1.5px solid #E2E8F0',
+                                fontSize: 13,
+                                outline: 'none',
+                                background: '#FFFFFF',
+                                boxSizing: 'border-box',
+                                color: '#0F172A',
+                                fontWeight: 600,
+                              }}
+                            />
+                          </div>
+                          <div style={{ fontSize: 10, color: '#64748B', marginTop: 4, fontWeight: 500 }}>
+                            Starts: {to12hTime(form.shiftStart || '08:00')}
+                          </div>
+                        </div>
+
+                        <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'center', paddingTop: 14 }}>
+                          <span style={{ fontSize: 11, fontWeight: 800, color: '#64748B', background: '#F1F5F9', padding: '6px 10px', borderRadius: 8 }}>
+                            TO
+                          </span>
+                        </div>
+
+                        <div>
+                          <label style={{ fontSize: 11, fontWeight: 700, color: '#475569', display: 'block', marginBottom: 6 }}>
+                            Shift End Time
+                          </label>
+                          <div style={{ position: 'relative' }}>
+                            <Clock size={15} color="#94A3B8" style={{ position: 'absolute', left: 12, top: 12 }} />
+                            <input
+                              type="time"
+                              value={form.shiftEnd || '17:00'}
+                              onChange={e => {
+                                const val = e.target.value;
+                                setForm(p => {
+                                  const sStart = p.shiftStart || '08:00';
+                                  return {
+                                    ...p,
+                                    shiftEnd: val,
+                                    shift: `${to12hTime(sStart)} - ${to12hTime(val)}`,
+                                    shiftTime: `${to12hTime(sStart)} - ${to12hTime(val)}`,
+                                  };
+                                });
+                              }}
+                              style={{
+                                width: '100%',
+                                padding: '10px 14px 10px 38px',
+                                borderRadius: 12,
+                                border: '1.5px solid #E2E8F0',
+                                fontSize: 13,
+                                outline: 'none',
+                                background: '#FFFFFF',
+                                boxSizing: 'border-box',
+                                color: '#0F172A',
+                                fontWeight: 600,
+                              }}
+                            />
+                          </div>
+                          <div style={{ fontSize: 10, color: '#64748B', marginTop: 4, fontWeight: 500 }}>
+                            Ends: {to12hTime(form.shiftEnd || '17:00')}
+                          </div>
+                        </div>
+                      </div>
+
+                      {/* Scheduled Working Days */}
+                      <div>
+                        <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 6 }}>
+                          <label style={{ fontSize: 11, fontWeight: 700, color: '#475569' }}>
+                            Scheduled Working Days
+                          </label>
+                          <div style={{ display: 'flex', gap: 6 }}>
+                            {[
+                              { label: 'Mon - Fri', days: ['Mon', 'Tue', 'Wed', 'Thu', 'Fri'] },
+                              { label: 'Mon - Sat', days: ['Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat'] },
+                              { label: 'All Days', days: ['Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat', 'Sun'] }
+                            ].map(opt => (
+                              <button
+                                key={opt.label}
+                                type="button"
+                                onClick={() => setForm(p => ({ ...p, workDays: opt.days }))}
+                                style={{
+                                  fontSize: 10,
+                                  fontWeight: 600,
+                                  color: '#1E5ADB',
+                                  background: '#EFF6FF',
+                                  border: '1px solid #BFDBFE',
+                                  borderRadius: 6,
+                                  padding: '2px 7px',
+                                  cursor: 'pointer'
+                                }}
+                              >
+                                {opt.label}
+                              </button>
+                            ))}
+                          </div>
+                        </div>
+
+                        <div style={{ display: 'grid', gridTemplateColumns: 'repeat(7, 1fr)', gap: 6 }}>
+                          {['Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat', 'Sun'].map(day => {
+                            const isDayActive = Array.isArray(form.workDays) ? form.workDays.includes(day) : false;
+                            return (
+                              <button
+                                key={day}
+                                type="button"
+                                onClick={() => {
+                                  setForm(p => {
+                                    const currDays = Array.isArray(p.workDays) ? [...p.workDays] : ['Mon', 'Tue', 'Wed', 'Thu', 'Fri'];
+                                    const newDays = currDays.includes(day)
+                                      ? currDays.filter(d => d !== day)
+                                      : [...currDays, day];
+                                    return { ...p, workDays: newDays };
+                                  });
+                                }}
+                                style={{
+                                  padding: '7px 0',
+                                  borderRadius: 8,
+                                  border: isDayActive ? '1.5px solid #1E5ADB' : '1px solid #E2E8F0',
+                                  background: isDayActive ? '#1E5ADB' : '#FFFFFF',
+                                  color: isDayActive ? '#FFFFFF' : '#475569',
+                                  fontSize: 11,
+                                  fontWeight: 700,
+                                  cursor: 'pointer',
+                                  transition: 'all 0.15s ease',
+                                  display: 'flex',
+                                  alignItems: 'center',
+                                  justifyContent: 'center',
+                                  gap: 3
+                                }}
+                              >
+                                {isDayActive && <Check size={11} strokeWidth={3} />}
+                                {day}
+                              </button>
+                            );
+                          })}
+                        </div>
+                        <div style={{ marginTop: 8, fontSize: 10, color: '#64748B', display: 'flex', alignItems: 'center', gap: 4 }}>
+                          ℹ️ Selected working days: <strong style={{ color: '#0F172A' }}>{(form.workDays && form.workDays.length > 0) ? form.workDays.join(', ') : 'None selected'}</strong>
+                        </div>
+                      </div>
+                    </div>
+                  )}
+
                   {form.workType === 'Mobile Field Employee' && (
                     <div style={{ background: '#FFFBEB', borderRadius: 16, padding: 18, border: '1px solid #FDE68A', marginTop: 4 }}>
                       <div style={{ fontSize: 13, fontWeight: 700, color: '#92400E', display: 'flex', alignItems: 'center', gap: 8, marginBottom: 8 }}>
@@ -1649,22 +2034,41 @@ export default function Employees() {
                     </div>
 
                     {form.workType === 'Fixed Site Employee' && (
-                      <div style={{ background: '#FFFFFF', padding: '10px 14px', borderRadius: 10, border: '1px solid #E2E8F0', gridColumn: 'span 2' }}>
-                        <div style={{ fontSize: 10, fontWeight: 700, color: '#64748B', textTransform: 'uppercase', letterSpacing: '0.04em', marginBottom: 3 }}>Assigned Fixed Site & Geofence</div>
-                        <div style={{ fontSize: 13, fontWeight: 600, color: '#0F172A', display: 'flex', alignItems: 'center', gap: 6 }}>
-                          <MapPin size={14} color="#1E5ADB" />
-                          {form.assignedSite ? (
-                            <>
-                              <span>{form.assignedSite}</span>
-                              <span style={{ fontSize: 11, background: '#EFF6FF', color: '#1E5ADB', padding: '2px 8px', borderRadius: 6, fontWeight: 700 }}>
-                                {form.geofenceRadius || 20}m radius
-                              </span>
-                            </>
-                          ) : (
-                            <span style={{ color: '#94A3B8' }}>No site assigned</span>
-                          )}
+                      <>
+                        <div style={{ background: '#FFFFFF', padding: '10px 14px', borderRadius: 10, border: '1px solid #E2E8F0' }}>
+                          <div style={{ fontSize: 10, fontWeight: 700, color: '#64748B', textTransform: 'uppercase', letterSpacing: '0.04em', marginBottom: 3 }}>Assigned Fixed Site & Geofence</div>
+                          <div style={{ fontSize: 13, fontWeight: 600, color: '#0F172A', display: 'flex', alignItems: 'center', gap: 6 }}>
+                            <MapPin size={14} color="#1E5ADB" />
+                            {form.assignedSite ? (
+                              <>
+                                <span>{form.assignedSite}</span>
+                                <span style={{ fontSize: 11, background: '#EFF6FF', color: '#1E5ADB', padding: '2px 8px', borderRadius: 6, fontWeight: 700 }}>
+                                  {form.geofenceRadius || 20}m radius
+                                </span>
+                              </>
+                            ) : (
+                              <span style={{ color: '#94A3B8' }}>No site assigned</span>
+                            )}
+                          </div>
                         </div>
-                      </div>
+
+                        <div style={{ background: '#FFFFFF', padding: '10px 14px', borderRadius: 10, border: '1px solid #E2E8F0' }}>
+                          <div style={{ fontSize: 10, fontWeight: 700, color: '#64748B', textTransform: 'uppercase', letterSpacing: '0.04em', marginBottom: 3 }}>Shift Time Schedule & Working Days</div>
+                          <div style={{ fontSize: 13, fontWeight: 600, color: '#0F172A', display: 'flex', alignItems: 'center', gap: 6, flexWrap: 'wrap' }}>
+                            <Clock size={14} color="#1E5ADB" />
+                            <span>{to12hTime(form.shiftStart || '08:00')} - {to12hTime(form.shiftEnd || '17:00')}</span>
+                            {calculateShiftHours(form.shiftStart, form.shiftEnd) && (
+                              <span style={{ fontSize: 10, background: '#EFF6FF', color: '#1E5ADB', padding: '2px 6px', borderRadius: 6, fontWeight: 700 }}>
+                                {calculateShiftHours(form.shiftStart, form.shiftEnd)}
+                              </span>
+                            )}
+                          </div>
+                          <div style={{ fontSize: 11, color: '#64748B', marginTop: 4, display: 'flex', alignItems: 'center', gap: 4 }}>
+                            <Calendar size={12} color="#94A3B8" />
+                            <span>Working Days: <strong style={{ color: '#334155' }}>{(form.workDays && form.workDays.length > 0) ? form.workDays.join(', ') : 'Mon - Fri'}</strong></span>
+                          </div>
+                        </div>
+                      </>
                     )}
                   </div>
                 </div>
