@@ -1530,12 +1530,13 @@ export const deleteDoc = async (_docRef) => {
     }
   }
   const path = _docRef?.path || _docRef?.colPath || 'delay_reports';
-  const id = _docRef?.id;
+  const id = _docRef?.id || (typeof _docRef?.path === 'string' ? _docRef.path.split('/').pop() : null);
   const collectionsToCheck = Array.from(new Set([
     path,
     'Assignments', 'assignments', 'employees', 'Sites',
     'delay_reports', 'incident_reports', 'tracking_logs', 'ActivityLogs',
-    'facial_verifications', 'security_events', 'fraud_reports', 'notifications'
+    'facial_verifications', 'security_events', 'fraud_reports', 'notifications',
+    'Attendance', 'attendance', 'attendance_logs', 'ai_analysis'
   ]));
 
   collectionsToCheck.forEach(colKey => {
@@ -1544,7 +1545,7 @@ export const deleteDoc = async (_docRef) => {
       try {
         const items = JSON.parse(raw);
         if (Array.isArray(items)) {
-          const filtered = items.filter(item => item && item.id !== id && item.reportId !== id && item.assignmentId !== id);
+          const filtered = items.filter(item => item && item.id !== id && item.reportId !== id && item.assignmentId !== id && item.anomalyId !== id);
           if (filtered.length !== items.length) {
             setLocalCollection(colKey, filtered);
           }

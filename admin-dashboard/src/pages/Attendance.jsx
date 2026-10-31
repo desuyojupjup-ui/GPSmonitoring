@@ -1,4 +1,4 @@
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useRef } from 'react';
 import { useLocation } from 'react-router-dom';
 import { Download, FileText, Calendar, Users, MapPin, CheckCircle, Search, Filter, ChevronDown, Clock, XCircle, StopCircle, RefreshCw, Trash2, Activity, ShieldCheck, TrendingUp, UserCheck, Smile, Award, AlertTriangle } from 'lucide-react';
 import { db, collection, onSnapshot, query, orderBy, limit, deleteDoc, doc, setDoc } from '../firebase';
@@ -97,6 +97,15 @@ export default function Attendance() {
   const [pageSize, setPageSize] = useState(10);
   const [selectedIds, setSelectedIds] = useState([]);
   const [syncing, setSyncing] = useState(false);
+
+  // Persistent deleted IDs to avoid sync server or Firestore snapshots resurrecting deleted records
+  const deletedIdsRef = useRef(new Set((() => {
+    try {
+      return JSON.parse(localStorage.getItem('subai_deleted_att_ids') || '[]');
+    } catch {
+      return [];
+    }
+  })()));
 
   // Exposed refresh function (also called by Refresh button)
   const pullFromSyncServerRef = React.useRef(null);
@@ -312,8 +321,8 @@ export default function Attendance() {
             try { return JSON.parse(localStorage.getItem('subai_store_' + key) || '[]'); } catch { return []; }
           })();
           const map = new Map();
-          existing.forEach(i => { if (i && i.id) map.set(i.id, i); });
-          remoteItems.forEach(i => { if (i && i.id) map.set(i.id, { ...map.get(i.id), ...i }); });
+          existing.forEach(i => { if (i && i.id && !deletedIdsRef.current.has(i.id)) map.set(i.id, i); });
+          remoteItems.forEach(i => { if (i && i.id && !deletedIdsRef.current.has(i.id)) map.set(i.id, { ...map.get(i.id), ...i }); });
           const merged = Array.from(map.values());
           if (JSON.stringify(merged) !== JSON.stringify(existing)) {
             localStorage.setItem('subai_store_' + key, JSON.stringify(merged));
@@ -328,25 +337,25 @@ export default function Attendance() {
 
         // Merge assignments from sync server
         const combinedAsg = new Map();
-        asgRecordsLc.forEach(r => { if (r && r.id) combinedAsg.set(r.id, r); });
-        asgRecords.forEach(r => { if (r && r.id) combinedAsg.set(r.id, r); });
+        asgRecordsLc.forEach(r => { if (r && r.id && !deletedIdsRef.current.has(r.id)) combinedAsg.set(r.id, r); });
+        asgRecords.forEach(r => { if (r && r.id && !deletedIdsRef.current.has(r.id)) combinedAsg.set(r.id, r); });
         if (combinedAsg.size > 0) {
           setAssignments(Array.from(combinedAsg.values()));
         }
 
         // Merge both collections into component state directly
         const combined = new Map();
-        attRecordsLc.forEach(r => { if (r && r.id) combined.set(r.id, r); });
-        attRecords.forEach(r => { if (r && r.id) combined.set(r.id, r); });
+        attRecordsLc.forEach(r => { if (r && r.id && !deletedIdsRef.current.has(r.id)) combined.set(r.id, r); });
+        attRecords.forEach(r => { if (r && r.id && !deletedIdsRef.current.has(r.id)) combined.set(r.id, r); });
         const allRecs = Array.from(combined.values());
 
         if (allRecs.length > 0) {
           setAttendance(prev => {
-            const others = prev.filter(r => r._source !== '__direct__');
+            const others = prev.filter(r => r._source !== '__direct__' && !deletedIdsRef.current.has(r.id));
             const incoming = allRecs.map(r => ({ ...normalizeRecord(r), _source: '__direct__' }));
             // Deduplicate by id across all sources
             const idMap = new Map();
-            [...others, ...incoming].forEach(r => { if (r.id) idMap.set(r.id, r); });
+            [...others, ...incoming].forEach(r => { if (r.id && !deletedIdsRef.current.has(r.id)) idMap.set(r.id, r); });
             return Array.from(idMap.values());
           });
           setLoading(false);
@@ -370,21 +379,23 @@ export default function Attendance() {
     try {
       const mergeAndSet = (collKey, newDocs) => {
         setAttendance(prev => {
-          const others = prev.filter(r => r._source !== collKey);
-          const incoming = newDocs.map(d => ({ ...normalizeRecord({ id: d.id, ...d.data() }), _source: collKey }));
+          const others = prev.filter(r => r._source !== collKey && !deletedIdsRef.current.has(r.id));
+          const incoming = newDocs
+            .filter(d => !deletedIdsRef.current.has(d.id))
+            .map(d => ({ ...normalizeRecord({ id: d.id, ...d.data() }), _source: collKey }));
           const idMap = new Map();
-          [...others, ...incoming].forEach(r => { if (r.id) idMap.set(r.id, r); });
+          [...others, ...incoming].forEach(r => { if (r.id && !deletedIdsRef.current.has(r.id)) idMap.set(r.id, r); });
           return Array.from(idMap.values());
         });
       };
       const unsubAtt1 = onSnapshot(query(collection(db, 'attendance')), snap => mergeAndSet('attendance', snap.docs));
       const unsubAtt2 = onSnapshot(query(collection(db, 'Attendance')), snap => mergeAndSet('Attendance', snap.docs));
-      const unsubAsg1 = onSnapshot(query(collection(db, 'Assignments')), snap => setAssignments(snap.docs.map(d => ({ id: d.id, ...d.data() }))));
+      const unsubAsg1 = onSnapshot(query(collection(db, 'Assignments')), snap => setAssignments(snap.docs.map(d => ({ id: d.id, ...d.data() })).filter(d => !deletedIdsRef.current.has(d.id))));
       const unsubAsg2 = onSnapshot(query(collection(db, 'assignments')), snap => {
         setAssignments(prev => {
           const map = new Map();
-          prev.forEach(a => map.set(a.id, a));
-          snap.docs.forEach(d => map.set(d.id, { id: d.id, ...d.data() }));
+          prev.forEach(a => { if (!deletedIdsRef.current.has(a.id)) map.set(a.id, a); });
+          snap.docs.forEach(d => { if (!deletedIdsRef.current.has(d.id)) map.set(d.id, { id: d.id, ...d.data() }); });
           return Array.from(map.values());
         });
       });
@@ -404,7 +415,7 @@ export default function Attendance() {
 
   // Consolidate live Firestore attendance records with Missed Shifts and Active Workforce
   const combinedAttendance = React.useMemo(() => {
-    const list = [...attendance];
+    const list = attendance.filter(a => a && a.id && !deletedIdsRef.current.has(a.id));
     const existingKeys = new Set();
     list.forEach(a => {
       const eName = (a.employee_name || a.employeeName || '').toLowerCase().trim();
@@ -418,7 +429,7 @@ export default function Attendance() {
 
     // 1. Process Missed Shifts from Assignments
     assignments.forEach(asg => {
-      if (!asg || !asg.id) return;
+      if (!asg || !asg.id || deletedIdsRef.current.has(asg.id)) return;
       const rawStatus = (asg.status || '').trim().toLowerCase();
       if (rawStatus === 'cancelled') return;
 
@@ -431,6 +442,9 @@ export default function Attendance() {
 
       if (isMissed) {
         const asgId = asg.id;
+        const autoId = `att_missed_${asgId}`;
+        if (deletedIdsRef.current.has(asgId) || deletedIdsRef.current.has(autoId)) return;
+
         const eName = (asg.empName || asg.employeeName || '').trim();
         const eId = asg.empId || asg.employeeId || '';
         const eMail = asg.empEmail || asg.employeeEmail || '';
@@ -446,7 +460,6 @@ export default function Attendance() {
         }
 
         const matchKey1 = `asg_${asgId}`;
-        const autoId = `att_missed_${asgId}`;
 
         // Check if employee already has an active or completed check-in for this assignment
         const hasExistingCheckIn = list.some(a => {
@@ -491,10 +504,12 @@ export default function Attendance() {
     employees.forEach(emp => {
       if (emp.status && emp.status !== 'Offline') {
         const empNameLower = (emp.name || '').toLowerCase();
+        const autoEmpId = `emp_auto_att_${emp.id}`;
+        if (deletedIdsRef.current.has(autoEmpId) || deletedIdsRef.current.has(emp.id)) return;
         if (!existingKeys.has(empNameLower)) {
           existingKeys.add(empNameLower);
           list.push(normalizeRecord({
-            id: `emp_auto_att_${emp.id}`,
+            id: autoEmpId,
             employee_name: emp.name,
             site_name: emp.assignedSiteName || emp.assignedSite || emp.org || 'Assigned Site',
             check_in: emp.lastCheckIn ? emp.lastCheckIn : '—',
@@ -550,17 +565,117 @@ export default function Attendance() {
     );
     if (confirmed) {
       try {
-        await Promise.all(selectedIds.map(id => {
-          if (id.startsWith('emp_auto_att_')) return Promise.resolve();
-          const target = attendance.find(a => a.id === id);
-          const coll = target && target._source ? target._source : 'Attendance';
-          return deleteDoc(doc(db, coll, id));
+        const idsToDelete = [...selectedIds];
+
+        // 1. Immediately register in deletedIdsRef and persist
+        idsToDelete.forEach(id => deletedIdsRef.current.add(id));
+        try {
+          localStorage.setItem('subai_deleted_att_ids', JSON.stringify(Array.from(deletedIdsRef.current)));
+        } catch (_) {}
+
+        // 2. Perform deletions in parallel across collections
+        await Promise.all(idsToDelete.map(async id => {
+          if (id.startsWith('att_missed_')) {
+            const asgId = id.replace('att_missed_', '');
+            deletedIdsRef.current.add(asgId);
+            deleteDoc(doc(db, 'Assignments', asgId)).catch(() => {});
+            deleteDoc(doc(db, 'assignments', asgId)).catch(() => {});
+            ['Assignments', 'assignments'].forEach(k => {
+              try {
+                const store = JSON.parse(localStorage.getItem('subai_store_' + k) || '[]');
+                const filtered = store.filter(x => x && x.id !== asgId);
+                localStorage.setItem('subai_store_' + k, JSON.stringify(filtered));
+              } catch (_) {}
+            });
+            setAssignments(prev => prev.filter(a => a.id !== asgId));
+          }
+
+          // Delete from all attendance collections
+          deleteDoc(doc(db, 'Attendance', id)).catch(() => {});
+          deleteDoc(doc(db, 'attendance', id)).catch(() => {});
+          deleteDoc(doc(db, 'attendance_logs', id)).catch(() => {});
+
+          // Clean local store
+          ['Attendance', 'attendance', 'attendance_logs'].forEach(k => {
+            try {
+              const store = JSON.parse(localStorage.getItem('subai_store_' + k) || '[]');
+              const filtered = store.filter(x => x && x.id !== id);
+              localStorage.setItem('subai_store_' + k, JSON.stringify(filtered));
+            } catch (_) {}
+          });
         }));
-        showToast('success', 'Bulk Delete Successful', `${selectedIds.length} attendance record(s) deleted.`);
+
+        // 3. Notify sync server
+        fetch('/api/sync', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ action: 'delete', ids: idsToDelete })
+        }).catch(() => {});
+
+        // 4. Optimistically update local attendance state
+        setAttendance(prev => prev.filter(a => !idsToDelete.includes(a.id)));
         setSelectedIds([]);
+        showToast('success', 'Bulk Delete Successful', `${idsToDelete.length} attendance record(s) deleted.`);
       } catch (err) {
         console.error('Bulk delete error:', err);
         showToast('error', 'Bulk Delete Failed', err.message || 'Error deleting selected attendance records.');
+      }
+    }
+  };
+
+  const handleDeleteRow = async (row) => {
+    if (!row || !row.id) return;
+    const confirmed = await showConfirmDelete(
+      'Delete Attendance Record?',
+      `Are you sure you want to delete the attendance record for ${row.employee_name || 'this employee'}? This action cannot be undone.`
+    );
+    if (confirmed) {
+      try {
+        const id = row.id;
+        deletedIdsRef.current.add(id);
+        try {
+          localStorage.setItem('subai_deleted_att_ids', JSON.stringify(Array.from(deletedIdsRef.current)));
+        } catch (_) {}
+
+        if (id.startsWith('att_missed_')) {
+          const asgId = id.replace('att_missed_', '');
+          deletedIdsRef.current.add(asgId);
+          deleteDoc(doc(db, 'Assignments', asgId)).catch(() => {});
+          deleteDoc(doc(db, 'assignments', asgId)).catch(() => {});
+          ['Assignments', 'assignments'].forEach(k => {
+            try {
+              const store = JSON.parse(localStorage.getItem('subai_store_' + k) || '[]');
+              const filtered = store.filter(x => x && x.id !== asgId);
+              localStorage.setItem('subai_store_' + k, JSON.stringify(filtered));
+            } catch (_) {}
+          });
+          setAssignments(prev => prev.filter(a => a.id !== asgId));
+        }
+
+        deleteDoc(doc(db, 'Attendance', id)).catch(() => {});
+        deleteDoc(doc(db, 'attendance', id)).catch(() => {});
+        deleteDoc(doc(db, 'attendance_logs', id)).catch(() => {});
+
+        ['Attendance', 'attendance', 'attendance_logs'].forEach(k => {
+          try {
+            const store = JSON.parse(localStorage.getItem('subai_store_' + k) || '[]');
+            const filtered = store.filter(x => x && x.id !== id);
+            localStorage.setItem('subai_store_' + k, JSON.stringify(filtered));
+          } catch (_) {}
+        });
+
+        fetch('/api/sync', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ action: 'delete', ids: [id] })
+        }).catch(() => {});
+
+        setAttendance(prev => prev.filter(a => a.id !== id));
+        setSelectedIds(prev => prev.filter(i => i !== id));
+        showToast('success', 'Record Deleted', 'Attendance record deleted successfully.');
+      } catch (err) {
+        console.error('Delete error:', err);
+        showToast('error', 'Delete Failed', err.message || 'Error deleting attendance record.');
       }
     }
   };
@@ -664,14 +779,14 @@ export default function Attendance() {
                         style={{ cursor: 'pointer', accentColor: '#1E5ADB', width: 15, height: 15 }}
                       />
                     </th>
-                    {['EMPLOYEE', 'SITE', 'CHECK IN', 'CHECK OUT', 'DURATION', 'STATUS', 'VERIFICATION'].map(h => (
-                      <th key={h} style={{ padding: '14px 18px', textAlign: 'left', color: '#64748B', fontWeight: 700, fontSize: 11, letterSpacing: '0.05em', whiteSpace: 'nowrap' }}>{h}</th>
+                    {['EMPLOYEE', 'SITE', 'CHECK IN', 'CHECK OUT', 'DURATION', 'STATUS', 'VERIFICATION', 'ACTION'].map(h => (
+                      <th key={h} style={{ padding: '14px 18px', textAlign: h === 'ACTION' ? 'center' : 'left', color: '#64748B', fontWeight: 700, fontSize: 11, letterSpacing: '0.05em', whiteSpace: 'nowrap' }}>{h}</th>
                     ))}
                   </tr>
                 </thead>
                 <tbody>
                   {currentPageItems.length === 0 && filteredAtt.length === 0 && (
-                    <tr><td colSpan={8} style={{ textAlign: 'center', padding: 30, color: '#94A3B8' }}>No attendance records logged yet.</td></tr>
+                    <tr><td colSpan={9} style={{ textAlign: 'center', padding: 30, color: '#94A3B8' }}>No attendance records logged yet.</td></tr>
                   )}
                   {currentPageItems.map((row, i) => {
                     const statusStyle = STATUS_STYLES[row.status] || STATUS_STYLES['Offline'];
@@ -767,21 +882,36 @@ export default function Attendance() {
                             {row.verification}
                           </div>
                         </td>
+                        <td style={{ padding: '14px 18px', textAlign: 'center', whiteSpace: 'nowrap' }}>
+                          <button
+                            onClick={() => handleDeleteRow(row)}
+                            title="Delete Record"
+                            style={{
+                              background: '#FEE2E2',
+                              border: 'none',
+                              borderRadius: 6,
+                              padding: '5px 8px',
+                              cursor: 'pointer',
+                              color: '#DC2626',
+                              display: 'inline-flex',
+                              alignItems: 'center',
+                              justifyContent: 'center',
+                              transition: 'all 0.15s ease'
+                            }}
+                            onMouseEnter={e => e.currentTarget.style.background = '#FCA5A5'}
+                            onMouseLeave={e => e.currentTarget.style.background = '#FEE2E2'}
+                          >
+                            <Trash2 size={13} />
+                          </button>
+                        </td>
                       </tr>
                     );
                   })}
 
                   {/* Empty Filler Rows */}
                   {emptyRowsCount > 0 && Array.from({ length: emptyRowsCount }).map((_, idx) => (
-                    <tr key={`empty-row-${idx}`} style={{ height: 38, borderBottom: '1px dashed #F8FAFC' }}>
-                      <td style={{ padding: '8px 18px', color: '#E2E8F0', fontSize: 11, textAlign: 'center' }}>—</td>
-                      <td style={{ padding: '8px 18px', color: '#E2E8F0', fontSize: 11 }}>—</td>
-                      <td style={{ padding: '8px 18px', color: '#E2E8F0', fontSize: 11 }}>—</td>
-                      <td style={{ padding: '8px 18px', color: '#E2E8F0', fontSize: 11 }}>—</td>
-                      <td style={{ padding: '8px 18px', color: '#E2E8F0', fontSize: 11 }}>—</td>
-                      <td style={{ padding: '8px 18px', color: '#E2E8F0', fontSize: 11 }}>—</td>
-                      <td style={{ padding: '8px 18px', color: '#E2E8F0', fontSize: 11 }}>—</td>
-                      <td style={{ padding: '8px 18px', color: '#E2E8F0', fontSize: 11 }}>—</td>
+                    <tr key={`empty-${idx}`} style={{ height: 53, borderBottom: '1px dashed #F1F5F9' }}>
+                      <td colSpan={9} style={{ padding: 0 }}>&nbsp;</td>
                     </tr>
                   ))}
                 </tbody>

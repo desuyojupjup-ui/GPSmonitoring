@@ -1,4 +1,4 @@
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useRef } from 'react';
 import { useLocation } from 'react-router-dom';
 import { db, collection, onSnapshot, query, orderBy, limit, updateDoc, doc, deleteDoc, addDoc, serverTimestamp } from '../firebase';
 import { Search, ShieldAlert, AlertTriangle, CheckCircle, ArrowUpRight, Filter, Eye, Trash2, Activity, TrendingUp, Zap, BrainCircuit, ShieldX, Gauge, Sliders, CheckSquare } from 'lucide-react';
@@ -135,6 +135,15 @@ export default function AnomalyList() {
   const [pageSize, setPageSize] = useState(10);
   const [selectedIds, setSelectedIds] = useState([]);
 
+  // Persistent deleted IDs to avoid Firestore snapshot listeners resurrecting deleted anomalies
+  const deletedIdsRef = useRef(new Set((() => {
+    try {
+      return JSON.parse(localStorage.getItem('subai_deleted_anomaly_ids') || '[]');
+    } catch {
+      return [];
+    }
+  })()));
+
   useEffect(() => {
     setLoading(true);
     let unsubAi = () => {};
@@ -148,8 +157,12 @@ export default function AnomalyList() {
 
       // Priority 1: ai_analysis records from mobile APK
       aiItems.forEach(item => {
+        if (!item || !item.id) return;
+        if (deletedIdsRef.current.has(item.id) || (item.anomalyId && deletedIdsRef.current.has(item.anomalyId))) return;
         mergedMap.set(item.id, {
           ...item,
+          aiDocId: item.id,
+          anomalyId: item.anomalyId || item.id,
           confidence: item.confidence || '94%',
           severity: item.severity === 'Critical' ? 'High' : (item.severity || 'Medium'),
           type: item.type || item.eventType || 'Security Anomaly',
@@ -160,10 +173,14 @@ export default function AnomalyList() {
 
       // Priority 2: ActivityLogs where type is Security Anomaly / Anomaly
       logItems.forEach(log => {
+        if (!log || !log.id) return;
         const id = log.anomalyId || log.id;
+        if (deletedIdsRef.current.has(id) || deletedIdsRef.current.has(log.id) || (log.anomalyId && deletedIdsRef.current.has(log.anomalyId))) return;
         if (!mergedMap.has(id)) {
           mergedMap.set(id, {
             id,
+            logDocId: log.id,
+            anomalyId: log.anomalyId || log.id,
             employeeName: log.employeeName || 'Field Employee',
             employeeId: log.employeeId || null,
             employeeEmail: log.employeeEmail || null,
@@ -178,6 +195,9 @@ export default function AnomalyList() {
             timestamp: log.timestamp || log.createdAt,
             sourceCollection: 'ActivityLogs',
           });
+        } else {
+          const existing = mergedMap.get(id);
+          existing.logDocId = log.id;
         }
       });
 
@@ -306,20 +326,141 @@ export default function AnomalyList() {
     );
     if (confirmed) {
       try {
-        await Promise.all(selectedIds.map(async id => {
+        const idsToDelete = [...selectedIds];
+        const allTargetDocIds = new Set();
+
+        idsToDelete.forEach(id => {
+          deletedIdsRef.current.add(id);
+          allTargetDocIds.add(id);
           const item = anomalies.find(a => a.id === id);
-          deleteDoc(doc(db, 'notifications', `anomaly_${id}`)).catch(() => {});
-          if (item?.sourceCollection === 'ActivityLogs') {
-            return deleteDoc(doc(db, 'ActivityLogs', id)).catch(() => {});
+          if (item) {
+            if (item.aiDocId) {
+              allTargetDocIds.add(item.aiDocId);
+              deletedIdsRef.current.add(item.aiDocId);
+            }
+            if (item.logDocId) {
+              allTargetDocIds.add(item.logDocId);
+              deletedIdsRef.current.add(item.logDocId);
+            }
+            if (item.anomalyId) {
+              allTargetDocIds.add(item.anomalyId);
+              deletedIdsRef.current.add(item.anomalyId);
+            }
           }
-          return deleteDoc(doc(db, 'ai_analysis', id)).catch(() => {});
+        });
+
+        try {
+          localStorage.setItem('subai_deleted_anomaly_ids', JSON.stringify(Array.from(deletedIdsRef.current)));
+        } catch (_) {}
+
+        const docIdsArray = Array.from(allTargetDocIds);
+
+        // Delete from all collections that may store anomalies or associated notifications
+        await Promise.all(docIdsArray.map(async docId => {
+          deleteDoc(doc(db, 'ai_analysis', docId)).catch(() => {});
+          deleteDoc(doc(db, 'ActivityLogs', docId)).catch(() => {});
+          deleteDoc(doc(db, 'notifications', `anomaly_${docId}`)).catch(() => {});
+          deleteDoc(doc(db, 'notifications', docId)).catch(() => {});
+          deleteDoc(doc(db, 'security_events', docId)).catch(() => {});
+          deleteDoc(doc(db, 'fraud_reports', docId)).catch(() => {});
+
+          // Clean local store
+          ['ai_analysis', 'ActivityLogs', 'notifications', 'security_events', 'fraud_reports'].forEach(k => {
+            try {
+              const store = JSON.parse(localStorage.getItem('subai_store_' + k) || '[]');
+              const filtered = store.filter(x => x && x.id !== docId && x.anomalyId !== docId);
+              localStorage.setItem('subai_store_' + k, JSON.stringify(filtered));
+            } catch (_) {}
+          });
         }));
+
+        // Notify sync server
+        fetch('/api/sync', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ action: 'delete', ids: docIdsArray })
+        }).catch(() => {});
+
         window.dispatchEvent(new CustomEvent('subai_notifications_updated'));
-        showToast('success', 'Bulk Delete Successful', `${selectedIds.length} anomaly record(s) deleted.`);
+
+        // Optimistic UI update
+        setAnomalies(prev => prev.filter(a => !idsToDelete.includes(a.id) && !allTargetDocIds.has(a.id)));
+        if (selectedAnomaly && (idsToDelete.includes(selectedAnomaly.id) || allTargetDocIds.has(selectedAnomaly.id))) {
+          setSelectedAnomaly(null);
+        }
         setSelectedIds([]);
+        showToast('success', 'Bulk Delete Successful', `${idsToDelete.length} anomaly record(s) deleted.`);
       } catch (err) {
         console.error('Bulk delete error:', err);
         showToast('error', 'Bulk Delete Failed', err.message || 'Error deleting selected anomaly records.');
+      }
+    }
+  };
+
+  const handleDeleteSingle = async (item) => {
+    if (!item) return;
+    const confirmed = await showConfirmDelete(
+      'Delete Anomaly Record?',
+      `Are you sure you want to remove this ${item.type || 'anomaly'} record for ${item.employeeName || 'employee'}? This action cannot be undone.`
+    );
+    if (confirmed) {
+      try {
+        const allTargetDocIds = new Set();
+        const id = item.id;
+        allTargetDocIds.add(id);
+        deletedIdsRef.current.add(id);
+        if (item.aiDocId) {
+          allTargetDocIds.add(item.aiDocId);
+          deletedIdsRef.current.add(item.aiDocId);
+        }
+        if (item.logDocId) {
+          allTargetDocIds.add(item.logDocId);
+          deletedIdsRef.current.add(item.logDocId);
+        }
+        if (item.anomalyId) {
+          allTargetDocIds.add(item.anomalyId);
+          deletedIdsRef.current.add(item.anomalyId);
+        }
+
+        try {
+          localStorage.setItem('subai_deleted_anomaly_ids', JSON.stringify(Array.from(deletedIdsRef.current)));
+        } catch (_) {}
+
+        const docIdsArray = Array.from(allTargetDocIds);
+        await Promise.all(docIdsArray.map(async docId => {
+          deleteDoc(doc(db, 'ai_analysis', docId)).catch(() => {});
+          deleteDoc(doc(db, 'ActivityLogs', docId)).catch(() => {});
+          deleteDoc(doc(db, 'notifications', `anomaly_${docId}`)).catch(() => {});
+          deleteDoc(doc(db, 'notifications', docId)).catch(() => {});
+          deleteDoc(doc(db, 'security_events', docId)).catch(() => {});
+          deleteDoc(doc(db, 'fraud_reports', docId)).catch(() => {});
+
+          ['ai_analysis', 'ActivityLogs', 'notifications', 'security_events', 'fraud_reports'].forEach(k => {
+            try {
+              const store = JSON.parse(localStorage.getItem('subai_store_' + k) || '[]');
+              const filtered = store.filter(x => x && x.id !== docId && x.anomalyId !== docId);
+              localStorage.setItem('subai_store_' + k, JSON.stringify(filtered));
+            } catch (_) {}
+          });
+        }));
+
+        fetch('/api/sync', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ action: 'delete', ids: docIdsArray })
+        }).catch(() => {});
+
+        window.dispatchEvent(new CustomEvent('subai_notifications_updated'));
+
+        setAnomalies(prev => prev.filter(a => !allTargetDocIds.has(a.id)));
+        if (selectedAnomaly && allTargetDocIds.has(selectedAnomaly.id)) {
+          setSelectedAnomaly(null);
+        }
+        setSelectedIds(prev => prev.filter(i => !allTargetDocIds.has(i)));
+        showToast('success', 'Anomaly Deleted', 'Anomaly record removed successfully.');
+      } catch (err) {
+        console.error('Delete error:', err);
+        showToast('error', 'Delete Failed', err.message || 'Error deleting anomaly record.');
       }
     }
   };
@@ -581,6 +722,29 @@ export default function AnomalyList() {
                           }}
                         >
                           <Eye size={13} color="#1E5ADB" /> View
+                        </button>
+                        <button
+                          onClick={() => handleDeleteSingle(item)}
+                          title="Delete Anomaly"
+                          style={{
+                            display: 'inline-flex',
+                            alignItems: 'center',
+                            gap: '4px',
+                            padding: '4px 8px',
+                            height: '28px',
+                            borderRadius: '6px',
+                            border: '1px solid #FECACA',
+                            backgroundColor: '#FEF2F2',
+                            color: '#DC2626',
+                            fontWeight: '700',
+                            fontSize: '11px',
+                            cursor: 'pointer',
+                            boxShadow: '0 1px 2px rgba(0, 0, 0, 0.04)',
+                            transition: 'all 0.15s ease',
+                            marginLeft: '6px'
+                          }}
+                        >
+                          <Trash2 size={13} color="#DC2626" /> Delete
                         </button>
                       </td>
                     </tr>
