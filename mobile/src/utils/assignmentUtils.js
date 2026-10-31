@@ -471,8 +471,8 @@ export function parseAttendanceTimestamp(ts) {
   return null;
 }
 
-export function checkLateCheckIn(asgOrShift, checkTime = new Date(), graceMinutes = 5) {
-  let shiftStr = typeof asgOrShift === 'string' ? asgOrShift : (asgOrShift?.shift || asgOrShift?.scheduledShift || '');
+export function checkLateCheckIn(asgOrShift, checkTime = new Date(), graceMinutes = 15) {
+  let shiftStr = typeof asgOrShift === 'string' ? asgOrShift : (asgOrShift?.shift || asgOrShift?.shiftTime || asgOrShift?.scheduledShift || '');
   let startStr = typeof asgOrShift === 'object' ? (asgOrShift?.shiftStart || asgOrShift?.startTime || '') : '';
   if (!startStr && shiftStr) {
     const parts = shiftStr.split(/\s*[-~]|(?:\s+to\s+)\s*/i).filter(Boolean);
@@ -480,10 +480,38 @@ export function checkLateCheckIn(asgOrShift, checkTime = new Date(), graceMinute
       startStr = parts[0].trim();
     }
   }
-  if (!startStr) startStr = '08:00 AM';
+
+  // If no shift was ever assigned or scheduled, the employee is on a flexible schedule and cannot be late!
+  if (!startStr && !shiftStr) {
+    return {
+      isLate: false,
+      minutesLate: 0,
+      shiftStartStr: 'Flexible',
+      shiftStartDt: null,
+    };
+  }
+
+  if (startStr.toLowerCase() === 'flexible' || startStr.toLowerCase() === 'unassigned' || startStr.toLowerCase() === 'no shift scheduled') {
+    return {
+      isLate: false,
+      minutesLate: 0,
+      shiftStartStr: 'Flexible',
+      shiftStartDt: null,
+    };
+  }
+
   const parsed = parseTimeToHoursMinutes(startStr);
+  if (!parsed) {
+    return {
+      isLate: false,
+      minutesLate: 0,
+      shiftStartStr: startStr,
+      shiftStartDt: null,
+    };
+  }
+
   const now = checkTime instanceof Date ? checkTime : (parseAttendanceTimestamp(checkTime) || new Date(checkTime));
-  const shiftStartDt = new Date(now.getFullYear(), now.getMonth(), now.getDate(), parsed?.hours ?? 8, parsed?.minutes ?? 0, parsed?.seconds ?? 0);
+  const shiftStartDt = new Date(now.getFullYear(), now.getMonth(), now.getDate(), parsed.hours, parsed.minutes, parsed.seconds);
   const diffMs = now.getTime() - shiftStartDt.getTime();
   const minutesLate = Math.round(diffMs / 60000);
 
@@ -495,48 +523,53 @@ export function checkLateCheckIn(asgOrShift, checkTime = new Date(), graceMinute
   };
 }
 
-export function isAttendanceRecordFlagged(r) {
+export function isAttendanceRecordFlagged(r, employeeOrAssignmentShift = null) {
   if (!r) return false;
 
-  // 1. Explicit early check-out flags
+  // 1. Explicit early check-out flags (only if departure was early by at least 15 mins)
   if (r.earlyCheckOut === true || r.earlyDeparture === true) return true;
-  if (typeof r.minutesEarly === 'number' && r.minutesEarly >= 5) return true;
+  if (typeof r.minutesEarly === 'number' && r.minutesEarly >= 15) return true;
 
-  // 2. Explicit late check-in flags
-  if (r.isLate === true || r.late === true) return true;
-  if (typeof r.minutesLate === 'number' && r.minutesLate >= 5) return true;
-  if (typeof r.lateMinutes === 'number' && r.lateMinutes >= 5) return true;
-
-  // 3. Status flags
+  // 2. Explicit status indicating absence or missed shift
   const st = (r.status || '').toString().trim().toLowerCase();
-  if (st === 'late' || st === 'flagged' || st === 'missed shift' || st === 'missed' || st === 'absent') {
+  if (st === 'missed shift' || st === 'missed' || st === 'absent') {
     return true;
   }
 
-  // 4. Anomaly flags in record
+  // 3. Anomaly flags specific to unexcused tardiness or absence
   const aFlag = (r.anomalyFlag || '').toString().toLowerCase();
-  if (aFlag.includes('early') || aFlag.includes('late') || aFlag.includes('anomaly')) {
+  if (aFlag.includes('unauthorized absence')) {
     return true;
   }
 
-  const shiftStr = r.shift || '08:00 AM - 05:00 PM';
+  // 4. Resolve effective shift for this record
+  const effectiveShift = (
+    (r.shift && r.shift !== 'Unassigned' && r.shift !== 'Flexible' && r.shift !== 'No Shift Scheduled' && r.shift !== '08:00 AM - 05:00 PM')
+      ? r.shift
+      : (employeeOrAssignmentShift && employeeOrAssignmentShift !== 'Unassigned' && employeeOrAssignmentShift !== 'Flexible' && employeeOrAssignmentShift !== 'No Shift Scheduled')
+        ? employeeOrAssignmentShift
+        : (r.shift && r.shift !== 'Unassigned' && r.shift !== 'Flexible' && r.shift !== 'No Shift Scheduled')
+          ? r.shift
+          : null
+  );
 
-  // 5. Time-based late check-in detection from raw timeIn
+  // If no explicit shift was scheduled for this employee or record, they are on a flexible schedule and cannot be late!
+  if (!effectiveShift) {
+    return false;
+  }
+
+  // 5. If an explicit shift WAS assigned, check if check-in was actually late (> 15 mins after shift start)
   if (r.timeIn) {
     const timeInDate = parseAttendanceTimestamp(r.timeIn);
     if (timeInDate) {
-      const lateCheck = checkLateCheckIn(shiftStr, timeInDate, 5);
+      const lateCheck = checkLateCheckIn(effectiveShift, timeInDate, 15);
       if (lateCheck.isLate) return true;
     }
   }
 
-  // 6. Time-based early check-out detection from raw timeOut
-  if (r.timeOut) {
-    const timeOutDate = parseAttendanceTimestamp(r.timeOut);
-    if (timeOutDate) {
-      const earlyCheck = checkEarlyCheckout(shiftStr, timeOutDate, 5);
-      if (earlyCheck.isEarly) return true;
-    }
+  // 6. Explicit late status ONLY if minutesLate >= 15
+  if ((st === 'late' || r.isLate === true || r.late === true) && typeof r.minutesLate === 'number' && r.minutesLate >= 15) {
+    return true;
   }
 
   return false;

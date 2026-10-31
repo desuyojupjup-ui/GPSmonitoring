@@ -409,9 +409,14 @@ export default function AttendanceScreen({ navigation, route, user: propUser }) 
       const resolvedSiteName = matchedSite?.name || activeLocationAddress || emp.assignedSite || emp.site || 'Active Field Location';
       const activeAddressToSave = activeLocationAddress || matchedSite?.address || resolvedSiteName;
 
-      const shiftToUse = emp.shift || emp.scheduledShift || '08:00 AM - 05:00 PM';
-      const lateInfo = checkLateCheckIn(shiftToUse, new Date(), 5);
-      const isLate = lateInfo.isLate;
+      const hasEmpShift = emp.shift && emp.shift !== 'Unassigned' && emp.shift !== 'Flexible' && emp.shift !== 'No Shift Scheduled';
+      const shiftToUse = hasEmpShift ? emp.shift : (emp.scheduledShift || 'Flexible');
+      let isLate = false;
+      let lateInfo = { isLate: false, minutesLate: 0 };
+      if (hasEmpShift && shiftToUse !== 'Flexible') {
+        lateInfo = checkLateCheckIn(shiftToUse, new Date(), 15);
+        isLate = Boolean(lateInfo.isLate);
+      }
       const statusText = isLate ? 'Late' : 'On Site';
 
       const attData = {
@@ -444,52 +449,61 @@ export default function AttendanceScreen({ navigation, route, user: propUser }) 
       const attId = attRef?.id;
       await addDoc(collection(db, 'attendance'), { ...attData, id: attId }).catch(() => { });
 
-      await addDoc(collection(db, 'ActivityLogs'), {
-        employee_id: emp.id,
-        employeeName: emp.name,
-        site_id: matchedSite?.id || 'Unknown',
-        siteName: resolvedSiteName,
-        action: 'Check In',
-        type: 'Attendance',
-        timestamp: serverTimestamp(),
-        status: 'Normal',
-        details: `Checked in at ${resolvedSiteName}`
-      }).catch(() => {});
-
-      // 1. Immediately capture and save current location in the Location Log
-      await locationLogService.captureAndSaveCurrentLocation({
-        employee: emp,
-        site: { name: attData.siteName },
-        attendanceId: attId,
-        trigger: 'check_in',
-        coords: { latitude: loc.coords.latitude, longitude: loc.coords.longitude },
-      });
-
-      // 2. Start periodic 5-minute location recording while checked in
-      locationLogService.startPeriodicLogging({
-        employee: emp,
-        site: { name: attData.siteName },
-        attendanceId: attId,
-      });
-
-      // 3. Start 30-minute random selfie verification scheduler
-      await schedulerStart({
-        employee: emp,
-        assignment: null,
-        attendanceId: attId,
-      });
-
-      if (emp.id !== 'emp_fallback') {
-        await updateDoc(doc(db, 'employees', emp.id), {
-          status: 'On Duty',
-          lastCheckIn: serverTimestamp(),
-          lastActive: Date.now(),
-          isOnline: true,
-        }).catch(() => { });
-        presenceService.setCurrentStatus('On Duty');
-        presenceService.sendHeartbeat(true, 'On Duty');
-      }
       Alert.alert('✅ Checked In', `Recorded at ${new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit', hour12: true })} at ${resolvedSiteName}`);
+
+      try {
+        await addDoc(collection(db, 'ActivityLogs'), {
+          employee_id: emp.id,
+          employeeName: emp.name,
+          site_id: matchedSite?.id || 'Unknown',
+          siteName: resolvedSiteName,
+          action: 'Check In',
+          type: 'Attendance',
+          timestamp: serverTimestamp(),
+          status: 'Normal',
+          details: `Checked in at ${resolvedSiteName}`
+        }).catch(() => {});
+      } catch (_) {}
+
+      try {
+        // 1. Immediately capture and save current location in the Location Log
+        await locationLogService.captureAndSaveCurrentLocation({
+          employee: emp,
+          site: { name: attData.siteName },
+          attendanceId: attId,
+          trigger: 'check_in',
+          coords: { latitude: loc.coords.latitude, longitude: loc.coords.longitude },
+        });
+
+        // 2. Start periodic 5-minute location recording while checked in
+        locationLogService.startPeriodicLogging({
+          employee: emp,
+          site: { name: attData.siteName },
+          attendanceId: attId,
+        });
+      } catch (_) {}
+
+      try {
+        // 3. Start 30-minute random selfie verification scheduler
+        await schedulerStart({
+          employee: emp,
+          assignment: null,
+          attendanceId: attId,
+        });
+      } catch (_) {}
+
+      try {
+        if (emp.id !== 'emp_fallback') {
+          await updateDoc(doc(db, 'employees', emp.id), {
+            status: 'On Duty',
+            lastCheckIn: serverTimestamp(),
+            lastActive: Date.now(),
+            isOnline: true,
+          }).catch(() => { });
+          presenceService.setCurrentStatus('On Duty');
+          presenceService.sendHeartbeat(true, 'On Duty');
+        }
+      } catch (_) {}
     } catch (e) {
       Alert.alert('Error', e.message || 'Failed to check in.');
     } finally {
@@ -619,7 +633,7 @@ export default function AttendanceScreen({ navigation, route, user: propUser }) 
 
   const daysWorked = thisMonthRecs.filter(r => r.status !== 'Missed Shift' && r.status !== 'Absent' && r.status !== 'Missed').length;
   const missedCount = thisMonthRecs.filter(r => r.status === 'Missed Shift' || r.status === 'Absent' || r.status === 'Missed').length;
-  const lateCount = thisMonthRecs.filter(r => isAttendanceRecordFlagged(r)).length;
+  const lateCount = thisMonthRecs.filter(r => isAttendanceRecordFlagged(r, employee?.shift)).length;
   const onTimeCount = Math.max(0, daysWorked - lateCount);
   const totalShifts = daysWorked + missedCount;
   const monthRate = totalShifts > 0 ? Math.round((onTimeCount / totalShifts) * 100) : 100;

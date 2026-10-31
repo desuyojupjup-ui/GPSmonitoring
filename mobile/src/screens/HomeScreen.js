@@ -952,9 +952,17 @@ export default function HomeScreen({ navigation, route, user: propUser }) {
 
   const processCheckIn = async (lat, lng, inFence, activeSite, activeLocationAddress) => {
     try {
-      const shiftToUse = assignment?.shift || employee?.shift || '08:00 AM - 05:00 PM';
-      const lateInfo = checkLateCheckIn(shiftToUse, new Date(), 5);
-      const isLate = lateInfo.isLate;
+      const scheduledShift = resolveShift(assignment, employee);
+      const hasScheduledShift = scheduledShift && scheduledShift !== 'Unassigned' && scheduledShift !== 'No Shift Scheduled';
+      const shiftToUse = hasScheduledShift ? scheduledShift : (assignment?.shift || employee?.shift || 'Flexible');
+
+      let isLate = false;
+      let lateInfo = { isLate: false, minutesLate: 0 };
+      if (hasScheduledShift && shiftToUse !== 'Flexible') {
+        lateInfo = checkLateCheckIn(shiftToUse, new Date(), 15);
+        isLate = Boolean(lateInfo.isLate);
+      }
+
       const statusText = inFence ? (isLate ? 'Late' : 'On Site') : 'Flagged';
       // Priority for site display:
       // 1. If employee's GPS matches a recognized worksite fence, display that worksite name
@@ -1002,62 +1010,80 @@ export default function HomeScreen({ navigation, route, user: propUser }) {
       // Dual-write to lowercase 'attendance' so admin dashboard picks it up
       await addDoc(collection(db, 'attendance'), { ...newAtt, id: attId }).catch(() => {});
 
-      if (employee.id && employee.id !== 'emp_fallback') {
-        await updateDoc(doc(db, 'employees', employee.id), {
-          status: 'On Duty',
-          lastCheckIn: serverTimestamp(),
-          lastActive: Date.now(),
-          isOnline: true,
-        });
-        presenceService.setCurrentStatus('On Duty');
-        presenceService.sendHeartbeat(true, 'On Duty');
+      // Confirm check-in to user immediately
+      Alert.alert('Check In Successful', `Recorded at ${new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit', hour12: true })}`);
+
+      // Safely run secondary background logging and sync without risking false error alerts
+      try {
+        if (employee.id && employee.id !== 'emp_fallback') {
+          await updateDoc(doc(db, 'employees', employee.id), {
+            status: 'On Duty',
+            lastCheckIn: serverTimestamp(),
+            lastActive: Date.now(),
+            isOnline: true,
+          }).catch(() => {});
+          presenceService.setCurrentStatus('On Duty');
+          presenceService.sendHeartbeat(true, 'On Duty');
+        }
+      } catch (err) {
+        console.warn('Check-in status update warning:', err);
       }
 
-      await addDoc(collection(db, 'ActivityLogs'), {
-        employee_id: employee.id,
-        employeeName: employee.name,
-        site_id: siteToUse?.id || site?.id || 'Unknown',
-        siteName: resolvedSiteName || siteToUse?.name || site?.name || assignment?.site || 'Unassigned Site',
-        action: 'Check In',
-        type: 'Attendance',
-        timestamp: serverTimestamp(),
-        status: inFence ? 'Normal' : 'Warning'
-      });
+      try {
+        await addDoc(collection(db, 'ActivityLogs'), {
+          employee_id: employee.id,
+          employeeName: employee.name,
+          site_id: siteToUse?.id || site?.id || 'Unknown',
+          siteName: resolvedSiteName || siteToUse?.name || site?.name || assignment?.site || 'Unassigned Site',
+          action: 'Check In',
+          type: 'Attendance',
+          timestamp: serverTimestamp(),
+          status: inFence ? 'Normal' : 'Warning'
+        }).catch(() => {});
+      } catch (err) {
+        console.warn('Check-in ActivityLog warning:', err);
+      }
 
-      // 1. Immediately capture and save current location in the Location Log
-      await locationLogService.captureAndSaveCurrentLocation({
-        employee,
-        site: siteToUse,
-        assignment,
-        attendanceId: attId,
-        trigger: 'check_in',
-        coords: { latitude: lat, longitude: lng },
-      });
+      try {
+        // 1. Immediately capture and save current location in the Location Log
+        await locationLogService.captureAndSaveCurrentLocation({
+          employee,
+          site: siteToUse,
+          assignment,
+          attendanceId: attId,
+          trigger: 'check_in',
+          coords: { latitude: lat, longitude: lng },
+        });
 
-      // 2. Start periodic 5-minute location recording while checked in
-      locationLogService.startPeriodicLogging({
-        employee,
-        site: siteToUse,
-        assignment,
-        attendanceId: attId,
-      });
+        // 2. Start periodic 5-minute location recording while checked in
+        locationLogService.startPeriodicLogging({
+          employee,
+          site: siteToUse,
+          assignment,
+          attendanceId: attId,
+        });
+      } catch (err) {
+        console.warn('Check-in locationLogService warning:', err);
+      }
 
-      // Start verification scheduler for this session
-      await schedulerStart({
-        employee,
-        assignment,
-        attendanceId: attId,
-      });
-      onPromptReady(({ triggerType }) => {
-        setFacialTriggerType(triggerType || 'scheduled_random');
+      try {
+        // Start verification scheduler for this session
+        await schedulerStart({
+          employee,
+          assignment,
+          attendanceId: attId,
+        });
+        onPromptReady(({ triggerType }) => {
+          setFacialTriggerType(triggerType || 'scheduled_random');
+          setShowFacialModal(true);
+        });
+
+        // Trigger immediate check-in verification
+        setFacialTriggerType('check_in');
         setShowFacialModal(true);
-      });
-
-      // Trigger immediate check-in verification
-      setFacialTriggerType('check_in');
-      setShowFacialModal(true);
-
-      Alert.alert('Check In Successful', `Recorded at ${new Date().toLocaleTimeString()}`);
+      } catch (err) {
+        console.warn('Check-in scheduler warning:', err);
+      }
     } catch (e) {
       console.error(e);
       Alert.alert('Error', 'Could not record check-in.');
@@ -1263,8 +1289,9 @@ export default function HomeScreen({ navigation, route, user: propUser }) {
     return d.getMonth() === now.getMonth() && d.getFullYear() === now.getFullYear();
   });
 
+  const empShift = resolveShift(assignment, employee);
   const daysWorked = currentMonthRecords.length;
-  const flaggedCount = currentMonthRecords.filter(r => isAttendanceRecordFlagged(r)).length;
+  const flaggedCount = currentMonthRecords.filter(r => isAttendanceRecordFlagged(r, empShift)).length;
   const onTimeCount = Math.max(0, daysWorked - flaggedCount);
   const monthlyRate = daysWorked > 0 ? ((onTimeCount / daysWorked) * 100).toFixed(1) : '100.0';
 
