@@ -164,11 +164,18 @@ export default function Attendance() {
     };
 
     const isMissed = raw.status === 'Missed Shift' || raw.isMissedShift;
+    const hasExplicitShift = Boolean(
+      raw.shift &&
+      raw.shift !== 'Unassigned' &&
+      raw.shift !== 'Flexible' &&
+      raw.shift !== 'No Shift Scheduled'
+    );
     const isEarlyCheckOut = Boolean(
-      raw.earlyCheckOut ||
-      raw.earlyDeparture ||
-      raw.anomalyFlag === 'Early Check-Out' ||
-      (raw.minutesEarly && Number(raw.minutesEarly) >= 5)
+      hasExplicitShift &&
+      (raw.earlyCheckOut ||
+       raw.earlyDeparture ||
+       raw.anomalyFlag === 'Early Check-Out' ||
+       (raw.minutesEarly && Number(raw.minutesEarly) >= 15))
     );
     const inInfo  = formatTsInfo(raw.timeIn  || raw.checkIn  || raw.check_in  || raw.in);
     const outInfo = formatTsInfo(raw.timeOut || raw.checkOut || raw.check_out || raw.out);

@@ -368,7 +368,13 @@ export function startAnomalyNotificationSync(onNewAlert) {
       if (!docs) return;
       docs.forEach((d) => {
         const raw = { id: d.id, ...d.data() };
-        if (raw.earlyCheckOut || raw.anomalyFlag === 'Early Check-Out' || raw.earlyDeparture || (raw.minutesEarly && raw.minutesEarly >= 5)) {
+        const hasExplicitShift = Boolean(
+          raw.shift &&
+          raw.shift !== 'Unassigned' &&
+          raw.shift !== 'Flexible' &&
+          raw.shift !== 'No Shift Scheduled'
+        );
+        if (hasExplicitShift && (raw.earlyCheckOut || raw.anomalyFlag === 'Early Check-Out' || raw.earlyDeparture || (raw.minutesEarly && raw.minutesEarly >= 15))) {
           const attId = raw.id;
           const alertKey = `early_co_${attId}`;
           if (lastAdminGeofenceAlertTime.has(alertKey)) return;

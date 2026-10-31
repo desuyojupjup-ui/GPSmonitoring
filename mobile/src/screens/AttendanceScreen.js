@@ -115,8 +115,7 @@ function StatBox({ icon, label, value, color }) {
 
 function RecordCard({ record, onCheckOut }) {
   const isMissed = record.status === 'Missed Shift' || record.status === 'Absent' || record.status === 'Missed';
-  const ss = statusStyle(record.status);
-  const canCheckOut = record.status === 'On Site' && !record.timeOut;
+  const canCheckOut = (record.status === 'On Site' || record.status === 'Late' || record.status === 'Flagged') && !record.timeOut;
   return (
     <View style={styles.recordCard}>
       <View style={styles.recordTop}>
@@ -320,15 +319,6 @@ export default function AttendanceScreen({ navigation, route, user: propUser }) 
   };
 
   const requestCheckOut = (record) => {
-    if (isMobileFieldWithoutSite(employeeRef.current, null, null)) {
-      Alert.alert(
-        'Check-Out Blocked',
-        'You are registered as a Mobile Field Employee with no assigned worksite.',
-        [{ text: 'OK' }]
-      );
-      return;
-    }
-
     const rec = record || todayRecord;
     if (!rec) return Alert.alert('No Record', 'No active check-in found for today.');
 
@@ -513,24 +503,16 @@ export default function AttendanceScreen({ navigation, route, user: propUser }) 
 
   // 4. Check Out
   const handleCheckOut = async (record) => {
-    // Mobile field employees cannot check out without assigned worksites
-    if (isMobileFieldWithoutSite(employeeRef.current, null, null)) {
-      Alert.alert(
-        'Check-Out Blocked',
-        'You are registered as a Mobile Field Employee with no assigned worksite.',
-        [{ text: 'OK' }]
-      );
-      return;
-    }
-
     const rec = record || todayRecord;
     if (!rec) return Alert.alert('No Record', 'No active check-in found for today.');
     setChecking(true);
     try {
       const emp = employeeRef.current;
       const now = new Date();
-      const shiftToCheck = emp?.shift || emp?.scheduledShift || rec?.shift || '08:00 AM - 05:00 PM';
-      const earlyInfo = checkEarlyCheckout(shiftToCheck, now, 5);
+      // Only evaluate early departure if employee has an explicit, scheduled shift
+      const hasEmpShift = emp?.shift && emp.shift !== 'Unassigned' && emp.shift !== 'Flexible' && emp.shift !== 'No Shift Scheduled' && emp.shift !== '08:00 AM - 05:00 PM';
+      const shiftToCheck = hasEmpShift ? emp.shift : (rec?.shift && rec.shift !== 'Flexible' && rec.shift !== 'Unassigned' && rec.shift !== '08:00 AM - 05:00 PM' ? rec.shift : null);
+      const earlyInfo = shiftToCheck ? checkEarlyCheckout(shiftToCheck, now, 15) : { isEarly: false, minutesEarly: 0, shiftEndStr: 'Flexible', shiftEndDt: null };
 
       let curCoords = { latitude: rec?.latitude || null, longitude: rec?.longitude || null };
       try {

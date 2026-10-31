@@ -840,15 +840,6 @@ export default function HomeScreen({ navigation, route, user: propUser }) {
   };
 
   const requestCheckOut = () => {
-    if (isMobileFieldWithoutSite(employee, assignment, site)) {
-      Alert.alert(
-        'Check-Out Blocked',
-        'You are registered as a Mobile Field Employee with no assigned worksite. Check-out cannot be performed.',
-        [{ text: 'OK' }]
-      );
-      return;
-    }
-
     if (!attendance || !attendance.id) {
       Alert.alert('Error', 'No active check-in record found for today.');
       return;
@@ -1091,16 +1082,6 @@ export default function HomeScreen({ navigation, route, user: propUser }) {
   };
 
   const handleCheckOut = async () => {
-    // Mobile field employees cannot check out without assigned worksites
-    if (isMobileFieldWithoutSite(employee, assignment, site)) {
-      Alert.alert(
-        'Check-Out Blocked',
-        'You are registered as a Mobile Field Employee with no assigned worksite. Check-out cannot be performed.',
-        [{ text: 'OK' }]
-      );
-      return;
-    }
-
     if (!attendance || !attendance.id) {
       Alert.alert('Error', 'No active check-in record found for today.');
       return;
@@ -1109,8 +1090,16 @@ export default function HomeScreen({ navigation, route, user: propUser }) {
     setChecking(true);
     try {
       const now = new Date();
-      const shiftToCheck = assignment?.shift || employee?.shift || employee?.scheduledShift || attendance?.shift || '08:00 AM - 05:00 PM';
-      const earlyInfo = checkEarlyCheckout(shiftToCheck, now, 5);
+      // Only evaluate early departure if employee has an explicit, scheduled shift
+      const scheduledShift = resolveShift(assignment, employee);
+      const hasScheduledShift = scheduledShift && scheduledShift !== 'Unassigned' && scheduledShift !== 'Flexible' && scheduledShift !== 'No Shift Scheduled';
+      const shiftToCheck = hasScheduledShift 
+        ? scheduledShift 
+        : (attendance?.shift && attendance.shift !== 'Flexible' && attendance.shift !== 'Unassigned' && attendance.shift !== '08:00 AM - 05:00 PM' ? attendance.shift : null);
+      
+      const earlyInfo = shiftToCheck 
+        ? checkEarlyCheckout(shiftToCheck, now, 15) 
+        : { isEarly: false, minutesEarly: 0, shiftEndStr: 'Flexible', shiftEndDt: null };
 
       let curCoords = { latitude: attendance.latitude || null, longitude: attendance.longitude || null };
       try {
@@ -1495,8 +1484,8 @@ export default function HomeScreen({ navigation, route, user: propUser }) {
             </TouchableOpacity>
           )}
 
-          {/* Warning Banner if No Active Shift Today */}
-          {(!assignment || assignedSitesList.length === 0) && (
+          {/* Warning Banner if No Active Shift Today (only if not already checked in) */}
+          {!isCheckedIn && (!assignment || assignedSitesList.length === 0) && (
             <View style={{
               flexDirection: 'row',
               alignItems: 'center',
@@ -1510,7 +1499,7 @@ export default function HomeScreen({ navigation, route, user: propUser }) {
             }}>
               <Ionicons name="alert-circle" size={20} color="#DC2626" />
               <View style={{ flex: 1 }}>
-                <Text style={{ fontSize: 13, fontWeight: '700', color: '#991B1B' }}>Check-In & Check-Out Locked</Text>
+                <Text style={{ fontSize: 13, fontWeight: '700', color: '#991B1B' }}>Check-In Unavailable</Text>
                 <Text style={{ fontSize: 11, color: '#B91C1C', marginTop: 2 }}>
                   You have no active worksite assignment for today. Shifts whose date has passed or are missed/completed are automatically removed.
                 </Text>
@@ -1519,7 +1508,7 @@ export default function HomeScreen({ navigation, route, user: propUser }) {
           )}
 
           {/* Warning Banner if Mobile Field Employee has no assigned site */}
-          {assignment && assignedSitesList.length > 0 && isMobileFieldWithoutSite(employee, assignment, site) && (
+          {!isCheckedIn && assignment && assignedSitesList.length > 0 && isMobileFieldWithoutSite(employee, assignment, site) && (
             <View style={{
               flexDirection: 'row',
               alignItems: 'center',
@@ -1533,9 +1522,9 @@ export default function HomeScreen({ navigation, route, user: propUser }) {
             }}>
               <Ionicons name="alert-circle" size={20} color="#DC2626" />
               <View style={{ flex: 1 }}>
-                <Text style={{ fontSize: 13, fontWeight: '700', color: '#991B1B' }}>Check-In & Check-Out Locked</Text>
+                <Text style={{ fontSize: 13, fontWeight: '700', color: '#991B1B' }}>Check-In Locked</Text>
                 <Text style={{ fontSize: 11, color: '#B91C1C', marginTop: 2 }}>
-                  Mobile Field Employees must have at least one assigned worksite before checking in or out. Contact your administrator.
+                  Mobile Field Employees must have at least one assigned worksite before checking in. Contact your administrator.
                 </Text>
               </View>
             </View>
@@ -1568,7 +1557,7 @@ export default function HomeScreen({ navigation, route, user: propUser }) {
               <TouchableOpacity
                 style={[
                   styles.checkOutBtn, 
-                  (isCheckedOut || checking || isMobileFieldWithoutSite(employee, assignment, site)) && { opacity: 0.6, backgroundColor: isMobileFieldWithoutSite(employee, assignment, site) ? '#94A3B8' : styles.checkOutBtn.backgroundColor }
+                  (isCheckedOut || checking) && { opacity: 0.6 }
                 ]}
                 onPress={requestCheckOut}
                 disabled={isCheckedOut || checking}
