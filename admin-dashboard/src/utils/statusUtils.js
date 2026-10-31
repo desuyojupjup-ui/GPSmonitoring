@@ -160,12 +160,114 @@ export function hasEmployeeCheckedOut(emp, attendance = []) {
 }
 
 /**
+ * Helper: determine if an employee is currently active on shift.
+ * Evaluates whether the employee clocked in today without checking out,
+ * has an active attendance session, or is actively online on duty.
+ */
+export function isEmployeeActiveOnShift(emp, attendance = []) {
+  if (!emp) return false;
+
+  // 1. If checked out or completed, strictly NOT active on shift
+  if (hasEmployeeCheckedOut(emp, attendance)) {
+    return false;
+  }
+
+  const rawStatus = (emp.status || '').toString().trim().toLowerCase();
+  const attStatus = (emp.attendanceStatus || '').toString().trim().toLowerCase();
+
+  if (rawStatus === 'completed' || rawStatus === 'checked out' || attStatus === 'completed' || attStatus === 'checked out') {
+    return false;
+  }
+
+  const todayStr = new Date().toDateString();
+
+  // 2. Check lastCheckIn timestamp on employee document
+  if (emp.lastCheckIn) {
+    const inTs = typeof emp.lastCheckIn === 'number'
+      ? emp.lastCheckIn
+      : (emp.lastCheckIn?.toDate ? emp.lastCheckIn.toDate().getTime() : new Date(emp.lastCheckIn).getTime());
+    if (inTs && !isNaN(inTs) && new Date(inTs).toDateString() === todayStr) {
+      return true;
+    }
+  }
+
+  // 3. Check today's attendance records in attendance collection
+  if (Array.isArray(attendance) && attendance.length > 0) {
+    const empIds = [
+      emp.id,
+      emp.uid,
+      emp.employeeId,
+      emp.empId,
+    ].filter(Boolean).map(x => String(x).trim().toLowerCase());
+
+    const empEmails = [
+      emp.email,
+      emp.empEmail,
+      emp.workEmail,
+    ].filter(Boolean).map(x => String(x).trim().toLowerCase());
+
+    const empName = (emp.name || emp.displayName || '').trim().toLowerCase();
+
+    const matchingAtt = attendance.filter(a => {
+      const aId = (a.employeeId || a.empId || a.userId || a.employee_id || '').toString().trim().toLowerCase();
+      const aEmail = (a.employeeEmail || a.email || a.empEmail || a.userEmail || '').toString().trim().toLowerCase();
+      const aName = (a.employeeName || a.empName || a.name || a.employee_name || '').toString().trim().toLowerCase();
+
+      if (aId && empIds.includes(aId)) return true;
+      if (aEmail && empEmails.includes(aEmail)) return true;
+      if (empName && aName && aName === empName) return true;
+      return false;
+    });
+
+    for (const a of matchingAtt) {
+      const hasTimeOut = Boolean(a.timeOut || a.checkOut || a.check_out || a.out);
+      const isCompleted = (a.status || '').toString().trim().toLowerCase() === 'completed';
+      if (!hasTimeOut && !isCompleted) {
+        const rawTime = a.timeIn || a.checkIn || a.timestamp || a.createdAt;
+        if (rawTime) {
+          const ts = typeof rawTime === 'number' ? rawTime : (rawTime?.toDate ? rawTime.toDate().getTime() : new Date(rawTime).getTime());
+          if (ts && !isNaN(ts) && new Date(ts).toDateString() === todayStr) {
+            return true;
+          }
+        }
+        if (a.date) {
+          const dStr = typeof a.date === 'string' ? a.date : new Date(a.date).toDateString();
+          if (dStr === todayStr || dStr.includes(new Date().getFullYear().toString())) {
+            return true;
+          }
+        }
+      }
+    }
+  }
+
+  // 4. Check active duty statuses
+  if (
+    rawStatus === 'on duty' ||
+    rawStatus === 'on site' ||
+    rawStatus === 'in transit' ||
+    rawStatus === 'present' ||
+    attStatus === 'on duty' ||
+    attStatus === 'on site' ||
+    attStatus === 'present'
+  ) {
+    return true;
+  }
+
+  // 5. Check if actively online right now
+  if (isEmployeeOnline(emp)) {
+    return true;
+  }
+
+  return false;
+}
+
+/**
  * Strict evaluation of whether an employee is currently verified "On Site".
  * 
  * For Fixed Site Employees:
- *   - Must be actively online with valid heartbeat
+ *   - Must be actively on shift or online
  *   - Must NOT have checked out
- *   - Must be active on shift (status 'On Site' or 'On Duty' at assigned site)
+ *   - Must be active on shift at assigned site
  *   - Must be CONFIRMED INSIDE the assigned site's geofence radius border
  *   - If outside the geofence radius border (by GPS coords or breach status), they are strictly NOT counted!
  */
@@ -183,38 +285,23 @@ export function isEmployeeOnSite(emp, sites = [], assignments = [], attendanceOr
     }
   }
 
-  if (!isEmployeeOnline(emp, now)) {
-    return false;
-  }
-
   // If employee has done check out, they are NOT on site!
   if (hasEmployeeCheckedOut(emp, attendance)) {
     return false;
   }
 
   const rawStatus = (emp.status || '').trim();
-  if (rawStatus === 'Offline' || rawStatus === 'Completed' || rawStatus === 'Checked Out') {
+  if (rawStatus === 'Completed' || rawStatus === 'Checked Out') {
     return false;
   }
 
-  const workType = resolveEmployeeWorkType(emp, assignments);
-  const isFixed = workType === 'Fixed Site Employee';
-
-  // Mobile field employees moving along routes or in transit are not On Site
-  if (!isFixed) {
-    if (rawStatus === 'In Transit') return false;
-    if (emp.geofenceStatus === 'Outside Assigned Site' || emp.isInsideGeofence === false) return false;
-    return rawStatus === 'On Site';
-  }
-
-  // ── FIXED SITE EMPLOYEE RULES ──
-  // 1. Must be active on duty/on site
-  const isActive = rawStatus === 'On Site' || rawStatus === 'On Duty' || rawStatus === 'Checked In' || rawStatus === 'Present';
+  // Must be active on shift or actively online with valid session
+  const isActive = isEmployeeActiveOnShift(emp, attendance) || isEmployeeOnline(emp, now);
   if (!isActive) {
     return false;
   }
 
-  // 2. Immediate rejection if explicit geofence status indicates a breach / outside
+  // Immediate rejection if explicit geofence status indicates a breach / outside
   if (
     emp.geofenceStatus === 'Outside Assigned Site' ||
     emp.geofenceStatus === 'Outside Site' ||
@@ -224,7 +311,17 @@ export function isEmployeeOnSite(emp, sites = [], assignments = [], attendanceOr
     return false;
   }
 
-  // 3. Find assigned site(s)
+  const workType = resolveEmployeeWorkType(emp, assignments);
+  const isFixed = workType === 'Fixed Site Employee';
+
+  // Mobile field employees moving along routes or in transit are not On Site
+  if (!isFixed) {
+    if (rawStatus === 'In Transit') return false;
+    return rawStatus === 'On Site' || (emp.attendanceStatus || '').trim().toLowerCase() === 'on site';
+  }
+
+  // ── FIXED SITE EMPLOYEE RULES ──
+  // 1. Find assigned site(s)
   const siteKeys = [
     emp.assignedSiteId,
     emp.assignedSite,
@@ -263,7 +360,7 @@ export function isEmployeeOnSite(emp, sites = [], assignments = [], attendanceOr
     }
   }
 
-  // 4. Check live GPS coordinates against assigned site(s) radius border
+  // 2. Check live GPS coordinates against assigned site(s) radius border
   const empLat = typeof emp.lat === 'number' ? emp.lat : (typeof emp.latitude === 'number' ? emp.latitude : null);
   const empLng = typeof emp.lng === 'number' ? emp.lng : (typeof emp.longitude === 'number' ? emp.longitude : null);
 
@@ -294,7 +391,7 @@ export function isEmployeeOnSite(emp, sites = [], assignments = [], attendanceOr
     }
   }
 
-  // 5. If no GPS fix available yet, check confirmed geofence status
+  // 3. If no GPS fix available yet, check confirmed geofence status
   if (
     emp.geofenceStatus === 'Inside Assigned Site' ||
     emp.geofenceStatus === 'Inside' ||
@@ -304,8 +401,13 @@ export function isEmployeeOnSite(emp, sites = [], assignments = [], attendanceOr
     return true;
   }
 
-  // If status is On Site, has assigned site, and no breach reported, count as On Site
-  if (rawStatus === 'On Site') {
+  // If status is explicitly On Site, has assigned site, and no breach reported, count as On Site
+  if (rawStatus === 'On Site' || (emp.attendanceStatus || '').trim().toLowerCase() === 'on site') {
+    return true;
+  }
+
+  // If checked in today without breach, and assigned site exists
+  if (matchedSites.length > 0 && isEmployeeActiveOnShift(emp, attendance)) {
     return true;
   }
 
@@ -335,37 +437,35 @@ export function resolveEmployeeStatus(emp, sitesOrNow, assignments = [], attenda
     }
   }
 
-  // CRITICAL: If the employee is not actively online with a valid heartbeat, they are Offline!
-  if (!isEmployeeOnline(emp, now)) {
-    return 'Offline';
-  }
-
-  const rawStatus = (emp.status || '').trim();
-  if (rawStatus === 'Offline') return 'Offline';
-
-  // CRITICAL: If employee has completed check out, they are NEVER On Duty or On Site!
+  // 1. CRITICAL: If employee has completed check out, they are NEVER On Duty or On Site!
   if (hasEmployeeCheckedOut(emp, attendance)) {
     return 'Completed';
   }
 
-  if (rawStatus === 'In Transit') return 'In Transit';
+  const rawStatus = (emp.status || '').trim();
   if (rawStatus === 'Completed' || rawStatus === 'Checked Out') return 'Completed';
 
-  // Check if verified On Site within geofence radius border
+  // 2. Check if verified On Site within geofence radius border
   if (isEmployeeOnSite(emp, sites, assignments, attendance, now)) {
     return 'On Site';
   }
 
-  // Fixed or field employee on duty (clocked in without checkout):
-  if (rawStatus === 'On Site' || rawStatus === 'On Duty') {
+  if (rawStatus === 'In Transit') return 'In Transit';
+
+  // 3. Check if active on shift today (clocked in without checkout)
+  if (isEmployeeActiveOnShift(emp, attendance)) {
     return 'On Duty';
   }
 
-  if (rawStatus === 'Online') {
+  // 4. Actively online with app session
+  if (isEmployeeOnline(emp, now)) {
+    if (rawStatus === 'On Site' || rawStatus === 'On Duty') {
+      return 'On Duty';
+    }
     return 'Online';
   }
 
-  return rawStatus || 'Offline';
+  return 'Offline';
 }
 
 // Real-time helper: resolve employee work type

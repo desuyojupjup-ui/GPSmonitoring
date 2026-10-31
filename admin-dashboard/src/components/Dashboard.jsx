@@ -14,8 +14,8 @@ import { db, collection, onSnapshot, query, limit, doc, updateDoc, addDoc, serve
 import { showToast } from '../utils/toast';
 import MapTracking from './MapTracking';
 import { resolveAssignmentStatus } from '../pages/Assignments';
-import { isEmployeeOnline, resolveEmployeeStatus, resolveEmployeeWorkType, isEmployeeOnSite } from '../utils/statusUtils';
-export { isEmployeeOnline, resolveEmployeeStatus, resolveEmployeeWorkType, isEmployeeOnSite };
+import { isEmployeeOnline, resolveEmployeeStatus, resolveEmployeeWorkType, isEmployeeOnSite, isEmployeeActiveOnShift } from '../utils/statusUtils';
+export { isEmployeeOnline, resolveEmployeeStatus, resolveEmployeeWorkType, isEmployeeOnSite, isEmployeeActiveOnShift };
 
 function GaugeRing({ pct, a, b }) {
   const r = 17, size = 44, cx = size / 2;
@@ -2198,17 +2198,9 @@ export default function Dashboard() {
                   icon={Clock}
                   label="EMPLOYEES ON SITE"
                   value={`${onSiteCount} Employees`}
-                  subtitle={onSiteCount > 0 ? "Present on site" : "No employees on site"}
+                  subtitle={onSiteCount > 0 ? "Present inside facility perimeter" : "No employees on site"}
                   color={onSiteCount > 0 ? "#3B82F6" : "#94A3B8"}
                   onClick={() => setDrilldownType('on_site')}
-                />
-                <WorkforceInsightCard
-                  icon={Truck}
-                  label="EMPLOYEES IN TRANSIT"
-                  value={`${inTransitCount} Employees`}
-                  subtitle={inTransitCount > 0 ? "Travelling to assigned sites" : "No employees in transit"}
-                  color={inTransitCount > 0 ? "#F59E0B" : "#94A3B8"}
-                  onClick={() => setDrilldownType('mobile_field')}
                 />
                 <WorkforceInsightCard
                   icon={Shield}
