@@ -115,7 +115,8 @@ function StatBox({ icon, label, value, color }) {
 
 function RecordCard({ record, onCheckOut }) {
   const isMissed = record.status === 'Missed Shift' || record.status === 'Absent' || record.status === 'Missed';
-  const canCheckOut = (record.status === 'On Site' || record.status === 'Late' || record.status === 'Flagged') && !record.timeOut;
+  const ss = statusStyle(record.status);
+  const canCheckOut = record.status === 'On Site' && !record.timeOut;
   return (
     <View style={styles.recordCard}>
       <View style={styles.recordTop}>
@@ -509,10 +510,9 @@ export default function AttendanceScreen({ navigation, route, user: propUser }) 
     try {
       const emp = employeeRef.current;
       const now = new Date();
-      // Only evaluate early departure if employee has an explicit, scheduled shift
-      const hasEmpShift = emp?.shift && emp.shift !== 'Unassigned' && emp.shift !== 'Flexible' && emp.shift !== 'No Shift Scheduled' && emp.shift !== '08:00 AM - 05:00 PM';
-      const shiftToCheck = hasEmpShift ? emp.shift : (rec?.shift && rec.shift !== 'Flexible' && rec.shift !== 'Unassigned' && rec.shift !== '08:00 AM - 05:00 PM' ? rec.shift : null);
-      const earlyInfo = shiftToCheck ? checkEarlyCheckout(shiftToCheck, now, 15) : { isEarly: false, minutesEarly: 0, shiftEndStr: 'Flexible', shiftEndDt: null };
+      const empShift = emp?.shift && emp.shift !== 'Unassigned' && emp.shift !== 'Flexible' && emp.shift !== 'No Shift Scheduled' ? emp.shift : (emp?.scheduledShift || null);
+      const shiftToCheck = empShift || (rec?.shift && rec.shift !== 'Unassigned' && rec.shift !== 'Flexible' && rec.shift !== 'No Shift Scheduled' ? rec.shift : null);
+      const earlyInfo = shiftToCheck ? checkEarlyCheckout(shiftToCheck, now, 15) : { isEarly: false, minutesEarly: 0, shiftEndStr: 'Flexible' };
 
       let curCoords = { latitude: rec?.latitude || null, longitude: rec?.longitude || null };
       try {
@@ -521,27 +521,6 @@ export default function AttendanceScreen({ navigation, route, user: propUser }) 
           curCoords = { latitude: curLoc.coords.latitude, longitude: curLoc.coords.longitude };
         }
       } catch (_) {}
-
-      let anomalyDocId = null;
-      if (earlyInfo.isEarly) {
-        const departureDesc = `You checked out early at ${now.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit', hour12: true })} before scheduled shift end (${earlyInfo.shiftEndStr}; ${earlyInfo.minutesEarly}m early departure).`;
-        anomalyDocId = await writeSecurityEvent({
-          eventType: 'EARLY_CHECKOUT',
-          employee: {
-            id: emp?.id,
-            name: emp?.name,
-            email: emp?.email || currentEmail,
-            employeeType: emp?.workType || emp?.employeeType || 'Employee',
-          },
-          assignment: {
-            siteName: rec?.siteName || emp?.assignedSite || 'Scheduled Post',
-          },
-          coords: curCoords,
-          relatedAttendanceId: rec.id,
-          customDescription: departureDesc,
-          extra: { details: `${earlyInfo.minutesEarly}m before ${earlyInfo.shiftEndStr}` },
-        });
-      }
 
       const checkoutPayload = {
         timeOut: serverTimestamp(),
@@ -558,43 +537,80 @@ export default function AttendanceScreen({ navigation, route, user: propUser }) 
       await updateDoc(doc(db, 'Attendance', rec.id), checkoutPayload).catch(() => { });
       await updateDoc(doc(db, 'attendance', rec.id), checkoutPayload).catch(() => { });
 
-      if (emp?.id && emp.id !== 'emp_fallback') {
-        await updateDoc(doc(db, 'employees', emp.id), {
-          status: 'Completed',
-          attendanceStatus: 'Completed',
-          lastCheckOut: Date.now(),
-          lastActive: Date.now(),
-          isOnline: true
-        }).catch(() => { });
-        presenceService.setCurrentStatus('Completed');
-        presenceService.sendHeartbeat(true, 'Completed');
-      }
+      Alert.alert('✅ Checked Out', 'Have a great day!');
 
-      await addDoc(collection(db, 'ActivityLogs'), {
-        employee_id: emp?.id,
-        employeeName: emp?.name,
-        siteName: rec?.siteName || emp?.assignedSite || 'Unassigned Site',
-        action: earlyInfo.isEarly ? 'Check Out (Early Departure)' : 'Check Out',
-        type: 'Attendance',
-        anomalyId: anomalyDocId || null,
-        timestamp: serverTimestamp(),
-        status: earlyInfo.isEarly ? 'Warning' : 'Normal',
-        details: earlyInfo.isEarly ? `Early departure: ${earlyInfo.minutesEarly}m before ${earlyInfo.shiftEndStr}` : 'Shift Completed'
-      }).catch(() => {});
+      try {
+        if (earlyInfo.isEarly) {
+          const departureDesc = `You checked out early at ${now.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit', hour12: true })} before scheduled shift end (${earlyInfo.shiftEndStr}; ${earlyInfo.minutesEarly}m early departure).`;
+          const anomalyDocId = await writeSecurityEvent({
+            eventType: 'EARLY_CHECKOUT',
+            employee: {
+              id: emp?.id,
+              name: emp?.name,
+              email: emp?.email || currentEmail,
+              employeeType: emp?.workType || emp?.employeeType || 'Employee',
+            },
+            assignment: {
+              siteName: rec?.siteName || emp?.assignedSite || 'Scheduled Post',
+            },
+            coords: curCoords,
+            relatedAttendanceId: rec.id,
+            customDescription: departureDesc,
+            extra: { details: `${earlyInfo.minutesEarly}m before ${earlyInfo.shiftEndStr}` },
+          }).catch(() => null);
 
-      // Stop periodic location logging upon check-out
-      await locationLogService.stopPeriodicLogging();
+          await addDoc(collection(db, 'ActivityLogs'), {
+            employee_id: emp?.id,
+            employeeName: emp?.name,
+            siteName: rec?.siteName || emp?.assignedSite || 'Unassigned Site',
+            action: 'Check Out (Early Departure)',
+            type: 'Attendance',
+            anomalyId: anomalyDocId || null,
+            timestamp: serverTimestamp(),
+            status: 'Warning',
+            details: `Early departure: ${earlyInfo.minutesEarly}m before ${earlyInfo.shiftEndStr}`
+          }).catch(() => {});
+        } else {
+          await addDoc(collection(db, 'ActivityLogs'), {
+            employee_id: emp?.id,
+            employeeName: emp?.name,
+            siteName: rec?.siteName || emp?.assignedSite || 'Unassigned Site',
+            action: 'Check Out',
+            type: 'Attendance',
+            timestamp: serverTimestamp(),
+            status: 'Normal',
+            details: 'Shift Completed'
+          }).catch(() => {});
+        }
+      } catch (_) {}
 
-      // Stop 30-minute random selfie verification scheduler
-      await schedulerStop();
+      try {
+        if (emp?.id && emp.id !== 'emp_fallback') {
+          await updateDoc(doc(db, 'employees', emp.id), {
+            status: 'Completed',
+            attendanceStatus: 'Completed',
+            lastCheckOut: Date.now(),
+            lastActive: Date.now(),
+            isOnline: true
+          }).catch(() => { });
+          presenceService.setCurrentStatus('Completed');
+          presenceService.sendHeartbeat(true, 'Completed');
+        }
+      } catch (_) {}
+
+      try {
+        await locationLogService.stopPeriodicLogging().catch(() => {});
+      } catch (_) {}
+
+      try {
+        await schedulerStop().catch(() => {});
+      } catch (_) {}
 
       if (earlyInfo.isEarly) {
         Alert.alert(
           '⚠️ Early Check-Out Logged',
           `You checked out ${earlyInfo.minutesEarly} minutes before your scheduled shift ends (${earlyInfo.shiftEndStr}). An anomaly alert has been reported to administration.`
         );
-      } else {
-        Alert.alert('✅ Checked Out', 'Have a great day!');
       }
     } catch (e) {
       Alert.alert('Error', e.message || 'Failed to check out.');

@@ -84,7 +84,60 @@ export function isAssignmentDatePassed(asg) {
     return true;
   }
 
-  // Check scheduled assignment date and shift end time
+/**
+ * Checks if a specific day is included in the assignment workDays.
+ */
+export function isDayInWorkDays(workDays, targetDate = new Date()) {
+  if (!Array.isArray(workDays) || workDays.length === 0) return false;
+  const dayNames = ['Sunday', 'Monday', 'Tuesday', 'Wednesday', 'Thursday', 'Friday', 'Saturday'];
+  const dayAbbrs = ['Sun', 'Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat'];
+  const dayIdx = targetDate.getDay();
+  const full = dayNames[dayIdx].toLowerCase();
+  const abbr = dayAbbrs[dayIdx].toLowerCase();
+
+  return workDays.some(w => {
+    if (!w || typeof w !== 'string') return false;
+    const clean = w.trim().toLowerCase();
+    return clean === full || clean === abbr || full.startsWith(clean) || clean.startsWith(abbr);
+  });
+}
+
+/**
+ * Checks if an assignment's scheduled calendar date has strictly passed.
+ * Note: An assignment scheduled for today remains valid throughout today so
+ * employees can work and check out without having their worksite vanish.
+ */
+export function isAssignmentDatePassed(asg, targetDate = new Date()) {
+  if (!asg) return false;
+
+  const status = (asg.status || '').toString().trim().toLowerCase();
+  if (
+    status === 'completed' || 
+    status === 'cancelled' || 
+    status === 'archived' || 
+    status === 'expired' || 
+    status === 'inactive' ||
+    status.includes('cancel') ||
+    status.includes('expired')
+  ) {
+    return true;
+  }
+
+  // Recurring workDays schedule does NOT expire just because the initial assignDate was in the past
+  const workDays = asg.workDays || asg.effectiveWorkDays;
+  if (Array.isArray(workDays) && workDays.length > 0) {
+    const endDateRaw = asg.endDate || asg.untilDate;
+    if (endDateRaw) {
+      const endParts = extractAssignmentDateParts(endDateRaw);
+      if (endParts) {
+        const endDt = new Date(endParts.year, endParts.month, endParts.day, 23, 59, 59);
+        if (targetDate.getTime() > endDt.getTime()) return true;
+      }
+    }
+    return false;
+  }
+
+  // Check scheduled assignment single date
   const rawDate = asg.assignDate || asg.scheduleDate || asg.date || asg.assignmentDate || asg.scheduledDate || asg.endDate || asg.assignedOn || asg.assignedAt;
   if (!rawDate) return false;
 
@@ -92,7 +145,7 @@ export function isAssignmentDatePassed(asg) {
   if (!dtParts) return false;
 
   const { year: y, month: m, day: d } = dtParts;
-  const now = new Date();
+  const now = targetDate;
   const nowY = now.getFullYear();
   const nowM = now.getMonth();
   const nowD = now.getDate();
@@ -102,63 +155,52 @@ export function isAssignmentDatePassed(asg) {
   if (y === nowY && m < nowM) return true;
   if (y === nowY && m === nowM && d < nowD) return true;
 
-  // 2. If scheduled for today, check if shift end time has already elapsed
-  if (y === nowY && m === nowM && d === nowD) {
-    let startStr = asg.shiftStart || asg.startTime || '';
-    let endStr = asg.shiftEnd || asg.endTime || '';
-
-    if ((!startStr || !endStr) && (asg.shift || asg.shiftTime)) {
-      const shiftStr = asg.shift || asg.shiftTime || '';
-      const parts = shiftStr.split(/\s*[-~]|(?:\s+to\s+)\s*/i).filter(Boolean);
-      if (parts.length >= 2) {
-        if (!startStr) startStr = parts[0].trim();
-        if (!endStr) endStr = parts[1].trim();
-      } else if (parts.length === 1 && !endStr) {
-        endStr = parts[0].trim();
-      }
-    }
-
-    const startParsed = parseTimeToHoursMinutes(startStr);
-    const endParsed = parseTimeToHoursMinutes(endStr);
-
-    let endHour = 23;
-    let endMin = 59;
-    let endSec = 59;
-    let isNextDay = false;
-
-    if (endParsed) {
-      endHour = endParsed.hours;
-      endMin = endParsed.minutes;
-      endSec = endParsed.seconds || 0;
-
-      if (startParsed && endParsed.hours < startParsed.hours) {
-        isNextDay = true;
-      }
-    }
-
-    const endDateTime = new Date(y, m, isNextDay ? d + 1 : d, endHour, endMin, endSec, 999);
-    return now.getTime() >= endDateTime.getTime();
-  }
-
-  // Future scheduled assignment
+  // 2. Scheduled for today: Remains valid for check-in and check-out during the entire day
   return false;
 }
 
 /**
  * Returns true if the assignment is scheduled and currently active for TODAY.
- * If the date is passed, or shift ended, or status is completed/missed, returns false.
+ * Properly checks recurring workDays (e.g. Mon-Fri fixed employees) as well as single-date shifts.
  */
-export function isAssignmentActiveToday(asg) {
+export function isAssignmentActiveToday(asg, targetDate = new Date()) {
   if (!asg) return false;
-  if (isAssignmentDatePassed(asg)) return false;
+  if (isAssignmentDatePassed(asg, targetDate)) return false;
 
+  // 1. Check recurring workDays array
+  const workDays = asg.workDays || asg.effectiveWorkDays;
+  if (Array.isArray(workDays) && workDays.length > 0) {
+    if (isDayInWorkDays(workDays, targetDate)) {
+      const startDateRaw = asg.assignDate || asg.startDate || asg.assignedDate;
+      if (startDateRaw) {
+        const startParts = extractAssignmentDateParts(startDateRaw);
+        if (startParts) {
+          const startDt = new Date(startParts.year, startParts.month, startParts.day, 0, 0, 0);
+          if (targetDate.getTime() < startDt.getTime()) return false;
+        }
+      }
+      return true;
+    }
+    return false;
+  }
+
+  // 2. Check schedule string for day names if workDays array is not explicitly present
+  if (typeof asg.schedule === 'string' && (asg.schedule.includes('(') || asg.schedule.includes(','))) {
+    const dayNames = ['Sun', 'Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat'];
+    const todayAbbr = dayNames[targetDate.getDay()].toLowerCase();
+    if (asg.schedule.toLowerCase().includes(todayAbbr)) {
+      return true;
+    }
+  }
+
+  // 3. Fallback to specific single-date match
   const rawDate = asg.assignDate || asg.scheduleDate || asg.date || asg.assignmentDate || asg.scheduledDate || asg.endDate || asg.assignedOn || asg.assignedAt;
   if (!rawDate) return true;
 
   const dtParts = extractAssignmentDateParts(rawDate);
   if (!dtParts) return true;
 
-  const now = new Date();
+  const now = targetDate;
   return dtParts.year === now.getFullYear() && dtParts.month === now.getMonth() && dtParts.day === now.getDate();
 }
 
@@ -413,41 +455,45 @@ export function getShiftEndInfo(asgOrShiftStr) {
     }
   }
 
-  // If no shift was scheduled or if schedule is Flexible/Unassigned, there is NO shift end
-  if (!endStr && !shiftStr) {
-    return null;
-  }
-
-  const sLower = (shiftStr || '').toLowerCase();
-  const eLower = (endStr || '').toLowerCase();
-  if (sLower === 'flexible' || sLower === 'unassigned' || sLower === 'no shift scheduled' ||
-      eLower === 'flexible' || eLower === 'unassigned' || eLower === 'no shift scheduled') {
-    return null;
+  if (!endStr || endStr.toLowerCase() === 'flexible' || endStr.toLowerCase() === 'unassigned' || endStr.toLowerCase() === 'no shift scheduled') {
+    return {
+      raw: 'Flexible',
+      startRaw: startStr || 'Flexible',
+      hour: null,
+      minute: null,
+      seconds: null,
+    };
   }
 
   const parsed = parseTimeToHoursMinutes(endStr);
-  if (!parsed) return null;
-
   return {
     raw: endStr,
     startRaw: startStr,
-    hour: parsed.hours,
-    minute: parsed.minutes,
-    seconds: parsed.seconds,
+    hour: parsed?.hours ?? null,
+    minute: parsed?.minutes ?? null,
+    seconds: parsed?.seconds ?? 0,
   };
 }
 
 /**
  * Checks if current check-out time is earlier than the scheduled shift end.
- * If employee has no shift schedule or flexible hours, they cannot be early.
  * @param {object|string} asgOrShift
  * @param {Date|number} [checkTime=new Date()]
  * @param {number} [graceMinutes=15]
  * @returns {{ isEarly: boolean, minutesEarly: number, shiftEndStr: string, shiftEndDt: Date|null }}
  */
 export function checkEarlyCheckout(asgOrShift, checkTime = new Date(), graceMinutes = 15) {
+  if (!asgOrShift) {
+    return {
+      isEarly: false,
+      minutesEarly: 0,
+      shiftEndStr: 'Flexible',
+      shiftEndDt: null,
+    };
+  }
+
   const endInfo = getShiftEndInfo(asgOrShift);
-  if (!endInfo || !endInfo.raw) {
+  if (!endInfo || endInfo.hour === null || endInfo.raw === 'Flexible') {
     return {
       isEarly: false,
       minutesEarly: 0,
@@ -457,7 +503,7 @@ export function checkEarlyCheckout(asgOrShift, checkTime = new Date(), graceMinu
   }
 
   const now = checkTime instanceof Date ? checkTime : new Date(checkTime);
-  const shiftEndDt = new Date(now.getFullYear(), now.getMonth(), now.getDate(), endInfo.hour, endInfo.minute, endInfo.seconds);
+  const shiftEndDt = new Date(now.getFullYear(), now.getMonth(), now.getDate(), endInfo.hour, endInfo.minute, endInfo.seconds || 0);
   const diffMs = shiftEndDt.getTime() - now.getTime();
   const minutesEarly = Math.round(diffMs / 60000);
 
@@ -549,39 +595,39 @@ export function checkLateCheckIn(asgOrShift, checkTime = new Date(), graceMinute
 export function isAttendanceRecordFlagged(r, employeeOrAssignmentShift = null) {
   if (!r) return false;
 
-  // Explicit status indicating absence or missed shift
+  // 1. Explicit early check-out flags (only if departure was early by at least 15 mins)
+  if (r.earlyCheckOut === true || r.earlyDeparture === true) return true;
+  if (typeof r.minutesEarly === 'number' && r.minutesEarly >= 15) return true;
+
+  // 2. Explicit status indicating absence or missed shift
   const st = (r.status || '').toString().trim().toLowerCase();
   if (st === 'missed shift' || st === 'missed' || st === 'absent') {
     return true;
   }
 
-  // Anomaly flags specific to unexcused unauthorized absence
+  // 3. Anomaly flags specific to unexcused tardiness or absence
   const aFlag = (r.anomalyFlag || '').toString().toLowerCase();
   if (aFlag.includes('unauthorized absence')) {
     return true;
   }
 
-  // Resolve effective shift for this record
+  // 4. Resolve effective shift for this record
   const effectiveShift = (
     (r.shift && r.shift !== 'Unassigned' && r.shift !== 'Flexible' && r.shift !== 'No Shift Scheduled' && r.shift !== '08:00 AM - 05:00 PM')
       ? r.shift
-      : (employeeOrAssignmentShift && employeeOrAssignmentShift !== 'Unassigned' && employeeOrAssignmentShift !== 'Flexible' && employeeOrAssignmentShift !== 'No Shift Scheduled' && employeeOrAssignmentShift !== '08:00 AM - 05:00 PM')
+      : (employeeOrAssignmentShift && employeeOrAssignmentShift !== 'Unassigned' && employeeOrAssignmentShift !== 'Flexible' && employeeOrAssignmentShift !== 'No Shift Scheduled')
         ? employeeOrAssignmentShift
-        : (r.shift && r.shift !== 'Unassigned' && r.shift !== 'Flexible' && r.shift !== 'No Shift Scheduled' && r.shift !== '08:00 AM - 05:00 PM')
+        : (r.shift && r.shift !== 'Unassigned' && r.shift !== 'Flexible' && r.shift !== 'No Shift Scheduled')
           ? r.shift
           : null
   );
 
-  // If no explicit shift was scheduled for this employee or record, they are on a flexible schedule and cannot be late or early!
+  // If no explicit shift was scheduled for this employee or record, they are on a flexible schedule and cannot be late!
   if (!effectiveShift) {
     return false;
   }
 
-  // Explicit early check-out flags (only if an explicit shift was scheduled and departure was >= 15m early)
-  if (r.earlyCheckOut === true || r.earlyDeparture === true) return true;
-  if (typeof r.minutesEarly === 'number' && r.minutesEarly >= 15) return true;
-
-  // Time-based late check-in detection from raw timeIn
+  // 5. If an explicit shift WAS assigned, check if check-in was actually late (> 15 mins after shift start)
   if (r.timeIn) {
     const timeInDate = parseAttendanceTimestamp(r.timeIn);
     if (timeInDate) {
@@ -590,7 +636,7 @@ export function isAttendanceRecordFlagged(r, employeeOrAssignmentShift = null) {
     }
   }
 
-  // Explicit late status ONLY if minutesLate >= 15
+  // 6. Explicit late status ONLY if minutesLate >= 15
   if ((st === 'late' || r.isLate === true || r.late === true) && typeof r.minutesLate === 'number' && r.minutesLate >= 15) {
     return true;
   }

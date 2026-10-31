@@ -1090,16 +1090,11 @@ export default function HomeScreen({ navigation, route, user: propUser }) {
     setChecking(true);
     try {
       const now = new Date();
-      // Only evaluate early departure if employee has an explicit, scheduled shift
       const scheduledShift = resolveShift(assignment, employee);
-      const hasScheduledShift = scheduledShift && scheduledShift !== 'Unassigned' && scheduledShift !== 'Flexible' && scheduledShift !== 'No Shift Scheduled';
-      const shiftToCheck = hasScheduledShift 
-        ? scheduledShift 
-        : (attendance?.shift && attendance.shift !== 'Flexible' && attendance.shift !== 'Unassigned' && attendance.shift !== '08:00 AM - 05:00 PM' ? attendance.shift : null);
-      
-      const earlyInfo = shiftToCheck 
-        ? checkEarlyCheckout(shiftToCheck, now, 15) 
-        : { isEarly: false, minutesEarly: 0, shiftEndStr: 'Flexible', shiftEndDt: null };
+      const hasScheduledShift = scheduledShift && scheduledShift !== 'Unassigned' && scheduledShift !== 'No Shift Scheduled';
+      const earlyInfo = (hasScheduledShift && scheduledShift !== 'Flexible')
+        ? checkEarlyCheckout(scheduledShift, now, 15)
+        : { isEarly: false, minutesEarly: 0, shiftEndStr: 'Flexible' };
 
       let curCoords = { latitude: attendance.latitude || null, longitude: attendance.longitude || null };
       try {
@@ -1108,29 +1103,6 @@ export default function HomeScreen({ navigation, route, user: propUser }) {
           curCoords = { latitude: curLoc.coords.latitude, longitude: curLoc.coords.longitude };
         }
       } catch (_) {}
-
-      let anomalyDocId = null;
-      if (earlyInfo.isEarly) {
-        const departureDesc = `You checked out early at ${now.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit', hour12: true })} before scheduled shift end (${earlyInfo.shiftEndStr}; ${earlyInfo.minutesEarly}m early departure).`;
-        anomalyDocId = await writeSecurityEvent({
-          eventType: 'EARLY_CHECKOUT',
-          employee: {
-            id: employee.id,
-            name: employee.name,
-            email: employee.email || currentEmail,
-            employeeType: employee.workType || employee.employeeType || 'Employee',
-          },
-          assignment: {
-            id: assignment?.id || null,
-            siteId: site?.id || null,
-            siteName: attendance.siteName || site?.name || assignment?.site || 'Scheduled Post',
-          },
-          coords: curCoords,
-          relatedAttendanceId: attendance.id,
-          customDescription: departureDesc,
-          extra: { details: `${earlyInfo.minutesEarly}m before ${earlyInfo.shiftEndStr}` },
-        });
-      }
 
       const checkoutPayload = {
         timeOut: serverTimestamp(),
@@ -1148,46 +1120,73 @@ export default function HomeScreen({ navigation, route, user: propUser }) {
       // Dual-write checkout to lowercase collection
       await updateDoc(doc(db, 'attendance', attendance.id), checkoutPayload).catch(() => {});
 
-      if (employee.id && employee.id !== 'emp_fallback') {
-        await updateDoc(doc(db, 'employees', employee.id), {
-          status: 'Completed',
-          attendanceStatus: 'Completed',
-          lastCheckOut: Date.now(),
-          lastActive: Date.now(),
-          isOnline: true
-        });
-        presenceService.setCurrentStatus('Completed');
-        presenceService.sendHeartbeat(true, 'Completed');
+      Alert.alert('Check Out Successful', 'Have a great day!');
+
+      try {
+        if (employee.id && employee.id !== 'emp_fallback') {
+          await updateDoc(doc(db, 'employees', employee.id), {
+            status: 'Completed',
+            attendanceStatus: 'Completed',
+            lastCheckOut: Date.now(),
+            lastActive: Date.now(),
+            isOnline: true
+          }).catch(() => {});
+          presenceService.setCurrentStatus('Completed');
+          presenceService.sendHeartbeat(true, 'Completed');
+        }
+      } catch (err) {
+        console.warn('Check-out employee status warning:', err);
       }
 
-      await addDoc(collection(db, 'ActivityLogs'), {
-        employee_id: employee.id,
-        employeeName: employee.name,
-        site_id: site?.id || 'Unknown',
-        siteName: attendance.siteName || site?.name || assignment?.site || 'Unassigned Site',
-        action: earlyInfo.isEarly ? 'Check Out (Early Departure)' : 'Check Out',
-        type: 'Attendance',
-        anomalyId: anomalyDocId || null,
-        timestamp: serverTimestamp(),
-        status: earlyInfo.isEarly ? 'Warning' : 'Normal',
-        details: earlyInfo.isEarly ? `Early departure: ${earlyInfo.minutesEarly}m before ${earlyInfo.shiftEndStr}` : 'Shift Completed'
-      });
+      try {
+        let anomalyDocId = null;
+        if (earlyInfo.isEarly) {
+          const departureDesc = `You checked out early at ${now.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit', hour12: true })} before scheduled shift end (${earlyInfo.shiftEndStr}; ${earlyInfo.minutesEarly}m early departure).`;
+          anomalyDocId = await writeSecurityEvent({
+            eventType: 'EARLY_CHECKOUT',
+            employee: {
+              id: employee.id,
+              name: employee.name,
+              email: employee.email || currentEmail,
+              employeeType: employee.workType || employee.employeeType || 'Employee',
+            },
+            assignment: {
+              id: assignment?.id || null,
+              siteId: site?.id || null,
+              siteName: attendance.siteName || site?.name || assignment?.site || 'Scheduled Post',
+            },
+            coords: curCoords,
+            relatedAttendanceId: attendance.id,
+            customDescription: departureDesc,
+            extra: { details: `${earlyInfo.minutesEarly}m before ${earlyInfo.shiftEndStr}` },
+          }).catch(() => null);
+        }
 
-      // Stop verification scheduler
-      await schedulerStop();
-      currentAttendanceIdRef.current = null;
-
-      // Stop periodic location logging upon check-out
-      await locationLogService.stopPeriodicLogging();
-
-      if (earlyInfo.isEarly) {
-        Alert.alert(
-          '⚠️ Early Check-Out Logged',
-          `You checked out ${earlyInfo.minutesEarly} minutes before your scheduled shift ends (${earlyInfo.shiftEndStr}). An anomaly alert has been reported to administration.`
-        );
-      } else {
-        Alert.alert('Check Out Successful', 'Have a great day!');
+        await addDoc(collection(db, 'ActivityLogs'), {
+          employee_id: employee.id,
+          employeeName: employee.name,
+          site_id: site?.id || 'Unknown',
+          siteName: attendance.siteName || site?.name || assignment?.site || 'Unassigned Site',
+          action: earlyInfo.isEarly ? 'Check Out (Early Departure)' : 'Check Out',
+          type: 'Attendance',
+          anomalyId: anomalyDocId || null,
+          timestamp: serverTimestamp(),
+          status: earlyInfo.isEarly ? 'Warning' : 'Normal',
+          details: earlyInfo.isEarly ? `Early departure: ${earlyInfo.minutesEarly}m before ${earlyInfo.shiftEndStr}` : 'Shift Completed'
+        }).catch(() => {});
+      } catch (err) {
+        console.warn('Check-out activity/anomaly log warning:', err);
       }
+
+      try {
+        await schedulerStop().catch(() => {});
+        currentAttendanceIdRef.current = null;
+      } catch (_) {}
+
+      try {
+        await locationLogService.stopPeriodicLogging().catch(() => {});
+      } catch (_) {}
+
     } catch (e) {
       console.error(e);
       Alert.alert('Error', 'Could not record check-out.');
@@ -1484,8 +1483,8 @@ export default function HomeScreen({ navigation, route, user: propUser }) {
             </TouchableOpacity>
           )}
 
-          {/* Warning Banner if No Active Shift Today (only if not already checked in) */}
-          {!isCheckedIn && (!assignment || assignedSitesList.length === 0) && (
+          {/* Warning Banner if No Active Shift Today */}
+          {(!assignment || assignedSitesList.length === 0) && (
             <View style={{
               flexDirection: 'row',
               alignItems: 'center',
@@ -1499,7 +1498,7 @@ export default function HomeScreen({ navigation, route, user: propUser }) {
             }}>
               <Ionicons name="alert-circle" size={20} color="#DC2626" />
               <View style={{ flex: 1 }}>
-                <Text style={{ fontSize: 13, fontWeight: '700', color: '#991B1B' }}>Check-In Unavailable</Text>
+                <Text style={{ fontSize: 13, fontWeight: '700', color: '#991B1B' }}>Check-In & Check-Out Locked</Text>
                 <Text style={{ fontSize: 11, color: '#B91C1C', marginTop: 2 }}>
                   You have no active worksite assignment for today. Shifts whose date has passed or are missed/completed are automatically removed.
                 </Text>
@@ -1508,7 +1507,7 @@ export default function HomeScreen({ navigation, route, user: propUser }) {
           )}
 
           {/* Warning Banner if Mobile Field Employee has no assigned site */}
-          {!isCheckedIn && assignment && assignedSitesList.length > 0 && isMobileFieldWithoutSite(employee, assignment, site) && (
+          {assignment && assignedSitesList.length > 0 && isMobileFieldWithoutSite(employee, assignment, site) && (
             <View style={{
               flexDirection: 'row',
               alignItems: 'center',
@@ -1522,9 +1521,9 @@ export default function HomeScreen({ navigation, route, user: propUser }) {
             }}>
               <Ionicons name="alert-circle" size={20} color="#DC2626" />
               <View style={{ flex: 1 }}>
-                <Text style={{ fontSize: 13, fontWeight: '700', color: '#991B1B' }}>Check-In Locked</Text>
+                <Text style={{ fontSize: 13, fontWeight: '700', color: '#991B1B' }}>Check-In & Check-Out Locked</Text>
                 <Text style={{ fontSize: 11, color: '#B91C1C', marginTop: 2 }}>
-                  Mobile Field Employees must have at least one assigned worksite before checking in. Contact your administrator.
+                  Mobile Field Employees must have at least one assigned worksite before checking in or out. Contact your administrator.
                 </Text>
               </View>
             </View>
@@ -1532,24 +1531,64 @@ export default function HomeScreen({ navigation, route, user: propUser }) {
 
           {/* Attendance Action Buttons */}
           <View style={styles.actionRow}>
-            {!isCheckedIn ? (
+            {(!assignment || assignedSitesList.length === 0) ? (
+              isCheckedIn && !isCheckedOut ? (
+                <TouchableOpacity
+                  style={[styles.checkInBtn, { opacity: 0.85, backgroundColor: '#64748B' }]}
+                  onPress={() => {
+                    Alert.alert(
+                      'No Shift Scheduled',
+                      'You do not have an active worksite shift scheduled for today. Would you like to end your unscheduled on-duty session?',
+                      [
+                        { text: 'End Session', style: 'destructive', onPress: requestCheckOut },
+                        { text: 'Cancel', style: 'cancel' }
+                      ]
+                    );
+                  }}
+                  disabled={checking}
+                >
+                  {checking ? <ActivityIndicator color="#fff" /> : (
+                    <>
+                      <Ionicons name="stop-circle-outline" size={20} color="white" />
+                      <Text style={styles.btnText}>End Unscheduled Session</Text>
+                    </>
+                  )}
+                </TouchableOpacity>
+              ) : (
+                <TouchableOpacity
+                  style={[styles.checkInBtn, { opacity: 0.6, backgroundColor: '#94A3B8' }]}
+                  onPress={() => {
+                    Alert.alert(
+                      'No Shift Scheduled',
+                      'You do not have an active worksite assignment scheduled for today. Shifts whose date has passed or are not scheduled for today cannot be checked in or out.'
+                    );
+                  }}
+                  disabled={checking}
+                >
+                  {checking ? <ActivityIndicator color="#fff" /> : (
+                    <>
+                      <Ionicons name="lock-closed-outline" size={20} color="white" />
+                      <Text style={styles.btnText}>No Shift Scheduled</Text>
+                    </>
+                  )}
+                </TouchableOpacity>
+              )
+            ) : !isCheckedIn ? (
               <TouchableOpacity
                 style={[
                   styles.checkInBtn, 
-                  (checking || !assignment || assignedSitesList.length === 0 || isAssignmentDatePassed(assignment) || isMobileFieldWithoutSite(employee, assignment, site)) && { 
+                  (checking || isAssignmentDatePassed(assignment) || isMobileFieldWithoutSite(employee, assignment, site)) && { 
                     opacity: 0.6, 
                     backgroundColor: '#94A3B8' 
                   }
                 ]}
                 onPress={requestCheckIn}
-                disabled={checking || !assignment || assignedSitesList.length === 0 || isAssignmentDatePassed(assignment)}
+                disabled={checking || isAssignmentDatePassed(assignment)}
               >
                 {checking ? <ActivityIndicator color="#fff" /> : (
                   <>
                     <Ionicons name="log-in-outline" size={20} color="white" />
-                    <Text style={styles.btnText}>
-                      {(!assignment || assignedSitesList.length === 0 || isAssignmentDatePassed(assignment)) ? 'Check-In Unavailable' : 'Check In'}
-                    </Text>
+                    <Text style={styles.btnText}>Check In</Text>
                   </>
                 )}
               </TouchableOpacity>
@@ -1557,7 +1596,7 @@ export default function HomeScreen({ navigation, route, user: propUser }) {
               <TouchableOpacity
                 style={[
                   styles.checkOutBtn, 
-                  (isCheckedOut || checking) && { opacity: 0.6 }
+                  (isCheckedOut || checking) && { opacity: 0.6, backgroundColor: '#94A3B8' }
                 ]}
                 onPress={requestCheckOut}
                 disabled={isCheckedOut || checking}
