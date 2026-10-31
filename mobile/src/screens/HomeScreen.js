@@ -1160,15 +1160,19 @@ export default function HomeScreen({ navigation, route, user: propUser }) {
 
       try {
         if (employee.id && employee.id !== 'emp_fallback') {
+          const empWorkType = (employee?.workType || employee?.employeeType || employee?.type || '').toString().toLowerCase();
+          const isFixed = !empWorkType.includes('mobile') && !empWorkType.includes('field');
+          const finalStatus = isFixed ? 'Online' : 'Completed';
+
           await updateDoc(doc(db, 'employees', employee.id), {
-            status: 'Completed',
-            attendanceStatus: 'Completed',
+            status: finalStatus,
+            attendanceStatus: isFixed ? 'Online' : 'Completed',
             lastCheckOut: Date.now(),
             lastActive: Date.now(),
             isOnline: true
           }).catch(() => {});
-          presenceService.setCurrentStatus('Completed');
-          presenceService.sendHeartbeat(true, 'Completed');
+          presenceService.setCurrentStatus(finalStatus);
+          presenceService.sendHeartbeat(true, finalStatus);
         }
       } catch (err) {
         console.warn('Check-out employee status warning:', err);
@@ -1289,9 +1293,16 @@ export default function HomeScreen({ navigation, route, user: propUser }) {
   const hasSchedule = hasActiveShiftSchedule(assignment, employee);
   const hasActiveAssignment = hasActiveSiteAssignment(assignment, employee) && (assignedSitesList.length > 0 || site);
 
+  const empWorkType = (employee?.workType || employee?.employeeType || employee?.type || '').toString().toLowerCase();
+  const isFixed = !empWorkType.includes('mobile') && !empWorkType.includes('field');
+
   let displayStatus = (isCheckedIn && !isCheckedOut)
     ? 'On Duty'
-    : (employee?.status || 'Online');
+    : (isFixed && isCheckedOut ? 'Online' : (employee?.status || 'Online'));
+
+  if (isFixed && (displayStatus === 'Completed' || displayStatus === 'Checked Out')) {
+    displayStatus = 'Online';
+  }
 
   if (!hasActiveAssignment || !hasSchedule) {
     if (displayStatus === 'On Duty' || displayStatus === 'On Site') {

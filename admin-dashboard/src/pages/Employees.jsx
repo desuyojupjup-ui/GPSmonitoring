@@ -5,7 +5,7 @@ import Swal from 'sweetalert2';
 import { db, collection, onSnapshot, addDoc, updateDoc, deleteDoc, doc, query, getDocs, createSecondaryAuthUser } from '../firebase';
 import { showToast, showConfirmDelete } from '../utils/toast';
 import { ResponsiveContainer, PieChart, Pie, Cell, BarChart, Bar, XAxis, YAxis, Tooltip, CartesianGrid } from 'recharts';
-import { hasEmployeeCheckedOut, hasActiveSiteAssignment, hasActiveShiftSchedule } from '../utils/statusUtils';
+import { hasEmployeeCheckedOut, hasActiveSiteAssignment, hasActiveShiftSchedule, resolveEmployeeWorkType } from '../utils/statusUtils';
 
 const CustomPieTooltip = ({ active, payload }) => {
   if (active && payload && payload.length) {
@@ -122,7 +122,18 @@ export function isEmployeeOnline(emp, customNow) {
 export function getEmployeeStatus(emp, customNow, assignments = []) {
   const now = (typeof customNow === 'number' && customNow > 1000000000000) ? customNow : Date.now();
   if (!isEmployeeOnline(emp, now)) return 'Offline';
-  if (hasEmployeeCheckedOut(emp)) return 'Completed';
+
+  const isCheckedOut = hasEmployeeCheckedOut(emp);
+  const rawStatus = (emp.status || '').trim();
+  const isCompleted = isCheckedOut || rawStatus === 'Completed' || rawStatus === 'Checked Out';
+
+  const workType = resolveEmployeeWorkType(emp, assignments);
+  if (isCompleted) {
+    if (workType === 'Fixed Site Employee') {
+      return 'Online';
+    }
+    return 'Completed';
+  }
 
   // Strict Rule: If no active site assignment or no shift scheduled, do NOT status On Duty
   const hasSiteAsg = hasActiveSiteAssignment(emp, assignments);

@@ -608,15 +608,19 @@ export default function AttendanceScreen({ navigation, route, user: propUser }) 
 
       try {
         if (emp?.id && emp.id !== 'emp_fallback') {
+          const empWorkType = (emp?.workType || emp?.employeeType || emp?.type || '').toString().toLowerCase();
+          const isFixed = !empWorkType.includes('mobile') && !empWorkType.includes('field');
+          const finalStatus = isFixed ? 'Online' : 'Completed';
+
           await updateDoc(doc(db, 'employees', emp.id), {
-            status: 'Completed',
-            attendanceStatus: 'Completed',
+            status: finalStatus,
+            attendanceStatus: isFixed ? 'Online' : 'Completed',
             lastCheckOut: Date.now(),
             lastActive: Date.now(),
             isOnline: true
           }).catch(() => { });
-          presenceService.setCurrentStatus('Completed');
-          presenceService.sendHeartbeat(true, 'Completed');
+          presenceService.setCurrentStatus(finalStatus);
+          presenceService.sendHeartbeat(true, finalStatus);
         }
       } catch (_) {}
 

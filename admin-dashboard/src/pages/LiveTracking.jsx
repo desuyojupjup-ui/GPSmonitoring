@@ -11,6 +11,7 @@ import { isEmployeeOnSite, resolveEmployeeStatus, isEmployeeOnline, hasEmployeeC
 const STATUS_COLORS = {
   'On Site':    '#1E8E3E', // Google Green
   'On Duty':    '#1A73E8', // Google Blue
+  'Online':     '#0284C7', // Sky Blue
   'In Transit': '#F9AB00', // Google Yellow/Amber
   'Completed':  '#10B981', // Clean Emerald Green
   'Offline':    '#70757A', // Google Gray
@@ -19,6 +20,7 @@ const STATUS_COLORS = {
 const STATUS_BG = {
   'On Site':    '#E6F4EA',
   'On Duty':    '#E8F0FE',
+  'Online':     '#E0F2FE',
   'In Transit': '#FEF7E0',
   'Completed':  '#ECFDF5',
   'Offline':    '#F1F3F4',
@@ -236,6 +238,7 @@ export default function LiveTracking() {
     { id: 'all', label: 'All', icon: Users, color: '#1A73E8', count: employees.length },
     { id: 'onsite', label: 'On Site', icon: MapPin, color: '#1E8E3E', count: employees.filter(e => isEmployeeOnSite(e, sites, assignments, attendance)).length },
     { id: 'onduty', label: 'On Duty', icon: Activity, color: '#1A73E8', count: employees.filter(e => getStatus(e) === 'On Duty').length },
+    { id: 'online', label: 'Online', icon: Wifi, color: '#0284C7', count: employees.filter(e => getStatus(e) === 'Online').length },
     { id: 'intransit', label: 'In Transit', icon: Truck, color: '#F9AB00', count: employees.filter(e => getStatus(e) === 'In Transit').length },
     { id: 'completed', label: 'Completed', icon: CheckCircle2, color: '#10B981', count: employees.filter(e => getStatus(e) === 'Completed').length },
     { id: 'offline', label: 'Offline', icon: WifiOff, color: '#70757A', count: employees.filter(e => getStatus(e) === 'Offline').length },

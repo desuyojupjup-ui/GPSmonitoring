@@ -572,12 +572,18 @@ export function resolveEmployeeStatus(emp, sitesOrNow, assignments = [], attenda
   }
 
   // 1. CRITICAL: If employee has completed check out, they are NEVER On Duty or On Site!
-  if (hasEmployeeCheckedOut(emp, attendance)) {
+  // For Fixed Site Employee: If she has done check in and check out, do not put Completed status, make only Online (or Offline if disconnected)
+  const isCheckedOut = hasEmployeeCheckedOut(emp, attendance);
+  const rawStatus = (emp.status || '').trim();
+  const isCompleted = isCheckedOut || rawStatus === 'Completed' || rawStatus === 'Checked Out';
+
+  if (isCompleted) {
+    const workType = resolveEmployeeWorkType(emp, assignments);
+    if (workType === 'Fixed Site Employee') {
+      return isEmployeeOnline(emp, now) ? 'Online' : 'Offline';
+    }
     return 'Completed';
   }
-
-  const rawStatus = (emp.status || '').trim();
-  if (rawStatus === 'Completed' || rawStatus === 'Checked Out') return 'Completed';
 
   // 2. Strict Requirement: If no active site assignment or no shift scheduled, do NOT status On Duty or On Site
   const hasSiteAsg = hasActiveSiteAssignment(emp, assignments, sites);
