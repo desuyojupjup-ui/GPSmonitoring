@@ -323,6 +323,15 @@ export default function AttendanceScreen({ navigation, route, user: propUser }) 
     const rec = record || todayRecord;
     if (!rec) return Alert.alert('No Record', 'No active check-in found for today.');
 
+    const emp = employeeRef.current || employee;
+    if (!hasActiveShiftSchedule(null, emp)) {
+      Alert.alert(
+        'Check-Out Blocked',
+        'You cannot record check-out because you do not have an active scheduled shift for today.'
+      );
+      return;
+    }
+
     setConfirmModal({
       visible: true,
       actionType: 'check_out',
@@ -509,6 +518,16 @@ export default function AttendanceScreen({ navigation, route, user: propUser }) 
   const handleCheckOut = async (record) => {
     const rec = record || todayRecord;
     if (!rec) return Alert.alert('No Record', 'No active check-in found for today.');
+
+    const emp = employeeRef.current || employee;
+    if (!hasActiveShiftSchedule(null, emp)) {
+      Alert.alert(
+        'Check-Out Blocked',
+        'You cannot record check-out because you do not have an active scheduled shift for today.'
+      );
+      return;
+    }
+
     setChecking(true);
     try {
       const emp = employeeRef.current;
@@ -769,6 +788,24 @@ export default function AttendanceScreen({ navigation, route, user: propUser }) 
                 <Ionicons name="close-circle" size={18} color="#EF4444" />
                 <Text style={[styles.doneText, { color: '#EF4444' }]}>Shift missed for today</Text>
               </View>
+            ) : !hasActiveShiftSchedule(null, employee) ? (
+              <TouchableOpacity
+                style={[styles.actionBtn, { opacity: 0.6, backgroundColor: '#94A3B8' }]}
+                onPress={() => {
+                  Alert.alert(
+                    'No Shift Scheduled',
+                    'You do not have an active scheduled shift for today. Attendance check-in and check-out cannot be recorded without a scheduled shift.'
+                  );
+                }}
+                disabled={checking}
+              >
+                {checking ? <ActivityIndicator color="white" size="small" /> : (
+                  <>
+                    <Ionicons name="lock-closed-outline" size={18} color="white" />
+                    <Text style={styles.actionBtnText}>No Shift Scheduled</Text>
+                  </>
+                )}
+              </TouchableOpacity>
             ) : !checkedIn ? (
               <TouchableOpacity
                 style={[

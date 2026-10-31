@@ -859,6 +859,15 @@ export default function HomeScreen({ navigation, route, user: propUser }) {
       return;
     }
 
+    const hasSched = hasActiveShiftSchedule(assignment, employee);
+    if (!hasSched) {
+      Alert.alert(
+        'Check-Out Blocked',
+        'You cannot record check-out because you do not have an active scheduled shift for today.'
+      );
+      return;
+    }
+
     setConfirmModal({
       visible: true,
       actionType: 'check_out',
@@ -1101,6 +1110,15 @@ export default function HomeScreen({ navigation, route, user: propUser }) {
   const handleCheckOut = async () => {
     if (!attendance || !attendance.id) {
       Alert.alert('Error', 'No active check-in record found for today.');
+      return;
+    }
+
+    const hasSched = hasActiveShiftSchedule(assignment, employee);
+    if (!hasSched) {
+      Alert.alert(
+        'Check-Out Blocked',
+        'You cannot record check-out because you do not have an active scheduled shift for today.'
+      );
       return;
     }
 
@@ -1557,48 +1575,24 @@ export default function HomeScreen({ navigation, route, user: propUser }) {
 
           {/* Attendance Action Buttons */}
           <View style={styles.actionRow}>
-            {(!assignment || assignedSitesList.length === 0) ? (
-              isCheckedIn && !isCheckedOut ? (
-                <TouchableOpacity
-                  style={[styles.checkInBtn, { opacity: 0.85, backgroundColor: '#64748B' }]}
-                  onPress={() => {
-                    Alert.alert(
-                      'No Shift Scheduled',
-                      'You do not have an active worksite shift scheduled for today. Would you like to end your unscheduled on-duty session?',
-                      [
-                        { text: 'End Session', style: 'destructive', onPress: requestCheckOut },
-                        { text: 'Cancel', style: 'cancel' }
-                      ]
-                    );
-                  }}
-                  disabled={checking}
-                >
-                  {checking ? <ActivityIndicator color="#fff" /> : (
-                    <>
-                      <Ionicons name="stop-circle-outline" size={20} color="white" />
-                      <Text style={styles.btnText}>End Unscheduled Session</Text>
-                    </>
-                  )}
-                </TouchableOpacity>
-              ) : (
-                <TouchableOpacity
-                  style={[styles.checkInBtn, { opacity: 0.6, backgroundColor: '#94A3B8' }]}
-                  onPress={() => {
-                    Alert.alert(
-                      'No Shift Scheduled',
-                      'You do not have an active worksite assignment scheduled for today. Shifts whose date has passed or are not scheduled for today cannot be checked in or out.'
-                    );
-                  }}
-                  disabled={checking}
-                >
-                  {checking ? <ActivityIndicator color="#fff" /> : (
-                    <>
-                      <Ionicons name="lock-closed-outline" size={20} color="white" />
-                      <Text style={styles.btnText}>No Shift Scheduled</Text>
-                    </>
-                  )}
-                </TouchableOpacity>
-              )
+            {(!assignment || assignedSitesList.length === 0 || !hasSchedule) ? (
+              <TouchableOpacity
+                style={[styles.checkInBtn, { opacity: 0.6, backgroundColor: '#94A3B8' }]}
+                onPress={() => {
+                  Alert.alert(
+                    'No Shift Scheduled',
+                    'You do not have an active worksite shift scheduled for today. Attendance check-in and check-out cannot be recorded without a scheduled shift.'
+                  );
+                }}
+                disabled={checking}
+              >
+                {checking ? <ActivityIndicator color="#fff" /> : (
+                  <>
+                    <Ionicons name="lock-closed-outline" size={20} color="white" />
+                    <Text style={styles.btnText}>No Shift Scheduled</Text>
+                  </>
+                )}
+              </TouchableOpacity>
             ) : !isCheckedIn ? (
               <TouchableOpacity
                 style={[
