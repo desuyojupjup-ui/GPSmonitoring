@@ -366,11 +366,47 @@ export default function ReportsPage() {
                       <td style={{ padding: '12px 18px', color: '#475569', fontWeight: 600 }}>{formatReportTime(row.check_in || row.checkIn || row.timeIn)}</td>
                       <td style={{ padding: '12px 18px', color: '#475569', fontWeight: 600 }}>{formatReportTime(row.check_out || row.checkOut || row.timeOut)}</td>
                       <td style={{ padding: '12px 18px', color: '#0F172A', fontWeight: 700 }}>{row.duration || '—'}</td>
-                      <td style={{ padding: '12px 18px' }}>
+                      <td style={{ padding: '12px 18px', whiteSpace: 'nowrap' }}>
                         <div style={{ display: 'inline-flex', alignItems: 'center', gap: 6, background: statusStyle.bg, color: statusStyle.color, border: `1px solid ${statusStyle.border}`, padding: '4px 10px', borderRadius: 20, fontWeight: 700, fontSize: 11 }}>
                           <div style={{ width: 6, height: 6, borderRadius: '50%', background: statusStyle.dot }} />
                           {row.status || 'Offline'}
                         </div>
+                        {(row.isLate || row.late || row.anomalyFlag === 'Late Check-In' || (row.status || '').toLowerCase() === 'late') && (
+                          <div style={{
+                            display: 'inline-flex',
+                            alignItems: 'center',
+                            gap: 4,
+                            marginLeft: 6,
+                            background: '#FFFBEB',
+                            color: '#B45309',
+                            border: '1px solid #FDE68A',
+                            padding: '2px 8px',
+                            borderRadius: 12,
+                            fontSize: 10,
+                            fontWeight: 700,
+                          }}>
+                            <Clock size={11} color="#B45309" />
+                            Late Check-In{row.minutesLate ? ` (+${row.minutesLate}m)` : ''}
+                          </div>
+                        )}
+                        {(row.earlyCheckOut || row.earlyDeparture || row.anomalyFlag === 'Early Check-Out' || (row.minutesEarly && Number(row.minutesEarly) >= 15)) && (
+                          <div style={{
+                            display: 'inline-flex',
+                            alignItems: 'center',
+                            gap: 4,
+                            marginLeft: 6,
+                            background: '#FEF2F2',
+                            color: '#DC2626',
+                            border: '1px solid #FECACA',
+                            padding: '2px 8px',
+                            borderRadius: 12,
+                            fontSize: 10,
+                            fontWeight: 700,
+                          }}>
+                            <AlertCircle size={11} color="#DC2626" />
+                            Early Check-Out{row.minutesEarly ? ` (-${row.minutesEarly}m)` : ''}
+                          </div>
+                        )}
                       </td>
                       <td style={{ padding: '10px 18px', whiteSpace: 'nowrap' }}>
                         <button

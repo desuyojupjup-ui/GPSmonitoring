@@ -177,8 +177,69 @@ export default function Attendance() {
        raw.anomalyFlag === 'Early Check-Out' ||
        (raw.minutesEarly && Number(raw.minutesEarly) >= 15))
     );
+
     const inInfo  = formatTsInfo(raw.timeIn  || raw.checkIn  || raw.check_in  || raw.in);
     const outInfo = formatTsInfo(raw.timeOut || raw.checkOut || raw.check_out || raw.out);
+
+    // Calculate late check-in if shift start exists
+    const checkInTimeVal = raw.timeIn || raw.checkIn || raw.check_in || raw.in;
+    const checkInDate = parseDate(checkInTimeVal);
+    let calcMinutesLate = 0;
+    let isCalculatedLate = false;
+    if (hasExplicitShift && checkInDate) {
+      const shiftParts = String(raw.shift).split(/\s*[-~]|(?:\s+to\s+)\s*/i).filter(Boolean);
+      const startToken = shiftParts[0]?.trim();
+      if (startToken) {
+        let sHour = null, sMin = null;
+        const ampmM = startToken.match(/^(\d{1,2}):(\d{2})(?::\d{2})?\s*([AP]M)$/i);
+        if (ampmM) {
+          let h = parseInt(ampmM[1], 10);
+          const m = parseInt(ampmM[2], 10);
+          const ap = ampmM[3].toUpperCase();
+          if (ap === 'PM' && h < 12) h += 12;
+          if (ap === 'AM' && h === 12) h = 0;
+          sHour = h;
+          sMin = m;
+        } else {
+          const h24M = startToken.match(/^(\d{1,2}):(\d{2})(?::\d{2})?$/);
+          if (h24M) {
+            sHour = parseInt(h24M[1], 10);
+            sMin = parseInt(h24M[2], 10);
+          }
+        }
+        if (sHour !== null && sMin !== null) {
+          const shiftStartDt = new Date(
+            checkInDate.getFullYear(),
+            checkInDate.getMonth(),
+            checkInDate.getDate(),
+            sHour,
+            sMin,
+            0
+          );
+          const diffMs = checkInDate.getTime() - shiftStartDt.getTime();
+          const mins = Math.round(diffMs / 60000);
+          if (mins >= 15) {
+            isCalculatedLate = true;
+            calcMinutesLate = mins;
+          }
+        }
+      }
+    }
+
+    const isLateCheckIn = Boolean(
+      hasExplicitShift &&
+      (raw.isLate ||
+       raw.late ||
+       raw.anomalyFlag === 'Late Check-In' ||
+       (typeof raw.anomalyFlag === 'string' && raw.anomalyFlag.toLowerCase().includes('late')) ||
+       (typeof raw.status === 'string' && raw.status.toLowerCase() === 'late') ||
+       (raw.minutesLate && Number(raw.minutesLate) >= 1) ||
+       isCalculatedLate)
+    );
+
+    const minutesLate = (raw.minutesLate != null && Number(raw.minutesLate) > 0)
+      ? Number(raw.minutesLate)
+      : (calcMinutesLate > 0 ? calcMinutesLate : null);
 
     // Resolve active physical location vs registered worksite:
     const lat = raw.latitude != null ? Number(raw.latitude) : null;
@@ -221,6 +282,8 @@ export default function Attendance() {
       isEarlyCheckOut,
       minutesEarly:  raw.minutesEarly || null,
       departureNote: raw.departureNote || null,
+      isLateCheckIn,
+      minutesLate,
       check_in:      isMissed ? 'Missed (No Check-in)' : inInfo.full,
       check_in_time: isMissed ? 'Missed' : inInfo.time,
       check_in_date: inInfo.date || (raw.date ? (typeof raw.date === 'string' ? raw.date : formatDate(raw.date)) : ''),
@@ -503,7 +566,7 @@ export default function Attendance() {
   };
 
   const presentCount = combinedAttendance.filter(a => ['on site', 'checked in', 'on duty', 'completed', 'present'].includes((a.status || '').toLowerCase())).length;
-  const lateCount = combinedAttendance.filter(a => (a.status || '').toLowerCase() === 'late').length;
+  const lateCount = combinedAttendance.filter(a => (a.status || '').toLowerCase() === 'late' || a.isLateCheckIn).length;
   const absentCount = combinedAttendance.filter(a => ['absent', 'missed shift', 'missed'].includes((a.status || '').toLowerCase())).length + employees.filter(e => (e.status || '').toLowerCase() === 'absent').length;
   const onSiteCount = combinedAttendance.filter(a => ['on site', 'checked in'].includes((a.status || '').toLowerCase())).length;
   const checkedOutCount = combinedAttendance.filter(a => (a.status || '').toLowerCase() === 'completed').length;
@@ -652,6 +715,24 @@ export default function Attendance() {
                             <div style={{ width: 6, height: 6, borderRadius: '50%', background: statusStyle.dot }}></div>
                             {row.status}
                           </div>
+                          {row.isLateCheckIn && (
+                            <div style={{
+                              display: 'inline-flex',
+                              alignItems: 'center',
+                              gap: 4,
+                              marginLeft: 6,
+                              background: '#FFFBEB',
+                              color: '#B45309',
+                              border: '1px solid #FDE68A',
+                              padding: '2px 8px',
+                              borderRadius: 12,
+                              fontSize: 10,
+                              fontWeight: 700,
+                            }}>
+                              <Clock size={11} color="#B45309" />
+                              Late Check-In{row.minutesLate ? ` (+${row.minutesLate}m)` : ''}
+                            </div>
+                          )}
                           {row.isEarlyCheckOut && (
                             <div style={{
                               display: 'inline-flex',
