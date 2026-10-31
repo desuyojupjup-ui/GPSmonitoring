@@ -10,7 +10,7 @@ import {
   auth, db, collection, onSnapshot, addDoc, updateDoc,
   doc, serverTimestamp, getDocs, query, orderBy, getCleanEmployeeEmail
 } from '../firebase';
-import { isMobileFieldWithoutSite, checkEarlyCheckout, checkLateCheckIn, isAttendanceRecordFlagged } from '../utils/assignmentUtils';
+import { isMobileFieldWithoutSite, checkEarlyCheckout, checkLateCheckIn, isAttendanceRecordFlagged, hasActiveShiftSchedule, hasActiveSiteAssignment } from '../utils/assignmentUtils';
 import { verifyGeofence } from '../services/geofence';
 import { writeSecurityEvent } from '../services/securityLogger';
 import ActionConfirmModal from '../components/ActionConfirmModal';
@@ -485,14 +485,17 @@ export default function AttendanceScreen({ navigation, route, user: propUser }) 
 
       try {
         if (emp.id !== 'emp_fallback') {
+          const hasAsg = hasActiveSiteAssignment(null, emp);
+          const hasSched = hasActiveShiftSchedule(null, emp);
+          const targetStatus = (hasAsg && hasSched) ? 'On Duty' : 'Online';
           await updateDoc(doc(db, 'employees', emp.id), {
-            status: 'On Duty',
+            status: targetStatus,
             lastCheckIn: serverTimestamp(),
             lastActive: Date.now(),
             isOnline: true,
           }).catch(() => { });
-          presenceService.setCurrentStatus('On Duty');
-          presenceService.sendHeartbeat(true, 'On Duty');
+          presenceService.setCurrentStatus(targetStatus);
+          presenceService.sendHeartbeat(true, targetStatus);
         }
       } catch (_) {}
     } catch (e) {
@@ -695,10 +698,10 @@ export default function AttendanceScreen({ navigation, route, user: propUser }) 
                 <Text style={[styles.statusText, { color: '#991B1B' }]}>Missed Shift</Text>
               </View>
             ) : checkedIn ? (
-              <View style={[styles.statusBadge, { backgroundColor: checkedOut ? '#EDE9FE' : '#D1FAE5' }]}>
-                <View style={[styles.statusDot, { backgroundColor: checkedOut ? '#7C3AED' : '#10B981' }]} />
-                <Text style={[styles.statusText, { color: checkedOut ? '#5B21B6' : '#065F46' }]}>
-                  {checkedOut ? 'Completed' : 'On Site'}
+              <View style={[styles.statusBadge, { backgroundColor: checkedOut ? '#EDE9FE' : ((hasActiveSiteAssignment(null, employee) && hasActiveShiftSchedule(null, employee)) ? '#D1FAE5' : '#E0F2FE') }]}>
+                <View style={[styles.statusDot, { backgroundColor: checkedOut ? '#7C3AED' : ((hasActiveSiteAssignment(null, employee) && hasActiveShiftSchedule(null, employee)) ? '#10B981' : '#0284C7') }]} />
+                <Text style={[styles.statusText, { color: checkedOut ? '#5B21B6' : ((hasActiveSiteAssignment(null, employee) && hasActiveShiftSchedule(null, employee)) ? '#065F46' : '#0369A1') }]}>
+                  {checkedOut ? 'Completed' : ((hasActiveSiteAssignment(null, employee) && hasActiveShiftSchedule(null, employee)) ? 'On Site' : 'Recorded')}
                 </Text>
               </View>
             ) : null}

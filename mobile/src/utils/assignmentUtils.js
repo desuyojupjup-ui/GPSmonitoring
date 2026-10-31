@@ -231,6 +231,42 @@ export function hasActiveShiftSchedule(assignment, employee, targetDate = new Da
 }
 
 /**
+ * Determines whether an employee has an active site assignment for today.
+ * Returns false if:
+ * - Assignment or profile site is empty, 'Unassigned', 'None', or 'No site assigned'
+ * - Assignment date has passed or is inactive
+ * - Recurring workDays array is specified and today is NOT one of the scheduled workDays
+ *
+ * @param {object} [assignment]
+ * @param {object} [employee]
+ * @param {Date} [targetDate=new Date()]
+ * @returns {boolean}
+ */
+export function hasActiveSiteAssignment(assignment, employee, targetDate = new Date()) {
+  if (assignment) {
+    const site = (assignment.site || assignment.siteName || '').toString().trim();
+    if (site && site.toLowerCase() !== 'unassigned' && site.toLowerCase() !== 'none' && site.toLowerCase() !== 'no site assigned') {
+      if (!isAssignmentDatePassed(assignment, targetDate) && isAssignmentActiveToday(assignment, targetDate)) {
+        return true;
+      }
+    }
+  }
+
+  const empSite = (employee?.assignedSite || employee?.site || employee?.assignedSiteName || '').toString().trim();
+  if (empSite && empSite.toLowerCase() !== 'unassigned' && empSite.toLowerCase() !== 'none' && empSite.toLowerCase() !== 'no site assigned') {
+    const workDays = employee?.workDays;
+    if (Array.isArray(workDays) && workDays.length > 0) {
+      if (!isDayInWorkDays(workDays, targetDate)) {
+        return false;
+      }
+    }
+    return true;
+  }
+
+  return false;
+}
+
+/**
  * Format a single time string (e.g. "08:00", "17:00", "17:00:00", "8:00 AM") into 12-hour format "hh:mm AM/PM"
  */
 export function formatSingleTimeToken(t) {
@@ -787,22 +823,25 @@ export async function getChatbotAssignmentContext(emp, userEmail, propUser) {
   }
 
   const isCheckedIn = Boolean(checkInTimeStr && !checkOutTimeStr);
-  const isCheckedOut = Boolean(checkOutTimeStr);
-
-  if (isCheckedOut) {
-    statusText = `Completed (Checked out at ${checkOutTimeStr})`;
-  } else if (isCheckedIn) {
-    statusText = `On Duty (Checked in at ${checkInTimeStr})`;
-  } else if (activeAsg?.status) {
-    statusText = activeAsg.status;
-  }
-
   const hasAssignment = Boolean(
     siteName &&
     typeof siteName === 'string' &&
     siteName.trim().toLowerCase() !== 'unassigned' &&
     siteName.trim().toLowerCase() !== 'none'
   );
+
+  const hasSchedule = hasActiveShiftSchedule(activeAsg, emp);
+  const hasValidSiteAsg = hasActiveSiteAssignment(activeAsg, emp);
+
+  if (isCheckedOut) {
+    statusText = `Completed (Checked out at ${checkOutTimeStr})`;
+  } else if (isCheckedIn && hasValidSiteAsg && hasSchedule) {
+    statusText = `On Duty (Checked in at ${checkInTimeStr})`;
+  } else if (isCheckedIn) {
+    statusText = `Online (Checked in at ${checkInTimeStr})`;
+  } else if (activeAsg?.status) {
+    statusText = activeAsg.status;
+  }
 
   return {
     hasAssignment,

@@ -84,7 +84,7 @@ function MapFocusController({ focusedEmployee, locations = {} }) {
   return null;
 }
 
-export default function MapTracking({ employees = [], sites = [], attendance = [], locations = {}, onFullscreen, focusedEmployee = null, onClearFocus = null }) {
+export default function MapTracking({ employees = [], sites = [], assignments = [], attendance = [], locations = {}, onFullscreen, focusedEmployee = null, onClearFocus = null }) {
   const mappableEmployees = employees.filter(e => (e.lat && e.lng) || locations[e.id]);
   const mappableLocations = mappableEmployees.map(emp => ({
     lat: emp.lat || locations[emp.id]?.lat,
@@ -112,7 +112,7 @@ export default function MapTracking({ employees = [], sites = [], attendance = [
         {mappableEmployees.map(emp => {
           const lat = emp.lat || locations[emp.id]?.lat;
           const lng = emp.lng || locations[emp.id]?.lng;
-          const status = resolveEmployeeStatus(emp, sites, [], attendance);
+          const status = resolveEmployeeStatus(emp, sites, assignments, attendance);
           return (
             <Marker key={emp.id} position={[lat, lng]} icon={createEmojiIcon(getInitials(emp.name), STATUS_COLORS[status] || '#9CA3AF', emp.profilePic)}>
               <Popup>

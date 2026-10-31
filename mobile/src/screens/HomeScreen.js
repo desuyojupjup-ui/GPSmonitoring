@@ -40,7 +40,7 @@ import { runPreAttendanceChecks } from '../services/securityService';
 import { writeSecurityEvent } from '../services/securityLogger';
 import { getDeviceId } from '../services/deviceInfo';
 import { getPendingSyncCount, syncOfflineRecords, clearOfflineQueue } from '../services/offlineSyncService';
-import { isAssignmentDatePassed, isAssignmentActiveToday, resolveShift, isAssignmentForEmployee, deduplicateAssignments, isMobileFieldWithoutSite, checkEarlyCheckout, checkLateCheckIn, isAttendanceRecordFlagged } from '../utils/assignmentUtils';
+import { isAssignmentDatePassed, isAssignmentActiveToday, resolveShift, isAssignmentForEmployee, deduplicateAssignments, isMobileFieldWithoutSite, checkEarlyCheckout, checkLateCheckIn, isAttendanceRecordFlagged, hasActiveShiftSchedule, hasActiveSiteAssignment } from '../utils/assignmentUtils';
 import {
   startSession as schedulerStart,
   stopSession as schedulerStop,
@@ -486,7 +486,9 @@ export default function HomeScreen({ navigation, route, user: propUser }) {
         presenceService.setEmployeeId(empData.id);
         if (!hasSetOnline.current) {
           hasSetOnline.current = true;
-          const initialStatus = (empData.status === 'On Duty') ? 'On Duty' : 'Online';
+          const hasAsg = hasActiveSiteAssignment(assignmentRef.current, empData);
+          const hasSched = hasActiveShiftSchedule(assignmentRef.current, empData);
+          const initialStatus = (empData.status === 'On Duty' && hasAsg && hasSched) ? 'On Duty' : 'Online';
           presenceService.startPresence(empData, empData.id, initialStatus);
         }
       }
@@ -694,17 +696,23 @@ export default function HomeScreen({ navigation, route, user: propUser }) {
 
     setAssignedSitesList(gatheredSites);
 
-    if (gatheredSites.length > 0) {
-      const primary = gatheredSites[0];
-      assignmentRef.current = primary.assignment;
-      setAssignment(primary.assignment);
-      siteRef.current = primary.site;
-      setSite(primary.site);
-    } else {
-      assignmentRef.current = null;
-      setAssignment(null);
-      siteRef.current = null;
-      setSite(null);
+    const hasActiveAsg = gatheredSites.length > 0;
+    const primary = hasActiveAsg ? gatheredSites[0] : null;
+    assignmentRef.current = primary ? primary.assignment : null;
+    setAssignment(primary ? primary.assignment : null);
+    siteRef.current = primary ? primary.site : null;
+    setSite(primary ? primary.site : null);
+
+    const hasSched = hasActiveShiftSchedule(primary?.assignment, emp);
+    // If no active site assignment or no shift scheduled, employee must NOT have status 'On Duty'
+    if (!hasActiveAsg || !hasSched) {
+      if (presenceService.currentStatus === 'On Duty') {
+        presenceService.setCurrentStatus('Online');
+        presenceService.sendHeartbeat(true, 'Online');
+      }
+      if (emp?.id && emp.id !== 'emp_fallback' && emp.status === 'On Duty') {
+        updateDoc(doc(db, 'employees', emp.id), { status: 'Online' }).catch(() => {});
+      }
     }
   }, [asgDocs, employee, currentEmail, sitesData]);
 
@@ -741,8 +749,14 @@ export default function HomeScreen({ navigation, route, user: propUser }) {
         );
 
         if (isCurrentlyCheckedIn) {
-          presenceService.setCurrentStatus('On Duty');
           const currentEmp = employeeRef.current || employee;
+          const hasAsg = hasActiveSiteAssignment(assignmentRef.current, currentEmp) && (assignedSitesList.length > 0 || site);
+          const hasSched = hasActiveShiftSchedule(assignmentRef.current, currentEmp);
+          const activeStatus = (hasAsg && hasSched) ? 'On Duty' : 'Online';
+
+          presenceService.setCurrentStatus(activeStatus);
+          if (activeStatus !== 'On Duty' && currentEmp?.id && currentEmp.status === 'On Duty') {
+            updateDoc(doc(db, 'employees', currentEmp.id), { status: 'Online' }).catch(() => {});
           if (!locationLogService.isPeriodicLoggingActive() && currentEmp) {
             locationLogService.startPeriodicLogging({
               employee: currentEmp,
@@ -1007,14 +1021,17 @@ export default function HomeScreen({ navigation, route, user: propUser }) {
       // Safely run secondary background logging and sync without risking false error alerts
       try {
         if (employee.id && employee.id !== 'emp_fallback') {
+          const hasAsg = Boolean((siteToUse || site || assignment) && (assignedSitesList.length > 0 || site || siteToUse));
+          const hasSched = hasActiveShiftSchedule(assignment, employee);
+          const targetStatus = (hasAsg && hasSched) ? 'On Duty' : 'Online';
           await updateDoc(doc(db, 'employees', employee.id), {
-            status: 'On Duty',
+            status: targetStatus,
             lastCheckIn: serverTimestamp(),
             lastActive: Date.now(),
             isOnline: true,
           }).catch(() => {});
-          presenceService.setCurrentStatus('On Duty');
-          presenceService.sendHeartbeat(true, 'On Duty');
+          presenceService.setCurrentStatus(targetStatus);
+          presenceService.sendHeartbeat(true, targetStatus);
         }
       } catch (err) {
         console.warn('Check-in status update warning:', err);
@@ -1250,9 +1267,18 @@ export default function HomeScreen({ navigation, route, user: propUser }) {
     isCheckedIn && (attendance?.timeOut || attendance?.checkOut || attendance?.check_out || attendance?.status === 'Completed')
   );
 
-  const displayStatus = (isCheckedIn && !isCheckedOut)
+  const hasSchedule = hasActiveShiftSchedule(assignment, employee);
+  const hasActiveAssignment = hasActiveSiteAssignment(assignment, employee) && (assignedSitesList.length > 0 || site);
+
+  let displayStatus = (isCheckedIn && !isCheckedOut)
     ? 'On Duty'
     : (employee?.status || 'Online');
+
+  if (!hasActiveAssignment || !hasSchedule) {
+    if (displayStatus === 'On Duty' || displayStatus === 'On Site') {
+      displayStatus = 'Online';
+    }
+  }
   const statusColor = (displayStatus === 'On Duty' || displayStatus === 'On Site') ? '#10B981' : (displayStatus === 'Online' ? '#0284C7' : '#F59E0B');
 
   const effectiveTimeIn = attendance?.timeIn || attendance?.checkIn || attendance?.check_in;

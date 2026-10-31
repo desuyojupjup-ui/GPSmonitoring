@@ -414,6 +414,140 @@ export function isEmployeeOnSite(emp, sites = [], assignments = [], attendanceOr
   return false;
 }
 
+/**
+ * Evaluates whether an employee has an active site assignment for today.
+ */
+export function hasActiveSiteAssignment(emp, assignments = [], sites = []) {
+  if (!emp) return false;
+
+  // 1. Check matching active assignments from database
+  if (Array.isArray(assignments) && assignments.length > 0) {
+    const empIds = [emp.id, emp.uid, emp.employeeId, emp.empId].filter(Boolean).map(x => String(x).trim().toLowerCase());
+    const empEmails = [emp.email, emp.empEmail, emp.workEmail].filter(Boolean).map(x => String(x).trim().toLowerCase());
+    const empName = (emp.name || emp.displayName || '').trim().toLowerCase();
+
+    const activeAsg = assignments.find(a => {
+      const aId = (a.employeeId || a.empId || a.userId || a.employee_id || '').toString().trim().toLowerCase();
+      const aEmail = (a.employeeEmail || a.email || a.empEmail || a.userEmail || '').toString().trim().toLowerCase();
+      const aName = (a.employeeName || a.empName || a.name || a.assignedTo || '').toString().trim().toLowerCase();
+
+      const isMatch = (aId && empIds.includes(aId)) ||
+                      (aEmail && empEmails.includes(aEmail)) ||
+                      (empName && aName && (aName === empName || aName.includes(empName) || empName.includes(aName)));
+      if (!isMatch) return false;
+
+      const st = (a.status || 'Active').toString().trim().toLowerCase();
+      if (st === 'completed' || st === 'cancelled' || st === 'archived' || st === 'expired' || st === 'inactive') {
+        return false;
+      }
+
+      const hasSite = Boolean(a.site || a.siteName || a.siteId || (Array.isArray(a.assignedSites) && a.assignedSites.length > 0));
+      if (!hasSite) return false;
+
+      // Check recurring workDays if present
+      if (Array.isArray(a.workDays) && a.workDays.length > 0) {
+        const dayNames = ['Sunday', 'Monday', 'Tuesday', 'Wednesday', 'Thursday', 'Friday', 'Saturday'];
+        const dayAbbrs = ['Sun', 'Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat'];
+        const dayIdx = new Date().getDay();
+        const full = dayNames[dayIdx].toLowerCase();
+        const abbr = dayAbbrs[dayIdx].toLowerCase();
+        const isToday = a.workDays.some(w => {
+          if (!w || typeof w !== 'string') return false;
+          const cl = w.trim().toLowerCase();
+          return cl === full || cl === abbr || full.startsWith(cl) || cl.startsWith(abbr);
+        });
+        if (!isToday) return false;
+      }
+
+      return true;
+    });
+
+    if (activeAsg) return true;
+  }
+
+  // 2. Check employee profile assignedSite / site
+  const profileSite = (emp.assignedSite || emp.site || emp.assignedSiteName || '').toString().trim();
+  if (profileSite && profileSite.toLowerCase() !== 'unassigned' && profileSite.toLowerCase() !== 'none' && profileSite.toLowerCase() !== 'no site assigned') {
+    if (Array.isArray(emp.workDays) && emp.workDays.length > 0) {
+      const dayNames = ['Sunday', 'Monday', 'Tuesday', 'Wednesday', 'Thursday', 'Friday', 'Saturday'];
+      const dayAbbrs = ['Sun', 'Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat'];
+      const dayIdx = new Date().getDay();
+      const full = dayNames[dayIdx].toLowerCase();
+      const abbr = dayAbbrs[dayIdx].toLowerCase();
+      const isToday = emp.workDays.some(w => {
+        if (!w || typeof w !== 'string') return false;
+        const cl = w.trim().toLowerCase();
+        return cl === full || cl === abbr || full.startsWith(cl) || cl.startsWith(abbr);
+      });
+      if (!isToday) return false;
+    }
+    return true;
+  }
+
+  return false;
+}
+
+/**
+ * Evaluates whether an employee has an active scheduled shift for today.
+ * Returns false if:
+ * - Shift is 'Flexible', 'Unassigned', 'None', or 'No Shift Scheduled'
+ * - Today is not one of the scheduled workDays
+ */
+export function hasActiveShiftSchedule(emp, assignments = []) {
+  if (!emp) return false;
+
+  let shiftStr = '';
+  let workDays = Array.isArray(emp.workDays) ? emp.workDays : null;
+
+  if (Array.isArray(assignments) && assignments.length > 0) {
+    const empIds = [emp.id, emp.uid, emp.employeeId, emp.empId].filter(Boolean).map(x => String(x).trim().toLowerCase());
+    const empEmails = [emp.email, emp.empEmail, emp.workEmail].filter(Boolean).map(x => String(x).trim().toLowerCase());
+    const empName = (emp.name || emp.displayName || '').trim().toLowerCase();
+
+    const matching = assignments.find(a => {
+      const aId = (a.employeeId || a.empId || a.userId || a.employee_id || '').toString().trim().toLowerCase();
+      const aEmail = (a.employeeEmail || a.email || a.empEmail || a.userEmail || '').toString().trim().toLowerCase();
+      const aName = (a.employeeName || a.empName || a.name || a.assignedTo || '').toString().trim().toLowerCase();
+
+      return (aId && empIds.includes(aId)) ||
+             (aEmail && empEmails.includes(aEmail)) ||
+             (empName && aName && (aName === empName || aName.includes(empName) || empName.includes(aName)));
+    });
+
+    if (matching) {
+      shiftStr = matching.shift || matching.shiftTime || matching.scheduledShift || matching.schedule || '';
+      if (Array.isArray(matching.workDays) && matching.workDays.length > 0) {
+        workDays = matching.workDays;
+      }
+    }
+  }
+
+  if (!shiftStr) {
+    shiftStr = emp.shift || emp.scheduledShift || emp.shiftTime || '';
+  }
+
+  const sLower = shiftStr.toString().trim().toLowerCase();
+  if (!sLower || sLower === 'flexible' || sLower === 'unassigned' || sLower === 'none' || sLower === 'no shift scheduled') {
+    return false;
+  }
+
+  if (Array.isArray(workDays) && workDays.length > 0) {
+    const dayNames = ['Sunday', 'Monday', 'Tuesday', 'Wednesday', 'Thursday', 'Friday', 'Saturday'];
+    const dayAbbrs = ['Sun', 'Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat'];
+    const dayIdx = new Date().getDay();
+    const full = dayNames[dayIdx].toLowerCase();
+    const abbr = dayAbbrs[dayIdx].toLowerCase();
+    const isToday = workDays.some(w => {
+      if (!w || typeof w !== 'string') return false;
+      const cl = w.trim().toLowerCase();
+      return cl === full || cl === abbr || full.startsWith(cl) || cl.startsWith(abbr);
+    });
+    if (!isToday) return false;
+  }
+
+  return true;
+}
+
 // Real-time helper: resolve employee duty status
 export function resolveEmployeeStatus(emp, sitesOrNow, assignments = [], attendanceOrNow = [], customNow) {
   if (!emp) return 'Offline';
@@ -445,19 +579,30 @@ export function resolveEmployeeStatus(emp, sitesOrNow, assignments = [], attenda
   const rawStatus = (emp.status || '').trim();
   if (rawStatus === 'Completed' || rawStatus === 'Checked Out') return 'Completed';
 
-  // 2. Check if verified On Site within geofence radius border
+  // 2. Strict Requirement: If no active site assignment or no shift scheduled, do NOT status On Duty or On Site
+  const hasSiteAsg = hasActiveSiteAssignment(emp, assignments, sites);
+  const hasSchedule = hasActiveShiftSchedule(emp, assignments);
+
+  if (!hasSiteAsg || !hasSchedule) {
+    if (isEmployeeOnline(emp, now)) {
+      return 'Online';
+    }
+    return 'Offline';
+  }
+
+  // 3. Check if verified On Site within geofence radius border
   if (isEmployeeOnSite(emp, sites, assignments, attendance, now)) {
     return 'On Site';
   }
 
   if (rawStatus === 'In Transit') return 'In Transit';
 
-  // 3. Check if active on shift today (clocked in without checkout)
+  // 4. Check if active on shift today (clocked in without checkout)
   if (isEmployeeActiveOnShift(emp, attendance)) {
     return 'On Duty';
   }
 
-  // 4. Actively online with app session
+  // 5. Actively online with app session
   if (isEmployeeOnline(emp, now)) {
     if (rawStatus === 'On Site' || rawStatus === 'On Duty') {
       return 'On Duty';

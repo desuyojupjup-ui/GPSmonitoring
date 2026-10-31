@@ -125,9 +125,10 @@ function MapFitBounds({ boundsLocations }) {
 }
 
 export default function LiveTracking() {
-  const [employees, setEmployees] = useState([]);
-  const [sites, setSites] = useState([]);
-  const [attendance, setAttendance] = useState([]);
+  const [employees, setEmployees]     = useState([]);
+  const [sites, setSites]             = useState([]);
+  const [attendance, setAttendance]   = useState([]);
+  const [assignments, setAssignments] = useState([]);
   const [filter, setFilter] = useState('all');
   const [search, setSearch] = useState('');
   const [selected, setSelected] = useState(null);
@@ -191,15 +192,20 @@ export default function LiveTracking() {
       const unsubAtt = onSnapshot(query(collection(db, 'attendance')), (snap) => {
         setAttendance(snap.docs.map(d => ({ id: d.id, ...d.data() })));
       });
-      return () => { unsubEmp(); unsubSites(); unsubAtt(); };
+      const unsubAsg = onSnapshot(query(collection(db, 'Assignments')), (snap) => {
+        setAssignments(snap.docs.map(d => ({ id: d.id, ...d.data() })));
+      });
+      return () => { unsubEmp(); unsubSites(); unsubAtt(); unsubAsg(); };
     } catch (e) {
       console.warn('Live tracking error:', e);
     }
   }, []);
 
+  const getStatus = (emp) => getEmployeeStatus(emp, sites, attendance, assignments);
+
   const filtered = employees.filter(emp => {
     const matchS = emp.name?.toLowerCase().includes(search.toLowerCase()) || emp.idNum?.includes(search);
-    const effStatus = getEmployeeStatus(emp, sites, attendance);
+    const effStatus = getStatus(emp);
     const matchF = filter === 'all' || effStatus.toLowerCase().replace(' ', '') === filter.toLowerCase().replace(' ', '');
     return matchS && matchF;
   });
@@ -228,11 +234,11 @@ export default function LiveTracking() {
 
   const FILTER_OPTIONS = [
     { id: 'all', label: 'All', icon: Users, color: '#1A73E8', count: employees.length },
-    { id: 'onsite', label: 'On Site', icon: MapPin, color: '#1E8E3E', count: employees.filter(e => isEmployeeOnSite(e, sites, [], attendance)).length },
-    { id: 'onduty', label: 'On Duty', icon: Activity, color: '#1A73E8', count: employees.filter(e => getEmployeeStatus(e, sites, attendance) === 'On Duty').length },
-    { id: 'intransit', label: 'In Transit', icon: Truck, color: '#F9AB00', count: employees.filter(e => getEmployeeStatus(e, sites, attendance) === 'In Transit').length },
-    { id: 'completed', label: 'Completed', icon: CheckCircle2, color: '#10B981', count: employees.filter(e => getEmployeeStatus(e, sites, attendance) === 'Completed').length },
-    { id: 'offline', label: 'Offline', icon: WifiOff, color: '#70757A', count: employees.filter(e => getEmployeeStatus(e, sites, attendance) === 'Offline').length },
+    { id: 'onsite', label: 'On Site', icon: MapPin, color: '#1E8E3E', count: employees.filter(e => isEmployeeOnSite(e, sites, assignments, attendance)).length },
+    { id: 'onduty', label: 'On Duty', icon: Activity, color: '#1A73E8', count: employees.filter(e => getStatus(e) === 'On Duty').length },
+    { id: 'intransit', label: 'In Transit', icon: Truck, color: '#F9AB00', count: employees.filter(e => getStatus(e) === 'In Transit').length },
+    { id: 'completed', label: 'Completed', icon: CheckCircle2, color: '#10B981', count: employees.filter(e => getStatus(e) === 'Completed').length },
+    { id: 'offline', label: 'Offline', icon: WifiOff, color: '#70757A', count: employees.filter(e => getStatus(e) === 'Offline').length },
   ];
 
   return (
@@ -282,7 +288,7 @@ export default function LiveTracking() {
           {/* Employee Marker Pins */}
           {mappable.map(emp => {
             const isOnline = isEmployeeOnline(emp);
-            const status = getEmployeeStatus(emp, sites, attendance);
+            const status = getStatus(emp);
             const initials = emp.name?.split(' ').map(n => n[0]).join('').toUpperCase() || '?';
             const color = STATUS_COLORS[status] || STATUS_COLORS.Offline;
             return (
@@ -410,7 +416,7 @@ export default function LiveTracking() {
               /* Selected Employee Profile Panel */
               (() => {
                 const isSelectedOnline = isEmployeeOnline(selected);
-                const selectedStatus = getEmployeeStatus(selected, sites, attendance);
+                const selectedStatus = getStatus(selected);
                 const selectedColor = STATUS_COLORS[selectedStatus] || STATUS_COLORS.Offline;
                 return (
                   <div style={{ padding: 20, display: 'flex', flexDirection: 'column', gap: 16 }}>
@@ -499,7 +505,7 @@ export default function LiveTracking() {
                 ) : (
                   filtered.map(emp => {
                     const isOnline = isEmployeeOnline(emp);
-                    const status = getEmployeeStatus(emp, sites, attendance);
+                    const status = getStatus(emp);
                     const color = STATUS_COLORS[status] || STATUS_COLORS.Offline;
                     const initials = emp.name?.split(' ').map(n => n[0]).join('').toUpperCase() || '?';
                     return (

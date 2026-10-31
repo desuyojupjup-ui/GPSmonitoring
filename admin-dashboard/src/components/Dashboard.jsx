@@ -2169,6 +2169,7 @@ export default function Dashboard() {
               <MapTracking
                 employees={employees}
                 sites={sites}
+                assignments={assignments}
                 attendance={attendance}
                 onFullscreen={() => setFullscreen(!fullscreen)}
                 focusedEmployee={focusedEmployee}

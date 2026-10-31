@@ -5,7 +5,7 @@ import Swal from 'sweetalert2';
 import { db, collection, onSnapshot, addDoc, updateDoc, deleteDoc, doc, query, getDocs, createSecondaryAuthUser } from '../firebase';
 import { showToast, showConfirmDelete } from '../utils/toast';
 import { ResponsiveContainer, PieChart, Pie, Cell, BarChart, Bar, XAxis, YAxis, Tooltip, CartesianGrid } from 'recharts';
-import { hasEmployeeCheckedOut } from '../utils/statusUtils';
+import { hasEmployeeCheckedOut, hasActiveSiteAssignment, hasActiveShiftSchedule } from '../utils/statusUtils';
 
 const CustomPieTooltip = ({ active, payload }) => {
   if (active && payload && payload.length) {
@@ -119,10 +119,18 @@ export function isEmployeeOnline(emp, customNow) {
   return false;
 }
 
-export function getEmployeeStatus(emp, customNow) {
+export function getEmployeeStatus(emp, customNow, assignments = []) {
   const now = (typeof customNow === 'number' && customNow > 1000000000000) ? customNow : Date.now();
   if (!isEmployeeOnline(emp, now)) return 'Offline';
   if (hasEmployeeCheckedOut(emp)) return 'Completed';
+
+  // Strict Rule: If no active site assignment or no shift scheduled, do NOT status On Duty
+  const hasSiteAsg = hasActiveSiteAssignment(emp, assignments);
+  const hasSchedule = hasActiveShiftSchedule(emp, assignments);
+  if (!hasSiteAsg || !hasSchedule) {
+    return 'Online';
+  }
+
   return (emp.status && emp.status !== 'Offline') ? emp.status : 'Online';
 }
 
@@ -219,9 +227,10 @@ export const calculatePasswordStrength = (pass) => {
 
 export default function Employees() {
   // Start with empty array - NO hardcoded sample data pre-filled!
-  const [employees, setEmployees] = useState([]);
-  const [sites, setSites]         = useState([]);
-  const [loading, setLoading]     = useState(true);
+  const [employees, setEmployees]     = useState([]);
+  const [sites, setSites]             = useState([]);
+  const [assignments, setAssignments] = useState([]);
+  const [loading, setLoading]         = useState(true);
   const [search, setSearch]       = useState('');
   const [wtFilter, setWtFilter]   = useState('All');
   const [modal, setModal]         = useState(false);
@@ -274,9 +283,16 @@ export default function Employees() {
         setSites(liveSites);
       });
 
+      const qAsg = query(collection(db, 'Assignments'));
+      const unsubAsg = onSnapshot(qAsg, (snapshot) => {
+        const liveAsg = snapshot.docs.map(d => ({ id: d.id, ...d.data() }));
+        setAssignments(liveAsg);
+      }, () => {});
+
       return () => {
         unsubEmp();
         unsubSites();
+        unsubAsg();
       };
     } catch (e) {
       console.warn('Firestore subscription caught error:', e);
@@ -306,12 +322,15 @@ export default function Employees() {
     ...(unassignedCount > 0 ? [{ name: 'Unassigned', value: unassignedCount, color: '#94A3B8', pct: ((unassignedCount / totalEmployees) * 100).toFixed(0) }] : [])
   ];
 
+  // Helper: get employee effective status taking into account assignments and schedule
+  const getStatus = (emp) => getEmployeeStatus(emp, null, assignments);
+
   // Chart 2: Status Breakdown Bar Data
   const statusChartData = [
-    { name: 'On Duty', count: employees.filter(e => getEmployeeStatus(e) === 'On Duty' || getEmployeeStatus(e) === 'On Site').length, fill: '#3B82F6' },
-    { name: 'Online', count: employees.filter(e => getEmployeeStatus(e) === 'Online').length, fill: '#0284C7' },
-    { name: 'In Transit', count: employees.filter(e => getEmployeeStatus(e) === 'In Transit').length, fill: '#F59E0B' },
-    { name: 'Offline', count: employees.filter(e => getEmployeeStatus(e) === 'Offline').length, fill: '#94A3B8' },
+    { name: 'On Duty', count: employees.filter(e => getStatus(e) === 'On Duty' || getStatus(e) === 'On Site').length, fill: '#3B82F6' },
+    { name: 'Online', count: employees.filter(e => getStatus(e) === 'Online').length, fill: '#0284C7' },
+    { name: 'In Transit', count: employees.filter(e => getStatus(e) === 'In Transit').length, fill: '#F59E0B' },
+    { name: 'Offline', count: employees.filter(e => getStatus(e) === 'Offline').length, fill: '#94A3B8' },
   ];
 
   // Chart 3: Geofence Compliance Data
@@ -784,7 +803,7 @@ export default function Employees() {
                         </td>
                         <td style={{ padding:'12px 14px' }}>
                           {(() => {
-                            const effStatus = getEmployeeStatus(emp);
+                            const effStatus = getStatus(emp);
                             const style = STATUS_STYLE[effStatus] || STATUS_STYLE.Offline;
                             return (
                               <div style={{ display:'inline-flex', alignItems:'center', gap:5, background:style.background, color:style.color, padding:'4px 9px', borderRadius:20, fontWeight:600, fontSize:11 }}>
@@ -1092,10 +1111,10 @@ export default function Employees() {
 
                 <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 6, marginTop: 8 }}>
                   {[
-                    { label: 'On Site', count: employees.filter(e => getEmployeeStatus(e) === 'On Site').length, color: '#10B981' },
-                    { label: 'On Duty', count: employees.filter(e => ['On Duty', 'Online'].includes(getEmployeeStatus(e))).length, color: '#3B82F6' },
-                    { label: 'In Transit', count: employees.filter(e => getEmployeeStatus(e) === 'In Transit').length, color: '#F59E0B' },
-                    { label: 'Offline', count: employees.filter(e => getEmployeeStatus(e) === 'Offline').length, color: '#6B7280' },
+                    { label: 'On Site', count: employees.filter(e => getStatus(e) === 'On Site').length, color: '#10B981' },
+                    { label: 'On Duty', count: employees.filter(e => ['On Duty', 'Online'].includes(getStatus(e))).length, color: '#3B82F6' },
+                    { label: 'In Transit', count: employees.filter(e => getStatus(e) === 'In Transit').length, color: '#F59E0B' },
+                    { label: 'Offline', count: employees.filter(e => getStatus(e) === 'Offline').length, color: '#6B7280' },
                   ].map(s => (
                     <div key={s.label} style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', background: '#F8FAFC', padding: '5px 8px', borderRadius: 6 }}>
                       <div style={{ display: 'flex', alignItems: 'center', gap: 5, fontSize: 10, color: '#475569', fontWeight: 600 }}>
