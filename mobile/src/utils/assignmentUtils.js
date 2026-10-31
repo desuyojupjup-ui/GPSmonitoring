@@ -58,33 +58,6 @@ export function extractAssignmentDateParts(rawDate) {
 }
 
 /**
- * Returns true if the assignment is expired/done and should NOT be shown to the employee.
- * Checks terminated statuses, past calendar dates, and shift end times.
- */
-export function isAssignmentDatePassed(asg) {
-  if (!asg) return true;
-  const status = (asg.status || '').toString().trim().toLowerCase();
-  
-  // Explicitly terminated or completed/missed statuses
-  if (
-    status === 'completed' || 
-    status === 'cancelled' || 
-    status === 'archived' || 
-    status === 'expired' || 
-    status === 'inactive' || 
-    status === 'missed shift' || 
-    status === 'missing check-out' || 
-    status === 'unattended' || 
-    status === 'incomplete' ||
-    status.includes('missed') ||
-    status.includes('completed') ||
-    status.includes('cancel') ||
-    status.includes('expired')
-  ) {
-    return true;
-  }
-
-/**
  * Checks if a specific day is included in the assignment workDays.
  */
 export function isDayInWorkDays(workDays, targetDate = new Date()) {
