@@ -757,6 +757,7 @@ export default function HomeScreen({ navigation, route, user: propUser }) {
           presenceService.setCurrentStatus(activeStatus);
           if (activeStatus !== 'On Duty' && currentEmp?.id && currentEmp.status === 'On Duty') {
             updateDoc(doc(db, 'employees', currentEmp.id), { status: 'Online' }).catch(() => {});
+          }
           if (!locationLogService.isPeriodicLoggingActive() && currentEmp) {
             locationLogService.startPeriodicLogging({
               employee: currentEmp,
