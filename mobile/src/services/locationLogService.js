@@ -57,11 +57,25 @@ class LocationLogService {
   }
 
   /**
-   * Resolve complete site coordinates and perimeter radius from session data,
-   * assignments, Firestore sites collection, or known locations.
+   * Update active session site/assignment when real-time Firestore Sites data finishes loading.
+   */
+  updateActiveSite(site, assignment) {
+    if (!this.activeSession) return;
+    if (site) this.activeSession.site = site;
+    if (assignment) this.activeSession.assignment = assignment;
+    this.cachedSiteGeofence = null;
+  }
+
+  /**
+   * Resolve complete site coordinates and perimeter radius from Firestore Sites collection,
+   * session data, or employee profile.
    */
   async getResolvedSiteGeofence() {
-    if (this.cachedSiteGeofence && (this.cachedSiteGeofence.lat != null || this.cachedSiteGeofence.polygon)) {
+    if (
+      this.cachedSiteGeofence &&
+      this.cachedSiteGeofence.fromFirestore &&
+      (this.cachedSiteGeofence.lat != null || this.cachedSiteGeofence.polygon)
+    ) {
       return this.cachedSiteGeofence;
     }
 
@@ -70,67 +84,97 @@ class LocationLogService {
 
     const { site, assignment, employee } = session;
 
-    // 1. Direct coordinates on site object
-    let lat = site?.lat ?? site?.latitude ?? null;
-    let lng = site?.lng ?? site?.longitude ?? null;
-    let radius = parseRadius(site?.radius ?? site?.geofenceRadius ?? assignment?.geofenceRadius ?? assignment?.radius ?? 200);
-    let polygon = site?.polygon ?? null;
-    let name = site?.name ?? site?.siteName ?? assignment?.siteName ?? assignment?.site ?? employee?.assignedSite ?? 'Assigned Worksite';
-    let siteId = site?.id ?? assignment?.siteId ?? 'site-active';
-
-    // 2. Direct coordinates on assignment object
-    if ((lat == null || lng == null) && assignment) {
-      lat = assignment?.latitude ?? assignment?.lat ?? null;
-      lng = assignment?.longitude ?? assignment?.lng ?? null;
-      if (assignment?.geofenceRadius) radius = parseRadius(assignment.geofenceRadius);
+    let name = (
+      employee?.assignedSite ||
+      site?.name ||
+      site?.siteName ||
+      assignment?.siteName ||
+      assignment?.site ||
+      'Assigned Worksite'
+    ).toString().trim();
+    if (name.includes(',')) {
+      name = name.split(',')[0].trim();
     }
 
-    // 3. Fallback: Query Firestore 'sites' / 'Sites' collection if coordinates are missing
-    if ((lat == null || lng == null) && !polygon) {
-      try {
-        const sitesSnap = await getDocs(collection(db, 'sites')).catch(() => null);
-        if (sitesSnap && !sitesSnap.empty) {
-          const targetName = (name || '').trim().toLowerCase();
-          const targetId = (siteId || '').trim().toLowerCase();
+    let siteId = site?.id ?? employee?.assignedSiteId ?? assignment?.siteId ?? 'site-active';
+    let lat = null;
+    let lng = null;
+    let polygon = site?.polygon ?? null;
+    let fromFirestore = false;
 
-          for (const d of sitesSnap.docs) {
-            const data = d.data();
-            const sName = (data.name || '').trim().toLowerCase();
-            const sId = (d.id || '').trim().toLowerCase();
+    const siteRadiusVal = site?.radius ? parseRadius(site.radius) : (site?.geofenceRadius ? parseRadius(site.geofenceRadius) : 0);
+    const empRadiusVal = employee?.geofenceRadius ? parseRadius(employee.geofenceRadius) : 0;
+    const asgRadiusVal = (assignment?.geofenceRadius || assignment?.radius) ? parseRadius(assignment.geofenceRadius ?? assignment.radius) : 0;
+    let radius = Math.max(siteRadiusVal, empRadiusVal, asgRadiusVal) || 100;
 
-            if (sId === targetId || (targetName && (sName === targetName || sName.includes(targetName) || targetName.includes(sName)))) {
-              lat = data.lat ?? data.latitude ?? null;
-              lng = data.lng ?? data.longitude ?? null;
-              if (data.radius) radius = parseRadius(data.radius);
-              if (data.polygon) polygon = data.polygon;
-              siteId = d.id;
-              name = data.name || name;
-              break;
-            }
-          }
+    // 1. Primary authoritative source: Query Firestore 'Sites' (and 'sites') collection
+    try {
+      let docs = [];
+      const upperSnap = await getDocs(collection(db, 'Sites')).catch(() => null);
+      if (upperSnap && !upperSnap.empty) {
+        docs = upperSnap.docs.map(d => ({ id: d.id, ...d.data() }));
+      }
+      const lowerSnap = await getDocs(collection(db, 'sites')).catch(() => null);
+      if (lowerSnap && !lowerSnap.empty) {
+        docs = [...docs, ...lowerSnap.docs.map(d => ({ id: d.id, ...d.data() }))];
+      }
+
+      if (docs.length > 0) {
+        const targetName = (name || '').trim().toLowerCase();
+        const targetId = (siteId || '').toString().trim().toLowerCase();
+
+        const matched =
+          docs.find(d => targetId && targetId !== 'site-active' && targetId !== 'site-resolved' && targetId !== 'unknown' && (d.id || '').toLowerCase() === targetId) ||
+          docs.find(d => targetName && (d.name || '').trim().toLowerCase() === targetName) ||
+          docs.find(d => {
+            const sName = (d.name || '').trim().toLowerCase();
+            return targetName && sName && (sName.includes(targetName) || targetName.includes(sName));
+          });
+
+        if (matched) {
+          lat = matched.lat ?? matched.latitude ?? null;
+          lng = matched.lng ?? matched.longitude ?? null;
+          const dbRadius = (matched.radius || matched.geofenceRadius) ? parseRadius(matched.radius ?? matched.geofenceRadius) : 0;
+          radius = Math.max(dbRadius, empRadiusVal, siteRadiusVal) || 100;
+          if (matched.polygon) polygon = matched.polygon;
+          siteId = matched.id || siteId;
+          name = matched.name || name;
+          fromFirestore = true;
         }
-      } catch (err) {
-        console.warn('[locationLogService] Site lookup warning:', err?.message);
+      }
+    } catch (err) {
+      console.warn('[locationLogService] Site lookup warning:', err?.message);
+    }
+
+    // 2. Fallback to direct coordinates on site or assignment object (only if not fake default coordinates)
+    if (lat == null || lng == null) {
+      const candidateLat = site?.lat ?? site?.latitude ?? assignment?.latitude ?? assignment?.lat ?? null;
+      const candidateLng = site?.lng ?? site?.longitude ?? assignment?.longitude ?? assignment?.lng ?? null;
+      if (candidateLat != null && candidateLng != null && !isNaN(Number(candidateLat)) && !isNaN(Number(candidateLng))) {
+        const cLat = Number(candidateLat);
+        const cLng = Number(candidateLng);
+        const isHardcodedDefault = Math.abs(cLat - 10.3273) < 0.0001 && Math.abs(cLng - 123.9064) < 0.0001 && site?.id === 'site-resolved';
+        if (!isHardcodedDefault) {
+          lat = cLat;
+          lng = cLng;
+        }
       }
     }
 
-    // 4. Fallback: Check known locations dictionary
+    // 3. Fallback: Check known locations dictionary ONLY on exact name match
     if ((lat == null || lng == null) && !polygon) {
       const nameKey = (name || '').toLowerCase();
-      const matchedKey = Object.keys(KNOWN_SITE_COORDINATES).find(
-        (k) => nameKey === k || nameKey.includes(k) || k.includes(nameKey)
-      );
-      if (matchedKey) {
-        const known = KNOWN_SITE_COORDINATES[matchedKey];
+      const known = KNOWN_SITE_COORDINATES[nameKey];
+      if (known) {
         lat = known.lat;
         lng = known.lng;
-        radius = radius || known.radius;
+        radius = Math.max(radius, known.radius || 200);
         name = known.name;
-      } else {
-        // Safe default: Cebu IT Park office coordinates
-        lat = 10.3273;
-        lng = 123.9064;
       }
+    }
+
+    if (lat == null && lng == null && !polygon) {
+      return null;
     }
 
     this.cachedSiteGeofence = {
@@ -142,6 +186,7 @@ class LocationLogService {
       longitude: lng != null ? Number(lng) : null,
       radius,
       polygon,
+      fromFirestore,
     };
 
     return this.cachedSiteGeofence;
@@ -170,7 +215,14 @@ class LocationLogService {
       return null;
     }
 
-    const geoResult = evaluateGeofence(Number(latitude), Number(longitude), siteGeofence);
+    // Include a GPS horizontal accuracy buffer (up to 40m) so indoor GPS drift doesn't false-trigger when employee is inside
+    const accuracyMargin = Math.min(Math.max(Number(accuracy) || 0, 0), 40);
+    const effectiveSiteGeofence = {
+      ...siteGeofence,
+      radius: (siteGeofence.radius || 100) + accuracyMargin,
+    };
+
+    const geoResult = evaluateGeofence(Number(latitude), Number(longitude), effectiveSiteGeofence);
 
     if (!geoResult.inside) {
       // ⚠️ EMPLOYEE IS OUTSIDE THE GEOFENCE PERIMETER!
@@ -184,6 +236,7 @@ class LocationLogService {
       );
 
       const now = Date.now();
+      const wasAlreadyOut = this.lastOutOfFenceState;
       const shouldTriggerAnomaly = (now - this.lastGeofenceAlertTime) > ALERT_COOLDOWN_MS;
 
       if (shouldTriggerAnomaly) {
@@ -227,7 +280,7 @@ class LocationLogService {
       }
 
       // Update employee and attendance documents in Firestore ONLY on state transition (not on every GPS tick)
-      if (!this.lastOutOfFenceState) {
+      if (!wasAlreadyOut) {
         this.lastOutOfFenceState = true;
         const empId = employee?.id || employee?.uid;
         if (empId && empId !== 'emp_fallback' && !empId.startsWith('emp_current')) {
@@ -259,11 +312,14 @@ class LocationLogService {
       return { breached: true, distance: distMeters, site: siteGeofence };
     } else {
       // ✅ EMPLOYEE IS INSIDE THE ASSIGNED GEOFENCE
-      if (this.lastOutOfFenceState) {
-        console.log(
-          `[locationLogService] Employee ${employee?.name || employee?.id} re-entered assigned geofence perimeter for "${siteGeofence.name}".`
-        );
+      if (this.lastOutOfFenceState || !this.hasConfirmedInsideOnce) {
+        if (this.lastOutOfFenceState) {
+          console.log(
+            `[locationLogService] Employee ${employee?.name || employee?.id} re-entered assigned geofence perimeter for "${siteGeofence.name}".`
+          );
+        }
         this.lastOutOfFenceState = false;
+        this.hasConfirmedInsideOnce = true;
 
         const empId = employee?.id || employee?.uid;
         if (empId && empId !== 'emp_fallback' && !empId.startsWith('emp_current')) {

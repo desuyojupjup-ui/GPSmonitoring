@@ -300,7 +300,7 @@ export function formatSingleTimeToken(t) {
  * Resolves a unified 12-hour shift string from an assignment or employee object.
  */
 export function resolveShift(asg, emp) {
-  if (!asg && (!emp?.shift || emp.shift === 'Unassigned')) return 'Unassigned';
+  if (!asg && !emp) return 'Unassigned';
 
   const raw =
     (asg?.shift && asg.shift.trim())                                     ? asg.shift.trim() :
@@ -309,6 +309,8 @@ export function resolveShift(asg, emp) {
     (asg?.startTime && asg?.endTime)                                     ? `${asg.startTime} - ${asg.endTime}` :
     (asg?.shiftStart || asg?.shiftEnd || asg?.startTime || asg?.endTime) ? (asg?.shiftStart || asg?.shiftEnd || asg?.startTime || asg?.endTime) :
     (emp?.shift && emp.shift.trim() && emp.shift !== 'Unassigned')       ? emp.shift.trim() :
+    (emp?.shiftTime && emp.shiftTime.trim() && emp.shiftTime !== 'Unassigned') ? emp.shiftTime.trim() :
+    (emp?.shiftStart && emp?.shiftEnd)                                   ? `${emp.shiftStart} - ${emp.shiftEnd}` :
     'Unassigned';
 
   if (!raw || raw === 'Unassigned') return 'Unassigned';
@@ -328,6 +330,67 @@ export function resolveShift(asg, emp) {
   }
 
   return raw;
+}
+
+/**
+ * Computes Shift Time Schedule, Working Hours, Shift Start/End Time, and Scheduled Working Days
+ * from an assignment or Fixed Site Employee profile.
+ */
+export function getShiftScheduleDetails(asg, emp) {
+  const shiftSchedule = resolveShift(asg, emp);
+  let startRaw = asg?.shiftStart || asg?.startTime || emp?.shiftStart || emp?.startTime || '';
+  let endRaw = asg?.shiftEnd || asg?.endTime || emp?.shiftEnd || emp?.endTime || '';
+
+  if ((!startRaw || !endRaw) && shiftSchedule && shiftSchedule !== 'Unassigned') {
+    const parts = shiftSchedule.split(/\s*[-~]|(?:\s+to\s+)\s*/i).filter(Boolean);
+    if (parts.length >= 2) {
+      if (!startRaw) startRaw = parts[0];
+      if (!endRaw) endRaw = parts[1];
+    }
+  }
+
+  const shiftStartTime = formatSingleTimeToken(startRaw) || '08:00 AM';
+  const shiftEndTime = formatSingleTimeToken(endRaw) || '05:00 PM';
+
+  const parsedStart = parseTimeToHoursMinutes(startRaw) || parseTimeToHoursMinutes(shiftStartTime);
+  const parsedEnd = parseTimeToHoursMinutes(endRaw) || parseTimeToHoursMinutes(shiftEndTime);
+
+  let workingHours = '';
+  if (parsedStart && parsedEnd) {
+    const startMins = parsedStart.hours * 60 + parsedStart.minutes;
+    let endMins = parsedEnd.hours * 60 + parsedEnd.minutes;
+    const isOvernight = endMins <= startMins;
+    if (isOvernight) {
+      endMins += 24 * 60;
+    }
+    const diffMins = endMins - startMins;
+    const hrs = Math.floor(diffMins / 60);
+    const mins = diffMins % 60;
+    const timeStr = mins === 0 ? `${hrs} hrs` : `${hrs}h ${mins}m`;
+    workingHours = isOvernight ? `${timeStr} (overnight)` : timeStr;
+  }
+
+  const rawWorkDays =
+    (Array.isArray(asg?.workDays) && asg.workDays.length > 0 ? asg.workDays : null) ||
+    (Array.isArray(asg?.effectiveWorkDays) && asg.effectiveWorkDays.length > 0 ? asg.effectiveWorkDays : null) ||
+    (Array.isArray(emp?.workDays) && emp.workDays.length > 0 ? emp.workDays : null) ||
+    (Array.isArray(emp?.scheduleDays) && emp.scheduleDays.length > 0 ? emp.scheduleDays : null) ||
+    ['Mon', 'Tue', 'Wed', 'Thu', 'Fri'];
+
+  const scheduledWorkingDays = rawWorkDays.join(', ');
+  const effectiveSchedule = shiftSchedule && shiftSchedule !== 'Unassigned'
+    ? shiftSchedule
+    : `${shiftStartTime} - ${shiftEndTime}`;
+
+  return {
+    shiftSchedule: effectiveSchedule,
+    workingHours: workingHours || '9 hrs',
+    shiftTimeAndHours: workingHours ? `${effectiveSchedule} (${workingHours})` : effectiveSchedule,
+    shiftStartTime,
+    shiftEndTime,
+    workDays: rawWorkDays,
+    scheduledWorkingDays,
+  };
 }
 
 /**
@@ -669,11 +732,18 @@ export function isAttendanceRecordFlagged(r, employeeOrAssignmentShift = null) {
 
   // 3. Anomaly flags specific to unexcused tardiness or absence
   const aFlag = (r.anomalyFlag || '').toString().toLowerCase();
-  if (aFlag.includes('unauthorized absence')) {
+  if (aFlag.includes('unauthorized absence') || aFlag.includes('late')) {
     return true;
   }
 
-  // 4. Resolve effective shift for this record
+  // 4. Explicit late status saved during check-in
+  if (st === 'late' || r.isLate === true || r.late === true) {
+    if (typeof r.minutesLate !== 'number' || r.minutesLate >= 15 || r.minutesLate > 0) {
+      return true;
+    }
+  }
+
+  // 5. Resolve effective shift for this record
   const effectiveShift = (
     (r.shift && r.shift !== 'Unassigned' && r.shift !== 'Flexible' && r.shift !== 'No Shift Scheduled' && r.shift !== '08:00 AM - 05:00 PM')
       ? r.shift
@@ -689,21 +759,147 @@ export function isAttendanceRecordFlagged(r, employeeOrAssignmentShift = null) {
     return false;
   }
 
-  // 5. If an explicit shift WAS assigned, check if check-in was actually late (> 15 mins after shift start)
-  if (r.timeIn) {
-    const timeInDate = parseAttendanceTimestamp(r.timeIn);
+  // 6. If an explicit shift WAS assigned, check if check-in was actually late (>= 15 mins after shift start)
+  const rawTimeIn = r.timeIn || r.checkIn || r.check_in;
+  if (rawTimeIn) {
+    const timeInDate = parseAttendanceTimestamp(rawTimeIn);
     if (timeInDate) {
       const lateCheck = checkLateCheckIn(effectiveShift, timeInDate, 15);
       if (lateCheck.isLate) return true;
     }
   }
 
-  // 6. Explicit late status ONLY if minutesLate >= 15
-  if ((st === 'late' || r.isLate === true || r.late === true) && typeof r.minutesLate === 'number' && r.minutesLate >= 15) {
-    return true;
+  return false;
+}
+
+export function getShiftDurationMinutes(shiftStr) {
+  if (!shiftStr || typeof shiftStr !== 'string') return 480;
+  const parts = shiftStr.split(/\s*[-~]|(?:\s+to\s+)\s*/i).filter(Boolean);
+  if (parts.length < 2) return 480;
+  const start = parseTimeToHoursMinutes(parts[0].trim());
+  const end = parseTimeToHoursMinutes(parts[1].trim());
+  if (!start || !end) return 480;
+  let diff = (end.hours * 60 + end.minutes) - (start.hours * 60 + start.minutes);
+  if (diff <= 0) diff += 1440;
+  return diff >= 60 && diff <= 1440 ? diff : 480;
+}
+
+export function calculateRecordPunctualityScore(r, employeeOrAssignmentShift = null) {
+  if (!r) return 1;
+  const st = (r.status || '').toString().trim().toLowerCase();
+  const aFlag = (r.anomalyFlag || '').toString().toLowerCase();
+
+  // Absent / Missed Shift gets 0% credit
+  if (st === 'missed shift' || st === 'missed' || st === 'absent' || aFlag.includes('unauthorized absence')) {
+    return 0;
   }
 
-  return false;
+  // On-time attended shift gets 100% credit
+  if (!isAttendanceRecordFlagged(r, employeeOrAssignmentShift)) {
+    return 1;
+  }
+
+  // Attended shift with Late Check-In or Early Check-Out gets partial punctuality credit
+  // proportional to the scheduled shift duration so an attended late check-in never drops to 0.0%
+  const effectiveShift = (
+    (r.shift && r.shift !== 'Unassigned' && r.shift !== 'Flexible' && r.shift !== 'No Shift Scheduled')
+      ? r.shift
+      : (employeeOrAssignmentShift && employeeOrAssignmentShift !== 'Unassigned' && employeeOrAssignmentShift !== 'Flexible' && employeeOrAssignmentShift !== 'No Shift Scheduled')
+        ? employeeOrAssignmentShift
+        : '08:00 AM - 05:00 PM'
+  );
+
+  const shiftDurationMins = getShiftDurationMinutes(effectiveShift);
+
+  let minsLate = typeof r.minutesLate === 'number' && r.minutesLate > 0 ? r.minutesLate : 0;
+  if (!minsLate) {
+    const rawTimeIn = r.timeIn || r.checkIn || r.check_in;
+    const timeInDate = parseAttendanceTimestamp(rawTimeIn);
+    if (timeInDate && effectiveShift) {
+      const lateCheck = checkLateCheckIn(effectiveShift, timeInDate, 15);
+      if (lateCheck.isLate) minsLate = lateCheck.minutesLate;
+    }
+  }
+  if (!minsLate && (st === 'late' || r.isLate === true || r.late === true || aFlag.includes('late'))) {
+    minsLate = 15;
+  }
+
+  const minsEarly = typeof r.minutesEarly === 'number' && r.minutesEarly >= 15 ? r.minutesEarly : 0;
+  const totalPenaltyMins = minsLate + minsEarly;
+  const rawScore = 1 - (totalPenaltyMins / shiftDurationMins);
+
+  return Math.max(0.5, Math.min(0.95, rawScore));
+}
+
+export function calculateMonthlyAttendanceMetrics(records = [], employeeOrAssignmentShift = null) {
+  if (!Array.isArray(records) || records.length === 0) {
+    return {
+      daysWorked: 0,
+      missedCount: 0,
+      flaggedCount: 0,
+      onTimeCount: 0,
+      totalShifts: 0,
+      monthlyRate: '100.0',
+      monthRateRounded: 100,
+    };
+  }
+
+  // Deduplicate records across 'Attendance' and 'attendance' collections
+  const uniqueMap = new Map();
+  records.forEach((r, idx) => {
+    if (!r) return;
+    const rawIn = r.timeIn || r.checkIn || r.check_in || r.date || r.createdAt;
+    const dt = parseAttendanceTimestamp(rawIn);
+    const dayKey = dt ? `${dt.getFullYear()}-${dt.getMonth()}-${dt.getDate()}_${Math.floor(dt.getTime() / 60000)}` : null;
+    const key = r.id || dayKey || `rec_${idx}`;
+    if (!uniqueMap.has(key)) {
+      uniqueMap.set(key, r);
+    }
+  });
+
+  const uniqueRecords = Array.from(uniqueMap.values());
+  const isMissedRec = (r) => {
+    const st = (r.status || '').toString().trim().toLowerCase();
+    return st === 'missed shift' || st === 'absent' || st === 'missed';
+  };
+
+  const workedRecords = uniqueRecords.filter(r => !isMissedRec(r));
+  const missedRecords = uniqueRecords.filter(r => isMissedRec(r));
+
+  const daysWorked = workedRecords.length;
+  const missedCount = missedRecords.length;
+  const flaggedCount = uniqueRecords.filter(r => isAttendanceRecordFlagged(r, employeeOrAssignmentShift)).length;
+  const lateWorkedCount = workedRecords.filter(r => isAttendanceRecordFlagged(r, employeeOrAssignmentShift)).length;
+  const onTimeCount = Math.max(0, daysWorked - lateWorkedCount);
+  const totalShifts = daysWorked + missedCount;
+
+  if (totalShifts === 0) {
+    return {
+      daysWorked: 0,
+      missedCount: 0,
+      flaggedCount: 0,
+      onTimeCount: 0,
+      totalShifts: 0,
+      monthlyRate: '100.0',
+      monthRateRounded: 100,
+    };
+  }
+
+  const totalScore = uniqueRecords.reduce(
+    (sum, r) => sum + calculateRecordPunctualityScore(r, employeeOrAssignmentShift),
+    0
+  );
+  const pct = Math.max(0, Math.min(100, (totalScore / totalShifts) * 100));
+
+  return {
+    daysWorked,
+    missedCount,
+    flaggedCount,
+    onTimeCount,
+    totalShifts,
+    monthlyRate: pct.toFixed(1),
+    monthRateRounded: Math.round(pct),
+  };
 }
 
 /**
@@ -745,8 +941,8 @@ export async function getChatbotAssignmentContext(emp, userEmail, propUser) {
 
       const raw = att.date || att.timeIn || att.checkIn || att.createdAt;
       if (!raw) return false;
-      const d = raw?.toDate ? raw.toDate() : new Date(raw);
-      return !isNaN(d.getTime()) && d >= today;
+      const d = parseAttendanceTimestamp(raw);
+      return Boolean(d && !isNaN(d.getTime()) && d >= today);
     });
   } catch (e) {}
 
@@ -808,21 +1004,27 @@ export async function getChatbotAssignmentContext(emp, userEmail, propUser) {
 
   if (todayRecord?.timeIn || todayRecord?.checkIn) {
     const rawIn = todayRecord.timeIn || todayRecord.checkIn;
-    const inD = rawIn?.toDate ? rawIn.toDate() : new Date(rawIn);
-    if (!isNaN(inD.getTime())) {
+    const inD = parseAttendanceTimestamp(rawIn);
+    if (inD && !isNaN(inD.getTime())) {
       checkInTimeStr = inD.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit', hour12: true });
     }
   }
 
   if (todayRecord?.timeOut || todayRecord?.checkOut) {
     const rawOut = todayRecord.timeOut || todayRecord.checkOut;
-    const outD = rawOut?.toDate ? rawOut.toDate() : new Date(rawOut);
-    if (!isNaN(outD.getTime())) {
+    const outD = parseAttendanceTimestamp(rawOut);
+    if (outD && !isNaN(outD.getTime())) {
       checkOutTimeStr = outD.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit', hour12: true });
     }
   }
 
-  const isCheckedIn = Boolean(checkInTimeStr && !checkOutTimeStr);
+  const isCheckedOut = Boolean(
+    checkOutTimeStr ||
+    todayRecord?.timeOut ||
+    todayRecord?.checkOut ||
+    String(todayRecord?.status || '').toLowerCase() === 'completed'
+  );
+  const isCheckedIn = Boolean(checkInTimeStr && !isCheckedOut);
   const hasAssignment = Boolean(
     siteName &&
     typeof siteName === 'string' &&

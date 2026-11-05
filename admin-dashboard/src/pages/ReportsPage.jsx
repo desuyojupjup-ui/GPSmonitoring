@@ -47,6 +47,14 @@ function formatReportTime(val) {
   return typeof val === 'string' && val !== '—' ? val : '—';
 }
 
+function formatMinutesToHoursMins(val) {
+  const mins = Math.round(Number(val) || 0);
+  if (mins <= 0) return '';
+  const h = Math.floor(mins / 60);
+  const m = mins % 60;
+  return h > 0 ? `${h}h ${m}m` : `${m}m`;
+}
+
 export default function ReportsPage() {
   const [employees, setEmployees] = useState([]);
   const [attendance, setAttendance] = useState([]);
@@ -386,7 +394,7 @@ export default function ReportsPage() {
                             fontWeight: 700,
                           }}>
                             <Clock size={11} color="#B45309" />
-                            Late Check-In{row.minutesLate ? ` (+${row.minutesLate}m)` : ''}
+                            Late Check-In{row.minutesLate ? ` (+${formatMinutesToHoursMins(row.minutesLate)})` : ''}
                           </div>
                         )}
                         {(row.earlyCheckOut || row.earlyDeparture || row.anomalyFlag === 'Early Check-Out' || (row.minutesEarly && Number(row.minutesEarly) >= 15)) && (
@@ -404,7 +412,7 @@ export default function ReportsPage() {
                             fontWeight: 700,
                           }}>
                             <AlertCircle size={11} color="#DC2626" />
-                            Early Check-Out{row.minutesEarly ? ` (-${row.minutesEarly}m)` : ''}
+                            Early Check-Out{row.minutesEarly ? ` (-${formatMinutesToHoursMins(row.minutesEarly)})` : ''}
                           </div>
                         )}
                       </td>

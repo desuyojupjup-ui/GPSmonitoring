@@ -10,7 +10,7 @@ import {
   auth, db, collection, onSnapshot, addDoc, updateDoc,
   doc, serverTimestamp, getDocs, query, orderBy, getCleanEmployeeEmail
 } from '../firebase';
-import { isMobileFieldWithoutSite, checkEarlyCheckout, checkLateCheckIn, isAttendanceRecordFlagged, hasActiveShiftSchedule, hasActiveSiteAssignment } from '../utils/assignmentUtils';
+import { isMobileFieldWithoutSite, checkEarlyCheckout, checkLateCheckIn, isAttendanceRecordFlagged, calculateMonthlyAttendanceMetrics, hasActiveShiftSchedule, hasActiveSiteAssignment } from '../utils/assignmentUtils';
 import { verifyGeofence } from '../services/geofence';
 import { writeSecurityEvent } from '../services/securityLogger';
 import ActionConfirmModal from '../components/ActionConfirmModal';
@@ -113,10 +113,22 @@ function StatBox({ icon, label, value, color }) {
   );
 }
 
+function formatMinutesToHoursMins(val) {
+  const mins = Math.round(Number(val) || 0);
+  if (mins <= 0) return '';
+  const h = Math.floor(mins / 60);
+  const m = mins % 60;
+  return h > 0 ? `${h}h ${m}m` : `${m}m`;
+}
+
 function RecordCard({ record, onCheckOut }) {
   const isMissed = record.status === 'Missed Shift' || record.status === 'Absent' || record.status === 'Missed';
   const ss = statusStyle(record.status);
-  const canCheckOut = record.status === 'On Site' && !record.timeOut;
+  const canCheckOut = (record.status === 'On Site' || record.status === 'Late') && !record.timeOut;
+  const lateDurationStr = record.minutesLate > 0 ? formatMinutesToHoursMins(record.minutesLate) : '';
+  const statusLabel = (record.status === 'Late' && lateDurationStr)
+    ? `Late (+${lateDurationStr})`
+    : (record.status || 'Present');
   return (
     <View style={styles.recordCard}>
       <View style={styles.recordTop}>
@@ -128,7 +140,7 @@ function RecordCard({ record, onCheckOut }) {
         </View>
         <View style={[styles.statusBadge, { backgroundColor: ss.bg }]}>
           <View style={[styles.statusDot, { backgroundColor: ss.dot }]} />
-          <Text style={[styles.statusText, { color: ss.text }]}>{record.status || 'Present'}</Text>
+          <Text style={[styles.statusText, { color: ss.text }]}>{statusLabel}</Text>
         </View>
       </View>
 
@@ -262,17 +274,16 @@ export default function AttendanceScreen({ navigation, route, user: propUser }) 
     };
 
     const handle = (collKey) => (snap) => {
-      if (!snap || snap.empty) {
-        // Remove any records that came from this collection
-        Object.keys(records).forEach(k => { if (records[k]._col === collKey) delete records[k]; });
-      } else {
+      Object.keys(records).forEach(k => { if (records[k]._col === collKey) delete records[k]; });
+      if (snap && !snap.empty) {
         snap.docs.forEach(d => {
-          const raw = { id: d.id, _col: collKey, ...d.data() };
+          const data = d.data();
+          const canonicalId = data.id || d.id;
+          const raw = { ...data, id: canonicalId, _docId: d.id, _col: collKey };
           if (matchesMe(raw)) {
-            records[d.id] = raw;
+            records[canonicalId] = raw;
           } else {
-            // In case a previously matched record was removed
-            delete records[d.id];
+            delete records[canonicalId];
           }
         });
       }
@@ -396,7 +407,7 @@ export default function AttendanceScreen({ navigation, route, user: propUser }) 
       // Check if coordinates fall inside any recognized worksite perimeter
       let matchedSite = null;
       if (sitesData.length > 0) {
-        const geo = verifyGeofence(loc.coords.latitude, loc.coords.longitude, sitesData);
+        const geo = verifyGeofence(loc.coords.latitude, loc.coords.longitude, sitesData, loc.coords.accuracy);
         if (geo.ok && geo.matchedSite) {
           matchedSite = geo.matchedSite;
         }
@@ -408,6 +419,18 @@ export default function AttendanceScreen({ navigation, route, user: propUser }) 
       // 3. Fallback to assigned site or Active Field Location
       const resolvedSiteName = matchedSite?.name || activeLocationAddress || emp.assignedSite || emp.site || 'Active Field Location';
       const activeAddressToSave = activeLocationAddress || matchedSite?.address || resolvedSiteName;
+
+      const assignedSiteKey = String(emp.assignedSite || emp.site || '').trim().toLowerCase();
+      const empAssignedSiteObj = (!matchedSite && assignedSiteKey && sitesData.length > 0)
+        ? sitesData.find(s => {
+            const sName = String(s.name || s.siteName || s.id || '').trim().toLowerCase();
+            return sName === assignedSiteKey || sName.includes(assignedSiteKey) || assignedSiteKey.includes(sName);
+          })
+        : null;
+      const siteForLogging = matchedSite || empAssignedSiteObj || {
+        name: emp.assignedSite || emp.site || resolvedSiteName,
+        radius: emp.geofenceRadius || 100,
+      };
 
       const hasEmpShift = emp.shift && emp.shift !== 'Unassigned' && emp.shift !== 'Flexible' && emp.shift !== 'No Shift Scheduled';
       const shiftToUse = hasEmpShift ? emp.shift : (emp.scheduledShift || 'Flexible');
@@ -466,20 +489,20 @@ export default function AttendanceScreen({ navigation, route, user: propUser }) 
       } catch (_) {}
 
       try {
-        // 1. Immediately capture and save current location in the Location Log
+        // 1. Start periodic 5-minute location recording while checked in (initializes activeSession)
+        locationLogService.startPeriodicLogging({
+          employee: emp,
+          site: siteForLogging,
+          attendanceId: attId,
+        });
+
+        // 2. Immediately capture and save current location in the Location Log
         await locationLogService.captureAndSaveCurrentLocation({
           employee: emp,
-          site: { name: attData.siteName },
+          site: siteForLogging,
           attendanceId: attId,
           trigger: 'check_in',
           coords: { latitude: loc.coords.latitude, longitude: loc.coords.longitude },
-        });
-
-        // 2. Start periodic 5-minute location recording while checked in
-        locationLogService.startPeriodicLogging({
-          employee: emp,
-          site: { name: attData.siteName },
-          attendanceId: attId,
         });
       } catch (_) {}
 
@@ -655,12 +678,12 @@ export default function AttendanceScreen({ navigation, route, user: propUser }) 
     return dt.getMonth() === now.getMonth() && dt.getFullYear() === now.getFullYear();
   });
 
-  const daysWorked = thisMonthRecs.filter(r => r.status !== 'Missed Shift' && r.status !== 'Absent' && r.status !== 'Missed').length;
-  const missedCount = thisMonthRecs.filter(r => r.status === 'Missed Shift' || r.status === 'Absent' || r.status === 'Missed').length;
-  const lateCount = thisMonthRecs.filter(r => isAttendanceRecordFlagged(r, employee?.shift)).length;
-  const onTimeCount = Math.max(0, daysWorked - lateCount);
-  const totalShifts = daysWorked + missedCount;
-  const monthRate = totalShifts > 0 ? Math.round((onTimeCount / totalShifts) * 100) : 100;
+  const {
+    daysWorked,
+    flaggedCount: lateCount,
+    onTimeCount,
+    monthRateRounded: monthRate,
+  } = calculateMonthlyAttendanceMetrics(thisMonthRecs, employee?.shift || employee?.scheduledShift);
 
   // Filter records for list
   const filteredRecords = allRecords.filter(r => {

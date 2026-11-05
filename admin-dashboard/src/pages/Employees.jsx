@@ -599,56 +599,33 @@ export default function Employees() {
         showToast('Employee Created', 'New employee added to database.', 'success');
       }
 
-      // Sync fixed employee shift & site to Assignments / assignments if site is assigned
-      if (isFixed && form.assignedSite) {
+      // Fixed Site Employees have their assigned site set directly on the Employees page;
+      // ensure no duplicate records exist in Assignments / assignments for Fixed Site Employees.
+      if (isFixed) {
         try {
-          const asgPayload = {
-            empName: dataToSave.name,
-            empEmail: dataToSave.email,
-            empId: dataToSave.idNum || '',
-            employeeName: dataToSave.name,
-            employeeEmail: dataToSave.email,
-            employeeId: dataToSave.idNum || '',
-            employeeType: 'On-Site',
-            workType: 'Fixed Site Employee',
-            site: form.assignedSite,
-            siteName: form.assignedSite,
-            assignedSites: [form.assignedSite],
-            shiftStart: sStartFormatted,
-            shiftEnd: sEndFormatted,
-            shift: computedShift,
-            shiftTime: computedShift,
-            workDays: effectiveWorkDays,
-            schedule: `${computedShift} (${effectiveWorkDays.join(', ')})`,
-            priority: 'Medium',
-            status: 'Active',
-            assignedDate: new Date().toISOString().split('T')[0],
-            assignDate: new Date().toISOString().split('T')[0],
-          };
-
           const collectionsToCheck = ['Assignments', 'assignments'];
+          const cleanNameLower = (dataToSave.name || '').toLowerCase();
           for (const colName of collectionsToCheck) {
             try {
               const snap = await getDocs(collection(db, colName));
-              const matchingDoc = snap.docs.find(d => {
+              for (const d of snap.docs) {
                 const data = d.data();
                 const dEmail = (data.empEmail || data.employeeEmail || '').toLowerCase();
-                const dId = data.empId || data.employeeId || '';
-                return (cleanEmail && dEmail === cleanEmail) || (cleanIdNum && dId === cleanIdNum);
-              });
-              if (matchingDoc) {
-                await updateDoc(doc(db, colName, matchingDoc.id), asgPayload).catch(() => {});
-              } else if (colName === 'Assignments') {
-                const asgRef = await addDoc(collection(db, 'Assignments'), asgPayload);
-                await addDoc(collection(db, 'assignments'), { ...asgPayload, id: asgRef.id, assignmentId: asgRef.id }).catch(() => {});
-                break;
+                const dId = (data.empId || data.employeeId || '').toString().toLowerCase();
+                const dName = (data.empName || data.employeeName || '').toLowerCase();
+                const isMatch = (cleanEmail && dEmail === cleanEmail) ||
+                                (cleanIdNum && dId === cleanIdNum.toLowerCase()) ||
+                                (cleanNameLower && dName === cleanNameLower);
+                if (isMatch) {
+                  await deleteDoc(doc(db, colName, d.id)).catch(() => {});
+                }
               }
             } catch (err) {
-              console.warn(`Error syncing to ${colName}:`, err);
+              console.warn(`Error cleaning fixed employee from ${colName}:`, err);
             }
           }
         } catch (asgErr) {
-          console.warn('Assignments sync warning:', asgErr);
+          console.warn('Assignments cleanup warning:', asgErr);
         }
       }
 

@@ -3,7 +3,7 @@ import { View, Text, StyleSheet, TouchableOpacity, ScrollView, ActivityIndicator
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { Ionicons } from '@expo/vector-icons';
 import { auth, db, collection, query, where, onSnapshot, getDocs, ensureAuthenticatedSession, getCleanEmployeeEmail } from '../firebase';
-import { isAssignmentDatePassed, resolveShift, isAssignmentForEmployee, deduplicateAssignments } from '../utils/assignmentUtils';
+import { isAssignmentDatePassed, resolveShift, getShiftScheduleDetails, isAssignmentForEmployee, deduplicateAssignments } from '../utils/assignmentUtils';
 
 
 
@@ -206,6 +206,7 @@ export default function TasksScreen({ navigation, route, user: propUser }) {
         seenSiteKeys.add(key);
 
         const composedShift = resolveShift(asgDoc, emp) || emp?.shift || '08:00 AM - 05:00 PM';
+        const schedDetails = getShiftScheduleDetails(asgDoc, emp);
         const asgDate = asgDoc?.assignDate || asgDoc?.assignedAt || new Date().toISOString().split('T')[0];
         const priority = asgDoc?.priority || 'Medium';
         const status = asgDoc?.status || 'Active';
@@ -217,6 +218,13 @@ export default function TasksScreen({ navigation, route, user: propUser }) {
           site: clean,
           siteName: clean,
           shift: composedShift,
+          shiftSchedule: schedDetails.shiftSchedule,
+          workingHours: schedDetails.workingHours,
+          shiftTimeAndHours: schedDetails.shiftTimeAndHours,
+          shiftStartTime: schedDetails.shiftStartTime,
+          shiftEndTime: schedDetails.shiftEndTime,
+          workDays: schedDetails.workDays,
+          scheduledWorkingDays: schedDetails.scheduledWorkingDays,
           status: status,
           priority: priority,
           assignDate: asgDate,
@@ -227,13 +235,36 @@ export default function TasksScreen({ navigation, route, user: propUser }) {
         });
       };
 
-      for (const asg of data) {
-        if (Array.isArray(asg.assignedSites) && asg.assignedSites.length > 0) {
-          asg.assignedSites.forEach(s => addCard(s, asg));
-        } else if (asg.site && asg.site.includes(',')) {
-          asg.site.split(',').forEach(s => addCard(s, asg));
-        } else if (asg.site || asg.siteName) {
-          addCard(asg.site || asg.siteName, asg);
+      const isFixedEmp = Boolean(
+        emp && (
+          emp.workType === 'Fixed Site Employee' ||
+          emp.type === 'Fixed Site' ||
+          String(emp.workType || emp.type || '').toLowerCase().includes('fixed')
+        )
+      );
+
+      if (isFixedEmp && emp) {
+        if (Array.isArray(emp.assignedSites) && emp.assignedSites.length > 0) {
+          emp.assignedSites.forEach(s => addCard(s, null, true));
+        } else if (emp.assignedSite && emp.assignedSite.includes(',')) {
+          emp.assignedSite.split(',').forEach(s => addCard(s, null, true));
+        } else {
+          const profileSite = (emp.assignedSite || emp.site || emp.assignedSiteName || '').trim();
+          if (profileSite && profileSite.toLowerCase() !== 'unassigned' && profileSite.toLowerCase() !== 'none') {
+            addCard(profileSite, null, true);
+          }
+        }
+      }
+
+      if (exploded.length === 0) {
+        for (const asg of data) {
+          if (Array.isArray(asg.assignedSites) && asg.assignedSites.length > 0) {
+            asg.assignedSites.forEach(s => addCard(s, asg));
+          } else if (asg.site && asg.site.includes(',')) {
+            asg.site.split(',').forEach(s => addCard(s, asg));
+          } else if (asg.site || asg.siteName) {
+            addCard(asg.site || asg.siteName, asg);
+          }
         }
       }
 
@@ -254,7 +285,15 @@ export default function TasksScreen({ navigation, route, user: propUser }) {
         }
       }
 
-      const asgKey = JSON.stringify(exploded.map(d => ({ id: d.id, site: d.site, shift: d.shift, status: d.status })));
+      const asgKey = JSON.stringify(exploded.map(d => ({
+        id: d.id,
+        site: d.site,
+        shift: d.shift,
+        shiftStartTime: d.shiftStartTime,
+        shiftEndTime: d.shiftEndTime,
+        scheduledWorkingDays: d.scheduledWorkingDays,
+        status: d.status
+      })));
       if (asgKey !== lastAsgKeyRef.current) {
         lastAsgKeyRef.current = asgKey;
 
@@ -315,6 +354,9 @@ export default function TasksScreen({ navigation, route, user: propUser }) {
     );
   }
 
+  const empWorkType = (employee?.workType || employee?.employeeType || employee?.type || '').toString().toLowerCase();
+  const isFixed = !empWorkType.includes('mobile') && !empWorkType.includes('field');
+
   return (
     <View style={styles.container}>
       {/* Fixed Navigation Header */}
@@ -338,6 +380,7 @@ export default function TasksScreen({ navigation, route, user: propUser }) {
               || (typeof item.siteAddress === 'string' && item.siteAddress) 
               || (typeof item.address === 'string' && item.address) 
               || 'GPS Live Monitoring Active';
+            const sched = getShiftScheduleDetails(item, employee);
 
             return (
               <View key={item.id || `asg_${index}`} style={styles.assignmentCard}>
@@ -366,24 +409,91 @@ export default function TasksScreen({ navigation, route, user: propUser }) {
 
                   <View style={styles.infoRow}>
                     <Ionicons name="location-outline" size={16} color="#4F46E5" />
-                    <Text style={styles.infoText} numberOfLines={2}>Address: <Text style={styles.boldText}>{addressText}</Text></Text>
+                    <Text style={[styles.infoText, { flex: 1 }]} numberOfLines={2}>Address: <Text style={styles.boldText}>{addressText}</Text></Text>
                   </View>
 
-                  <View style={styles.infoRow}>
-                    <Ionicons name="time-outline" size={16} color="#4F46E5" />
-                    <Text style={styles.infoText}>Shift: <Text style={styles.boldText}>{resolveShift(item, employee)}</Text></Text>
-                  </View>
+                  {isFixed ? (
+                    <>
+                      <View style={styles.infoRow}>
+                        <Ionicons name="time-outline" size={16} color="#4F46E5" />
+                        <View style={{ flex: 1, flexDirection: 'row', alignItems: 'center', flexWrap: 'wrap', gap: 6 }}>
+                          <Text style={styles.infoText}>
+                            Shift Time Schedule & Working Hours:{' '}
+                            <Text style={styles.boldText}>{sched.shiftSchedule}</Text>
+                          </Text>
+                          {sched.workingHours ? (
+                            <View style={{ backgroundColor: '#EFF6FF', borderColor: '#BFDBFE', borderWidth: 1, paddingHorizontal: 7, paddingVertical: 2, borderRadius: 6 }}>
+                              <Text style={{ fontSize: 10.5, fontWeight: '700', color: '#1E5ADB' }}>
+                                ⏱️ {sched.workingHours} / shift
+                              </Text>
+                            </View>
+                          ) : null}
+                        </View>
+                      </View>
 
-                  <View style={styles.infoRow}>
-                    <Ionicons name="calendar-outline" size={16} color="#4F46E5" />
-                    <Text style={styles.infoText}>Date: <Text style={styles.boldText}>{item.assignDate || item.assignedAt || 'Daily Scheduled'}</Text></Text>
-                  </View>
+                      <View style={styles.infoRow}>
+                        <Ionicons name="alarm-outline" size={16} color="#10B981" />
+                        <Text style={[styles.infoText, { flex: 1 }]}>
+                          Shift Start Time: <Text style={styles.boldText}>{sched.shiftStartTime}</Text>
+                          {sched.shiftEndTime ? (
+                            <Text style={styles.infoText}>
+                              {'  •  '}End: <Text style={styles.boldText}>{sched.shiftEndTime}</Text>
+                            </Text>
+                          ) : null}
+                        </Text>
+                      </View>
 
-                  {item.priority && (
-                    <View style={styles.infoRow}>
-                      <Ionicons name="alert-circle-outline" size={16} color={item.priority === 'High' ? '#EF4444' : '#F59E0B'} />
-                      <Text style={styles.infoText}>Priority: <Text style={[styles.boldText, { color: item.priority === 'High' ? '#EF4444' : '#F59E0B' }]}>{item.priority}</Text></Text>
-                    </View>
+                      <View style={[styles.infoRow, { alignItems: 'flex-start' }]}>
+                        <Ionicons name="calendar-outline" size={16} color="#4F46E5" style={{ marginTop: 2 }} />
+                        <View style={{ flex: 1 }}>
+                          <Text style={styles.infoText}>
+                            Scheduled Working Days: <Text style={styles.boldText}>{sched.scheduledWorkingDays}</Text>
+                          </Text>
+                          <View style={{ flexDirection: 'row', flexWrap: 'wrap', gap: 4, marginTop: 6 }}>
+                            {['Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat', 'Sun'].map(day => {
+                              const activeDays = Array.isArray(sched.workDays) ? sched.workDays : ['Mon', 'Tue', 'Wed', 'Thu', 'Fri'];
+                              const isActiveDay = activeDays.some(d => String(d).toLowerCase().startsWith(day.toLowerCase()));
+                              return (
+                                <View
+                                  key={day}
+                                  style={{
+                                    paddingHorizontal: 7,
+                                    paddingVertical: 3,
+                                    borderRadius: 6,
+                                    backgroundColor: isActiveDay ? '#1E5ADB' : '#FFFFFF',
+                                    borderWidth: 1,
+                                    borderColor: isActiveDay ? '#1E5ADB' : '#E2E8F0',
+                                  }}
+                                >
+                                  <Text style={{ fontSize: 10, fontWeight: '700', color: isActiveDay ? '#FFFFFF' : '#64748B' }}>
+                                    {day}
+                                  </Text>
+                                </View>
+                              );
+                            })}
+                          </View>
+                        </View>
+                      </View>
+                    </>
+                  ) : (
+                    <>
+                      <View style={styles.infoRow}>
+                        <Ionicons name="time-outline" size={16} color="#4F46E5" />
+                        <Text style={styles.infoText}>Shift: <Text style={styles.boldText}>{resolveShift(item, employee)}</Text></Text>
+                      </View>
+
+                      <View style={styles.infoRow}>
+                        <Ionicons name="calendar-outline" size={16} color="#4F46E5" />
+                        <Text style={styles.infoText}>Date: <Text style={styles.boldText}>{item.assignDate || item.assignedAt || 'Daily Scheduled'}</Text></Text>
+                      </View>
+
+                      {item.priority && (
+                        <View style={styles.infoRow}>
+                          <Ionicons name="alert-circle-outline" size={16} color={item.priority === 'High' ? '#EF4444' : '#F59E0B'} />
+                          <Text style={styles.infoText}>Priority: <Text style={[styles.boldText, { color: item.priority === 'High' ? '#EF4444' : '#F59E0B' }]}>{item.priority}</Text></Text>
+                        </View>
+                      )}
+                    </>
                   )}
                 </View>
 

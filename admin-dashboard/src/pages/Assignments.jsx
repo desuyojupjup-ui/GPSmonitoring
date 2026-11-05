@@ -442,11 +442,41 @@ export function resolveAssignmentStatus(asg, attendanceList = [], now = new Date
 
 const EMPTY = { empName: '', empId: '', site: '', assignedSites: [], assignDate: '', shiftStart: '08:00', shiftEnd: '17:00', shift: '08:00 AM - 05:00 PM', priority: 'Medium', status: 'Active' };
 
+export function isFixedEmployeeAssignment(asg, employeesList = []) {
+  if (!asg) return false;
+  const asgWorkType = (asg.workType || '').toString().trim().toLowerCase();
+  if (asgWorkType.includes('fixed')) return true;
+
+  if (Array.isArray(employeesList) && employeesList.length > 0) {
+    const asgId = (asg.empId || asg.employeeId || asg.employeeUid || '').toString().trim().toLowerCase();
+    const asgEmail = (asg.empEmail || asg.employeeEmail || asg.email || '').toString().trim().toLowerCase();
+    const asgName = (asg.empName || asg.employeeName || '').toString().trim().toLowerCase();
+
+    const matchedEmp = employeesList.find(e => {
+      const eId = (e.idNum || e.id || e.uid || '').toString().trim().toLowerCase();
+      const eEmail = (e.email || e.empEmail || '').toString().trim().toLowerCase();
+      const eName = (e.name || '').toString().trim().toLowerCase();
+
+      if (asgId && eId && asgId === eId) return true;
+      if (asgEmail && eEmail && asgEmail === eEmail) return true;
+      if (asgName && eName && asgName === eName) return true;
+      return false;
+    });
+
+    if (matchedEmp) {
+      const empWt = (matchedEmp.workType || 'Fixed Site Employee').toString().trim().toLowerCase();
+      return !empWt.includes('mobile') && !empWt.includes('field');
+    }
+  }
+
+  return false;
+}
+
 const selStyle = { width: '100%', padding: '9px 12px', borderRadius: 8, border: '1px solid #E5E7EB', fontSize: 13, outline: 'none', background: 'white', fontFamily: 'Inter, sans-serif' };
 const inpStyle = { width: '100%', padding: '9px 12px', borderRadius: 8, border: '1px solid #E5E7EB', fontSize: 13, outline: 'none', fontFamily: 'Inter, sans-serif' };
 
 export default function Assignments() {
-  const [data, setData] = useState([]);
+  const [rawData, setRawData] = useState([]);
   const [employees, setEmployees] = useState([]);
   const [sites, setSites] = useState([]);
   const [attendance, setAttendance] = useState([]);
@@ -457,6 +487,14 @@ export default function Assignments() {
   const [editId, setEditId] = useState(null);
   const [isSaving, setIsSaving] = useState(false);
   const { toasts, show } = useToast();
+
+  // Only show Field Employee (Mobile Field Employee) assignments on the Assignments page;
+  // Fixed Site Employees have their assigned site configured directly on the Employees page.
+  const data = rawData.filter(d => !isFixedEmployeeAssignment(d, employees));
+  const fieldEmployees = employees.filter(e => {
+    const wt = (e.workType || '').toString().trim().toLowerCase();
+    return wt.includes('mobile') || wt.includes('field');
+  });
 
   // Pagination & Bulk Selection state
   const [page, setPage] = useState(1);
@@ -470,7 +508,7 @@ export default function Assignments() {
       const updateMerged = () => {
         const merged = [...docs1, ...docs2];
         const uniqueData = Array.from(new Map(merged.map(item => [item.id, item])).values());
-        setData(uniqueData);
+        setRawData(uniqueData);
         setLoading(false);
       };
 
@@ -532,6 +570,21 @@ export default function Assignments() {
   const syncedAsgStatusRef = useRef(new Map());
   const syncedAlertsRef = useRef(new Set());
   const resolvedAlertsRef = useRef(new Set());
+  const cleanedFixedAsgRef = useRef(new Set());
+
+  // Automatically remove any stale Fixed Site Employee records from Assignments / assignments collections
+  // (without modifying the employee's assigned site on the Employees page)
+  useEffect(() => {
+    if (!rawData.length) return;
+    rawData.forEach(item => {
+      if (!item || !item.id || cleanedFixedAsgRef.current.has(item.id)) return;
+      if (isFixedEmployeeAssignment(item, employees)) {
+        cleanedFixedAsgRef.current.add(item.id);
+        deleteDoc(doc(db, 'Assignments', item.id)).catch(() => {});
+        deleteDoc(doc(db, 'assignments', item.id)).catch(() => {});
+      }
+    });
+  }, [rawData, employees]);
 
   // Background auto-sync & AI Anomaly Detection:
   // Evaluates assignments whose shift schedule has passed or is ongoing.
@@ -640,6 +693,7 @@ export default function Assignments() {
                 if (empSnap && !empSnap.empty) {
                   for (const empDoc of empSnap.docs) {
                     const eData = empDoc.data();
+                    if ((eData.workType || 'Fixed Site Employee') === 'Fixed Site Employee') continue;
                     const eMail = (eData.email || '').toLowerCase();
                     const eName = (eData.name || '').toLowerCase();
                     const eId = (eData.idNum || eData.id || empDoc.id || '').toString().toLowerCase();
@@ -905,6 +959,7 @@ export default function Assignments() {
             const empNameToClear = (item.employeeName || item.empName || '').toLowerCase();
             for (const empDoc of empSnap.docs) {
               const ed = empDoc.data();
+              if ((ed.workType || 'Fixed Site Employee') === 'Fixed Site Employee') continue;
               const eId = (ed.idNum || ed.id || ed.uid || '').toString().toLowerCase();
               const eName = (ed.name || '').toLowerCase();
               const isMatch = (empIdToClear && eId && (eId === empIdToClear || eId.includes(empIdToClear))) ||
@@ -982,6 +1037,7 @@ export default function Assignments() {
           if (empSnap && !empSnap.empty) {
             for (const empDoc of empSnap.docs) {
               const ed = empDoc.data();
+              if ((ed.workType || 'Fixed Site Employee') === 'Fixed Site Employee') continue;
               const eId = (ed.idNum || ed.id || ed.uid || '').toString().toLowerCase();
               const eName = (ed.name || '').toLowerCase();
               const isMatch = (empIdToClear && eId && (eId === empIdToClear || eId.includes(empIdToClear))) ||
@@ -1009,23 +1065,20 @@ export default function Assignments() {
 
   const handleEmpSelect = (e) => {
     const empName = e.target.value;
-    const emp = employees.find(em => em.name === empName);
-    const isMobile = emp?.workType === 'Mobile Field Employee';
+    const emp = fieldEmployees.find(em => em.name === empName) || employees.find(em => em.name === empName);
     const defaultSites = Array.isArray(emp?.assignedSites) ? emp.assignedSites : (emp?.assignedSite ? emp.assignedSite.split(',').map(s => s.trim()).filter(Boolean) : []);
 
     setForm(prev => ({
       ...prev,
       empName: empName,
       empId: emp?.idNum || emp?.id || '',
-      assignedSites: isMobile ? (defaultSites.length ? defaultSites : prev.assignedSites || []) : [],
-      site: isMobile 
-        ? ((defaultSites.length ? defaultSites : prev.assignedSites || []).join(', '))
-        : (emp?.assignedSite || prev.site || '')
+      assignedSites: defaultSites.length ? defaultSites : (prev.assignedSites || []),
+      site: (defaultSites.length ? defaultSites : (prev.assignedSites || [])).join(', ')
     }));
   };
 
   const handleSave = async () => {
-    if (!form.empName) return showToast('error', 'Missing Fields', 'Please select an employee.');
+    if (!form.empName) return showToast('error', 'Missing Fields', 'Please select a field employee.');
 
     const cleanFormName = (form.empName || '').trim().toLowerCase();
     const empToUpdate = employees.find(em => {
@@ -1045,7 +1098,9 @@ export default function Assignments() {
       return false;
     });
 
-    const isMobile = empToUpdate?.workType === 'Mobile Field Employee';
+    if (empToUpdate && (empToUpdate.workType || 'Fixed Site Employee') === 'Fixed Site Employee') {
+      return showToast('error', 'Field Employees Only', 'Fixed Site Employees already have their assigned site set on the Employees page.');
+    }
 
     let siteId = 'site-main';
     let siteName = form.site || 'Assigned Worksite';
@@ -1053,42 +1108,22 @@ export default function Assignments() {
     let latitude = 10.2818;
     let longitude = 123.8808;
     let geofenceRadius = 20;
-    let assignedSitesList = [];
+    let assignedSitesList = (form.assignedSites && form.assignedSites.length > 0)
+      ? form.assignedSites
+      : (form.site ? form.site.split(',').map(s => s.trim()).filter(Boolean) : []);
 
-    if (isMobile) {
-      assignedSitesList = (form.assignedSites && form.assignedSites.length > 0)
-        ? form.assignedSites
-        : (form.site ? form.site.split(',').map(s => s.trim()).filter(Boolean) : []);
+    if (assignedSitesList.length === 0) {
+      return showToast('error', 'Missing Assigned Sites', 'Please select at least one site for this mobile field employee.');
+    }
 
-      if (assignedSitesList.length === 0) {
-        return showToast('error', 'Missing Assigned Sites', 'Please select at least one site for this mobile field employee.');
-      }
-
-      siteName = assignedSitesList.join(', ');
-      const matchedSites = sites.filter(s => assignedSitesList.includes(s.name || s.id));
-      if (matchedSites.length > 0) {
-        siteId = matchedSites.map(s => s.id).join(', ');
-        siteAddress = matchedSites.map(s => s.address || s.location || s.name).join(' | ');
-        latitude = Number(matchedSites[0].latitude || matchedSites[0].lat || 10.2818);
-        longitude = Number(matchedSites[0].longitude || matchedSites[0].lng || 123.8808);
-        geofenceRadius = Number(matchedSites[0].geofenceRadius ?? matchedSites[0].radius ?? 20);
-      }
-    } else {
-      if (!form.site) return showToast('error', 'Missing Fields', 'Please select an assigned site.');
-
-      const formSiteClean = (form.site || '').trim().toLowerCase();
-      const selectedSiteObj = sites.find(s => {
-        const sName = (s.name || '').trim().toLowerCase();
-        const sId = (s.id || '').trim().toLowerCase();
-        return sName === formSiteClean || sId === formSiteClean || (sName && formSiteClean && (sName.includes(formSiteClean) || formSiteClean.includes(sName)));
-      });
-      siteId = selectedSiteObj?.id || form.siteId || 'site-main';
-      siteName = selectedSiteObj?.name || form.site || 'Assigned Worksite';
-      siteAddress = selectedSiteObj?.address || selectedSiteObj?.location || 'Registered Worksite Address';
-      latitude = Number(selectedSiteObj?.latitude || selectedSiteObj?.lat || 10.2818);
-      longitude = Number(selectedSiteObj?.longitude || selectedSiteObj?.lng || 123.8808);
-      geofenceRadius = Number(selectedSiteObj?.geofenceRadius ?? selectedSiteObj?.radius ?? 20);
-      assignedSitesList = [siteName];
+    siteName = assignedSitesList.join(', ');
+    const matchedSites = sites.filter(s => assignedSitesList.includes(s.name || s.id));
+    if (matchedSites.length > 0) {
+      siteId = matchedSites.map(s => s.id).join(', ');
+      siteAddress = matchedSites.map(s => s.address || s.location || s.name).join(' | ');
+      latitude = Number(matchedSites[0].latitude || matchedSites[0].lat || 10.2818);
+      longitude = Number(matchedSites[0].longitude || matchedSites[0].lng || 123.8808);
+      geofenceRadius = Number(matchedSites[0].geofenceRadius ?? matchedSites[0].radius ?? 20);
     }
 
     const todayStr = new Date().toISOString().split('T')[0];
@@ -1122,7 +1157,8 @@ export default function Assignments() {
         employeeUid: empToUpdate?.uid || empToUpdate?.id || '',
         employeeName: empToUpdate?.name || form.empName || '',
         employeeEmail: empToUpdate?.email || form.empEmail || '',
-        employeeType: empToUpdate?.employeeType || empToUpdate?.role || 'On-Site',
+        employeeType: empToUpdate?.employeeType || empToUpdate?.role || 'Mobile Field',
+        workType: 'Mobile Field Employee',
         empName: empToUpdate?.name || form.empName || '',
         empEmail: empToUpdate?.email || form.empEmail || '',
         empId: empToUpdate?.idNum || empToUpdate?.id || form.empId || '',
@@ -1217,6 +1253,7 @@ export default function Assignments() {
             const formTokens = cleanFormName.split(/\s+/).filter(t => t.length > 1);
             for (const empDoc of empQuerySnap.docs) {
               const eData = empDoc.data();
+              if ((eData.workType || 'Fixed Site Employee') === 'Fixed Site Employee') continue;
               const eName = (eData.name || '').toLowerCase();
               const eEmail = (eData.email || '').toLowerCase();
               const isMatch = (eName && (cleanFormName.includes(eName) || eName.includes(cleanFormName))) ||
@@ -1227,16 +1264,11 @@ export default function Assignments() {
                 const empUpdateData = {
                   assignedSite: siteName,
                   assignedSiteId: siteId,
+                  assignedSites: assignedSitesList,
+                  assignedDestinations: assignedSitesList,
                   shift: computedShift,
                   updatedAt: Date.now()
                 };
-                if (isMobile) {
-                  empUpdateData.assignedSites = assignedSitesList;
-                  empUpdateData.assignedDestinations = assignedSitesList;
-                } else {
-                  empUpdateData.assignedSites = [siteName];
-                  empUpdateData.assignedDestinations = [siteName];
-                }
                 await updateDoc(doc(db, 'employees', empDoc.id), empUpdateData).catch(console.warn);
               }
             }
@@ -1790,14 +1822,13 @@ export default function Assignments() {
             <div style={{ padding: '24px 28px', display: 'flex', flexDirection: 'column', gap: 16 }}>
 
               {(() => {
-                const selectedEmp = employees.find(em => em.name === form.empName || (form.empId && (em.idNum === form.empId || em.id === form.empId)));
-                const isMobileEmp = selectedEmp?.workType === 'Mobile Field Employee';
+                const selectedEmp = fieldEmployees.find(em => em.name === form.empName || (form.empId && (em.idNum === form.empId || em.id === form.empId)));
                 return (
                   <>
                     {/* Employee Selection */}
                     <div>
                       <label style={{ fontSize: 11, fontWeight: 700, color: '#475569', display: 'block', marginBottom: 6 }}>
-                        Select Employee *
+                        Select Field Employee *
                       </label>
                       <div style={{ position: 'relative' }}>
                         <User size={15} color="#94A3B8" style={{ position: 'absolute', left: 12, top: 12 }} />
@@ -1818,9 +1849,9 @@ export default function Assignments() {
                             cursor: 'pointer'
                           }}
                         >
-                          <option value="">— Select Employee —</option>
-                          {employees.map(e => (
-                            <option key={e.id} value={e.name}>{e.name} ({e.email || 'Staff'})</option>
+                          <option value="">— Select Field Employee —</option>
+                          {fieldEmployees.map(e => (
+                            <option key={e.id} value={e.name}>{e.name} ({e.email || 'Field Staff'})</option>
                           ))}
                         </select>
                       </div>
@@ -1834,12 +1865,12 @@ export default function Assignments() {
                             display: 'inline-flex',
                             alignItems: 'center',
                             gap: 4,
-                            background: isMobileEmp ? '#FEF3C7' : '#EFF6FF',
-                            color: isMobileEmp ? '#92400E' : '#1E40AF',
-                            border: isMobileEmp ? '1px solid #FDE68A' : '1px solid #BFDBFE'
+                            background: '#FEF3C7',
+                            color: '#92400E',
+                            border: '1px solid #FDE68A'
                           }}>
-                            {isMobileEmp ? <Truck size={12} color="#D97706" /> : <Building2 size={12} color="#2563EB" />}
-                            {selectedEmp.workType || 'Fixed Site Employee'}
+                            <Truck size={12} color="#D97706" />
+                            {selectedEmp.workType || 'Mobile Field Employee'}
                           </span>
                         </div>
                       )}
@@ -1872,172 +1903,121 @@ export default function Assignments() {
                       </div>
                     </div>
 
-                    {/* Assigned Site(s) Selection */}
-                    {isMobileEmp ? (
-                      <div style={{ background: '#F8FAFC', borderRadius: 14, padding: 16, border: '1.5px solid #FDE68A' }}>
-                        <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 8 }}>
-                          <div style={{ fontSize: 12, fontWeight: 700, color: '#92400E', display: 'flex', alignItems: 'center', gap: 6 }}>
-                            <Truck size={15} color="#D97706" /> Multiple Assigned Sites (Field Patrol / Visit) *
-                          </div>
-                          <span style={{ fontSize: 11, fontWeight: 700, background: '#FEF3C7', color: '#92400E', padding: '2px 8px', borderRadius: 6 }}>
-                            {(form.assignedSites || []).length} Selected
-                          </span>
+                    {/* Assigned Site(s) Selection for Field Employee */}
+                    <div style={{ background: '#F8FAFC', borderRadius: 14, padding: 16, border: '1.5px solid #FDE68A' }}>
+                      <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 8 }}>
+                        <div style={{ fontSize: 12, fontWeight: 700, color: '#92400E', display: 'flex', alignItems: 'center', gap: 6 }}>
+                          <Truck size={15} color="#D97706" /> Assigned Site(s) (Field Patrol / Visit) *
                         </div>
+                        <span style={{ fontSize: 11, fontWeight: 700, background: '#FEF3C7', color: '#92400E', padding: '2px 8px', borderRadius: 6 }}>
+                          {(form.assignedSites || []).length} Selected
+                        </span>
+                      </div>
 
-                        <p style={{ margin: '0 0 10px', fontSize: 11, color: '#64748B' }}>
-                          Select all worksites this mobile field employee is authorized to patrol or visit (can assign multiple sites):
-                        </p>
+                      <p style={{ margin: '0 0 10px', fontSize: 11, color: '#64748B' }}>
+                        Select all worksites this mobile field employee is authorized to patrol or visit (can assign one or multiple sites):
+                      </p>
 
-                        <div style={{
-                          display: 'grid',
-                          gridTemplateColumns: 'repeat(auto-fill, minmax(190px, 1fr))',
-                          gap: 8,
-                          maxHeight: 180,
-                          overflowY: 'auto',
-                          padding: 8,
-                          background: '#FFFFFF',
-                          borderRadius: 10,
-                          border: '1px solid #E2E8F0'
-                        }}>
-                          {sites.length === 0 ? (
-                            <div style={{ fontSize: 12, color: '#94A3B8', padding: 12, gridColumn: '1 / -1', textAlign: 'center' }}>
-                              No sites configured in system yet.
-                            </div>
-                          ) : (
-                            sites.map(s => {
-                              const siteName = s.name || s.id;
-                              const isSelected = (form.assignedSites || []).includes(siteName);
-                              return (
-                                <label
-                                  key={s.id}
-                                  style={{
-                                    display: 'flex',
-                                    alignItems: 'center',
-                                    gap: 8,
-                                    padding: '8px 10px',
-                                    borderRadius: 8,
-                                    border: isSelected ? '1.5px solid #D97706' : '1px solid #E2E8F0',
-                                    background: isSelected ? '#FFFBEB' : '#FFFFFF',
-                                    cursor: 'pointer',
-                                    transition: 'all 0.15s ease'
+                      <div style={{
+                        display: 'grid',
+                        gridTemplateColumns: 'repeat(auto-fill, minmax(190px, 1fr))',
+                        gap: 8,
+                        maxHeight: 180,
+                        overflowY: 'auto',
+                        padding: 8,
+                        background: '#FFFFFF',
+                        borderRadius: 10,
+                        border: '1px solid #E2E8F0'
+                      }}>
+                        {sites.length === 0 ? (
+                          <div style={{ fontSize: 12, color: '#94A3B8', padding: 12, gridColumn: '1 / -1', textAlign: 'center' }}>
+                            No sites configured in system yet.
+                          </div>
+                        ) : (
+                          sites.map(s => {
+                            const siteName = s.name || s.id;
+                            const isSelected = (form.assignedSites || []).includes(siteName);
+                            return (
+                              <label
+                                key={s.id}
+                                style={{
+                                  display: 'flex',
+                                  alignItems: 'center',
+                                  gap: 8,
+                                  padding: '8px 10px',
+                                  borderRadius: 8,
+                                  border: isSelected ? '1.5px solid #D97706' : '1px solid #E2E8F0',
+                                  background: isSelected ? '#FFFBEB' : '#FFFFFF',
+                                  cursor: 'pointer',
+                                  transition: 'all 0.15s ease'
+                                }}
+                              >
+                                <input
+                                  type="checkbox"
+                                  checked={isSelected}
+                                  onChange={e => {
+                                    const current = form.assignedSites || [];
+                                    const next = e.target.checked
+                                      ? [...current, siteName]
+                                      : current.filter(n => n !== siteName);
+                                    setForm(p => ({
+                                      ...p,
+                                      assignedSites: next,
+                                      site: next.join(', ')
+                                    }));
                                   }}
-                                >
-                                  <input
-                                    type="checkbox"
-                                    checked={isSelected}
-                                    onChange={e => {
-                                      const current = form.assignedSites || [];
-                                      const next = e.target.checked
-                                        ? [...current, siteName]
-                                        : current.filter(n => n !== siteName);
-                                      setForm(p => ({
-                                        ...p,
-                                        assignedSites: next,
-                                        site: next.join(', ')
-                                      }));
-                                    }}
-                                    style={{ accentColor: '#D97706', width: 15, height: 15, cursor: 'pointer' }}
-                                  />
-                                  <div style={{ minWidth: 0, flex: 1 }}>
-                                    <div style={{ fontSize: 12, fontWeight: isSelected ? 700 : 500, color: isSelected ? '#92400E' : '#334155', whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>
-                                      {siteName}
-                                    </div>
-                                    <div style={{ fontSize: 10, color: '#94A3B8' }}>
-                                      {typeof s.radius === 'number' ? s.radius : (parseInt(s.radius) || 20)}m perimeter
-                                    </div>
+                                  style={{ accentColor: '#D97706', width: 15, height: 15, cursor: 'pointer' }}
+                                />
+                                <div style={{ minWidth: 0, flex: 1 }}>
+                                  <div style={{ fontSize: 12, fontWeight: isSelected ? 700 : 500, color: isSelected ? '#92400E' : '#334155', whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>
+                                    {siteName}
                                   </div>
-                                </label>
-                              );
-                            })
-                          )}
-                        </div>
+                                  <div style={{ fontSize: 10, color: '#94A3B8' }}>
+                                    {typeof s.radius === 'number' ? s.radius : (parseInt(s.radius) || 20)}m perimeter
+                                  </div>
+                                </div>
+                              </label>
+                            );
+                          })
+                        )}
+                      </div>
 
-                        <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginTop: 10 }}>
-                          <span style={{ fontSize: 11, color: '#64748B' }}>
-                            ✓ Mobile employee can check in/out at any assigned site.
-                          </span>
-                          <div style={{ display: 'flex', gap: 8 }}>
-                            <button
-                              type="button"
-                              onClick={() => {
-                                const allNames = sites.map(s => s.name || s.id);
-                                setForm(p => ({
-                                  ...p,
-                                  assignedSites: allNames,
-                                  site: allNames.join(', ')
-                                }));
-                              }}
-                              style={{ fontSize: 11, fontWeight: 600, color: '#1E5ADB', background: 'none', border: 'none', cursor: 'pointer', textDecoration: 'underline' }}
-                            >
-                              Select All
-                            </button>
-                            <span style={{ color: '#CBD5E1' }}>•</span>
-                            <button
-                              type="button"
-                              onClick={() => {
-                                setForm(p => ({
-                                  ...p,
-                                  assignedSites: [],
-                                  site: ''
-                                }));
-                              }}
-                              style={{ fontSize: 11, fontWeight: 600, color: '#64748B', background: 'none', border: 'none', cursor: 'pointer', textDecoration: 'underline' }}
-                            >
-                              Clear All
-                            </button>
-                          </div>
-                        </div>
-                      </div>
-                    ) : (
-                      /* Assigned Site for Fixed Site Employee */
-                      <div>
-                        <label style={{ fontSize: 11, fontWeight: 700, color: '#475569', display: 'block', marginBottom: 6 }}>
-                          Assigned Site Location *
-                        </label>
-                        <div style={{ position: 'relative' }}>
-                          <Building2 size={15} color="#94A3B8" style={{ position: 'absolute', left: 12, top: 12 }} />
-                          <select
-                            value={form.site}
-                            onChange={e => {
-                              const val = e.target.value;
-                              setForm(p => ({ ...p, site: val, assignedSites: val ? [val] : [] }));
+                      <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginTop: 10 }}>
+                        <span style={{ fontSize: 11, color: '#64748B' }}>
+                          ✓ Mobile employee can check in/out at any assigned site.
+                        </span>
+                        <div style={{ display: 'flex', gap: 8 }}>
+                          <button
+                            type="button"
+                            onClick={() => {
+                              const allNames = sites.map(s => s.name || s.id);
+                              setForm(p => ({
+                                ...p,
+                                assignedSites: allNames,
+                                site: allNames.join(', ')
+                              }));
                             }}
-                            style={{
-                              width: '100%',
-                              padding: '10px 14px 10px 38px',
-                              borderRadius: 12,
-                              border: '1.5px solid #E2E8F0',
-                              fontSize: 13,
-                              outline: 'none',
-                              background: '#FFFFFF',
-                              boxSizing: 'border-box',
-                              color: '#0F172A',
-                              fontWeight: 600,
-                              cursor: 'pointer'
-                            }}
+                            style={{ fontSize: 11, fontWeight: 600, color: '#1E5ADB', background: 'none', border: 'none', cursor: 'pointer', textDecoration: 'underline' }}
                           >
-                            <option value="">— Select Site —</option>
-                            {sites.map(s => (
-                              <option key={s.id} value={s.name}>{s.name}</option>
-                            ))}
-                          </select>
+                            Select All
+                          </button>
+                          <span style={{ color: '#CBD5E1' }}>•</span>
+                          <button
+                            type="button"
+                            onClick={() => {
+                              setForm(p => ({
+                                ...p,
+                                assignedSites: [],
+                                site: ''
+                              }));
+                            }}
+                            style={{ fontSize: 11, fontWeight: 600, color: '#64748B', background: 'none', border: 'none', cursor: 'pointer', textDecoration: 'underline' }}
+                          >
+                            Clear All
+                          </button>
                         </div>
-                        {form.site && (() => {
-                          const sel = sites.find(s => s.name === form.site || s.id === form.site);
-                          const rad = sel?.radius ? (typeof sel.radius === 'number' ? sel.radius : parseInt(sel.radius)) : 20;
-                          return (
-                            <div style={{ marginTop: 6, display: 'flex', alignItems: 'center', gap: 6, fontSize: 11, color: '#1E5ADB', fontWeight: 600 }}>
-                              <span>📍 Perimeter: <strong>{rad}m</strong></span>
-                              {rad <= 30 && (
-                                <span style={{ background: '#EFF6FF', padding: '2px 6px', borderRadius: 6, border: '1px solid #BFDBFE', fontSize: 10, color: '#1D4ED8' }}>
-                                  🏢 Building Fit
-                                </span>
-                              )}
-                            </div>
-                          );
-                        })()}
                       </div>
-                    )}
+                    </div>
                   </>
                 );
               })()}

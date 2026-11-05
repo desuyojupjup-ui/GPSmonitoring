@@ -73,6 +73,14 @@ function getInitials(name) {
   return name.split(' ').map(n => n[0]).join('').slice(0, 2).toUpperCase();
 }
 
+function formatMinutesToHoursMins(val) {
+  const mins = Math.round(Number(val) || 0);
+  if (mins <= 0) return '';
+  const h = Math.floor(mins / 60);
+  const m = mins % 60;
+  return h > 0 ? `${h}h ${m}m` : `${m}m`;
+}
+
 export default function Attendance() {
   const [attendance, setAttendance] = useState([]);
   const [assignments, setAssignments] = useState([]);
@@ -695,8 +703,9 @@ export default function Attendance() {
   ];
 
   const totalEvaluated = presentCount + absentCount + lateCount;
+  const attendedComplianceScore = presentCount + (lateCount * 0.85);
   const presentRate = totalEvaluated > 0
-    ? Math.min(100, Math.round((presentCount / totalEvaluated) * 100))
+    ? Math.min(100, Math.round((attendedComplianceScore / totalEvaluated) * 100))
     : (employees.length ? 100 : 0);
 
   return (
@@ -845,7 +854,7 @@ export default function Attendance() {
                               fontWeight: 700,
                             }}>
                               <Clock size={11} color="#B45309" />
-                              Late Check-In{row.minutesLate ? ` (+${row.minutesLate}m)` : ''}
+                              Late Check-In{row.minutesLate ? ` (+${formatMinutesToHoursMins(row.minutesLate)})` : ''}
                             </div>
                           )}
                           {row.isEarlyCheckOut && (
@@ -863,7 +872,7 @@ export default function Attendance() {
                               fontWeight: 700,
                             }}>
                               <AlertTriangle size={11} color="#DC2626" />
-                              Early Check-Out{row.minutesEarly ? ` (-${row.minutesEarly}m)` : ''}
+                              Early Check-Out{row.minutesEarly ? ` (-${formatMinutesToHoursMins(row.minutesEarly)})` : ''}
                             </div>
                           )}
                         </td>

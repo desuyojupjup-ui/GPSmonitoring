@@ -156,8 +156,15 @@ export function startAnomalyNotificationSync(onNewAlert) {
 
   let unsubAi = () => {};
   let unsubNotif = () => {};
-  let unsubSites = () => {};
+  let unsubSitesUpper = () => {};
+  let unsubSitesLower = () => {};
   let unsubEmployees = () => {};
+
+  const parseRadiusValue = (val) => {
+    if (val == null) return 0;
+    const n = parseFloat(String(val).replace(/[^0-9.]/g, ''));
+    return Number.isFinite(n) && n > 0 ? n : 0;
+  };
 
   try {
     // 1. Listen for AI anomalies
@@ -184,17 +191,38 @@ export function startAnomalyNotificationSync(onNewAlert) {
       }
     );
 
-    // 3. Cache Worksites for continuous geofence supervision
-    unsubSites = onSnapshot(
+    // 3. Cache Worksites from both 'Sites' and 'sites' collections for continuous geofence supervision
+    let upperSitesDocs = [];
+    let lowerSitesDocs = [];
+    const rebuildSitesMap = () => {
+      sitesMap.clear();
+      [...lowerSitesDocs, ...upperSitesDocs].forEach((sObj) => {
+        if (!sObj) return;
+        if (sObj.id) {
+          sitesMap.set(sObj.id, sObj);
+          sitesMap.set(String(sObj.id).trim().toLowerCase(), sObj);
+        }
+        if (sObj.name) {
+          sitesMap.set(sObj.name.trim(), sObj);
+          sitesMap.set(sObj.name.trim().toLowerCase(), sObj);
+        }
+      });
+    };
+
+    unsubSitesUpper = onSnapshot(
+      collection(db, 'Sites'),
+      (snap) => {
+        upperSitesDocs = snap.docs.map((d) => ({ id: d.id, ...d.data() }));
+        rebuildSitesMap();
+      },
+      () => {}
+    );
+
+    unsubSitesLower = onSnapshot(
       collection(db, 'sites'),
       (snap) => {
-        sitesMap.clear();
-        snap.docs.forEach((d) => {
-          const data = d.data();
-          const sObj = { id: d.id, ...data };
-          sitesMap.set(d.id, sObj);
-          if (data.name) sitesMap.set(data.name.trim().toLowerCase(), sObj);
-        });
+        lowerSitesDocs = snap.docs.map((d) => ({ id: d.id, ...d.data() }));
+        rebuildSitesMap();
       },
       () => {}
     );
@@ -208,10 +236,15 @@ export function startAnomalyNotificationSync(onNewAlert) {
           const empWorkType = (emp.workType || emp.employeeType || emp.type || '').toString().toLowerCase();
           const isFieldEmp = empWorkType.includes('mobile') || empWorkType.includes('field');
 
-          // Continuous geofence boundaries apply to Fixed Site Employees who are On Duty / Checked In
+          // Continuous geofence boundaries apply ONLY to Fixed Site Employees who are actively On Duty / On Site
           if (isFieldEmp) return;
-          const isOnDuty = emp.status === 'On Duty' || emp.isOnline === true;
-          if (!isOnDuty) return;
+          const rawStatus = (emp.status || '').toString().trim();
+          const isActivelyOnDuty = (rawStatus === 'On Duty' || rawStatus === 'On Site') && emp.isOnline !== false;
+          if (!isActivelyOnDuty) return;
+
+          // Ensure GPS heartbeat is fresh (within last 2 minutes)
+          const lastActiveMs = toMillis(emp.lastActive || emp.lastHeartbeat || emp.lastLocationUpdate);
+          if (Date.now() - lastActiveMs > 120000) return;
 
           // Only alert anomaly if employee has an active scheduled shift today
           const shiftStr = (emp.shift || emp.scheduledShift || emp.shiftTime || '').toString().trim().toLowerCase();
@@ -238,22 +271,41 @@ export function startAnomalyNotificationSync(onNewAlert) {
           const lng = emp.lng ?? emp.longitude;
           if (lat == null || lng == null || isNaN(Number(lat)) || isNaN(Number(lng))) return;
 
-          // Resolve site
-          const siteKey = (emp.assignedSite || emp.site || '').trim().toLowerCase();
-          let site = sitesMap.get(emp.assignedSite) || sitesMap.get(siteKey) || null;
+          // Resolve site from Sites map (Wait until sitesMap has loaded if assignedSite is set)
+          const rawAssignedSite = (emp.assignedSite || emp.site || '').toString().trim();
+          const siteKey = rawAssignedSite.toLowerCase();
+          if (!siteKey || siteKey === 'unassigned' || siteKey === 'none') return;
 
-          if (!site || site.lat == null) {
-            const matchedKey = Object.keys(KNOWN_LOCATIONS).find((k) => siteKey === k || siteKey.includes(k));
-            if (matchedKey) site = KNOWN_LOCATIONS[matchedKey];
+          let site =
+            sitesMap.get(emp.assignedSiteId) ||
+            sitesMap.get(rawAssignedSite) ||
+            sitesMap.get(siteKey) ||
+            Array.from(sitesMap.values()).find((s) => {
+              const sName = (s?.name || '').trim().toLowerCase();
+              return sName && (sName === siteKey || sName.includes(siteKey) || siteKey.includes(sName));
+            }) ||
+            null;
+
+          if (!site || (site.lat == null && site.latitude == null)) {
+            if (KNOWN_LOCATIONS[siteKey]) {
+              site = KNOWN_LOCATIONS[siteKey];
+            }
           }
 
-          if (!site || site.lat == null) return;
+          const siteLat = site?.lat ?? site?.latitude ?? null;
+          const siteLng = site?.lng ?? site?.longitude ?? null;
+          if (!site || siteLat == null || siteLng == null || isNaN(Number(siteLat)) || isNaN(Number(siteLng))) return;
 
-          const radius = Number(site.radius || emp.geofenceRadius || 200);
-          const distToCenter = getDistanceMeters(Number(lat), Number(lng), Number(site.lat), Number(site.lng));
+          const siteRadius = parseRadiusValue(site.radius ?? site.geofenceRadius);
+          const empRadius = parseRadiusValue(emp.geofenceRadius);
+          const baseRadius = Math.max(siteRadius, empRadius) || 100;
+          const accuracyMargin = Math.min(Math.max(Number(emp.locationAccuracy) || 0, 0), 40);
+          const effectiveRadius = baseRadius + accuracyMargin;
 
-          if (distToCenter > radius) {
-            const distOutside = Math.max(1, Math.round(distToCenter - radius));
+          const distToCenter = getDistanceMeters(Number(lat), Number(lng), Number(siteLat), Number(siteLng));
+
+          if (distToCenter > effectiveRadius) {
+            const distOutside = Math.max(1, Math.round(distToCenter - baseRadius));
             const now = Date.now();
             const lastAlert = lastAdminGeofenceAlertTime.get(emp.id) || 0;
 
@@ -311,7 +363,7 @@ export function startAnomalyNotificationSync(onNewAlert) {
             }
           } else {
             // Inside geofence
-            if (emp.geofenceStatus === 'Outside Assigned Site') {
+            if (emp.geofenceStatus === 'Outside Assigned Site' || emp.inFence === false) {
               updateDoc(doc(db, 'employees', emp.id), {
                 geofenceStatus: 'Inside Assigned Site',
                 inFence: true,
@@ -456,7 +508,8 @@ export function startAnomalyNotificationSync(onNewAlert) {
     return () => {
       unsubAi();
       unsubNotif();
-      unsubSites();
+      unsubSitesUpper();
+      unsubSitesLower();
       unsubEmployees();
       unsubAtt1();
       unsubAtt2();
@@ -468,7 +521,8 @@ export function startAnomalyNotificationSync(onNewAlert) {
   return () => {
     unsubAi();
     unsubNotif();
-    unsubSites();
+    unsubSitesUpper();
+    unsubSitesLower();
     unsubEmployees();
   };
 }

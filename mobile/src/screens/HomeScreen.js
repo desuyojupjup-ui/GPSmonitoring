@@ -40,7 +40,7 @@ import { runPreAttendanceChecks } from '../services/securityService';
 import { writeSecurityEvent } from '../services/securityLogger';
 import { getDeviceId } from '../services/deviceInfo';
 import { getPendingSyncCount, syncOfflineRecords, clearOfflineQueue } from '../services/offlineSyncService';
-import { isAssignmentDatePassed, isAssignmentActiveToday, resolveShift, isAssignmentForEmployee, deduplicateAssignments, isMobileFieldWithoutSite, checkEarlyCheckout, checkLateCheckIn, isAttendanceRecordFlagged, hasActiveShiftSchedule, hasActiveSiteAssignment } from '../utils/assignmentUtils';
+import { isAssignmentDatePassed, isAssignmentActiveToday, resolveShift, getShiftScheduleDetails, isAssignmentForEmployee, deduplicateAssignments, isMobileFieldWithoutSite, checkEarlyCheckout, checkLateCheckIn, isAttendanceRecordFlagged, calculateMonthlyAttendanceMetrics, hasActiveShiftSchedule, hasActiveSiteAssignment } from '../utils/assignmentUtils';
 import {
   startSession as schedulerStart,
   stopSession as schedulerStop,
@@ -92,13 +92,13 @@ function formatTimeDisplay(val) {
   return '--:--';
 }
 
-function resolveSiteDetails(siteObj, targetSiteName, selectedAsg) {
+function resolveSiteDetails(siteObj, targetSiteName, selectedAsg, emp = null) {
   if (!siteObj && !selectedAsg && (!targetSiteName || targetSiteName === 'Unassigned Site' || targetSiteName === 'Unassigned')) {
     return null;
   }
 
-  let lat = siteObj?.lat ?? siteObj?.latitude ?? selectedAsg?.latitude ?? selectedAsg?.lat ?? null;
-  let lng = siteObj?.lng ?? siteObj?.longitude ?? selectedAsg?.longitude ?? selectedAsg?.lng ?? null;
+  let lat = siteObj?.lat ?? siteObj?.latitude ?? selectedAsg?.latitude ?? selectedAsg?.lat ?? emp?.siteLatitude ?? null;
+  let lng = siteObj?.lng ?? siteObj?.longitude ?? selectedAsg?.longitude ?? selectedAsg?.lng ?? emp?.siteLongitude ?? null;
 
   if (lat !== null && lat !== undefined) lat = Number(lat);
   if (lng !== null && lng !== undefined) lng = Number(lng);
@@ -117,8 +117,7 @@ function resolveSiteDetails(siteObj, targetSiteName, selectedAsg) {
   };
 
   const nameLower = nameStr.toLowerCase();
-  const matchedKey = knownLocations[nameLower] ? nameLower : Object.keys(knownLocations).find(k => nameLower.includes(k) || k.includes(nameLower));
-  const matchedKnown = matchedKey ? knownLocations[matchedKey] : null;
+  const matchedKnown = knownLocations[nameLower] || null;
 
   const isInvalid = lat === null || lng === null || isNaN(lat) || isNaN(lng) || (lat === 0 && lng === 0);
 
@@ -127,15 +126,26 @@ function resolveSiteDetails(siteObj, targetSiteName, selectedAsg) {
       lat = matchedKnown.lat;
       lng = matchedKnown.lng;
     } else {
-      lat = 10.3273;
-      lng = 123.9064;
+      lat = null;
+      lng = null;
     }
   }
 
-  const rawAddress = siteObj?.address || siteObj?.location || selectedAsg?.siteAddress || selectedAsg?.address;
+  const rawAddress = siteObj?.address || siteObj?.location || selectedAsg?.siteAddress || selectedAsg?.address || emp?.siteAddress;
   const address = (rawAddress && rawAddress !== 'GPS Live Monitoring Active' && rawAddress !== 'Cebu City, Central Visayas, 6000, Philippines')
     ? rawAddress
-    : (matchedKnown ? matchedKnown.address : 'Cebu IT Park, Lahug, Cebu City, 6000 Cebu, Philippines');
+    : (matchedKnown ? matchedKnown.address : 'Registered Worksite Address');
+
+  const parseRad = (v) => {
+    if (v === null || v === undefined) return 0;
+    const n = parseFloat(String(v).replace(/[^0-9.]/g, ''));
+    return Number.isFinite(n) && n > 0 ? n : 0;
+  };
+  const resolvedRadius = Math.max(
+    parseRad(siteObj?.radius),
+    parseRad(selectedAsg?.geofenceRadius || selectedAsg?.radius),
+    parseRad(emp?.geofenceRadius)
+  ) || 100;
 
   return {
     ...siteObj,
@@ -146,9 +156,7 @@ function resolveSiteDetails(siteObj, targetSiteName, selectedAsg) {
     lng,
     latitude: lat,
     longitude: lng,
-    radius: siteObj?.radius
-      ? (typeof siteObj.radius === 'number' ? siteObj.radius : parseInt(siteObj.radius.toString().replace('m', '')))
-      : (selectedAsg?.geofenceRadius || 200)
+    radius: resolvedRadius
   };
 }
 
@@ -475,7 +483,21 @@ export default function HomeScreen({ navigation, route, user: propUser }) {
         };
       }
 
-      const empKey = JSON.stringify({ id: empData.id, name: empData.name, email: empData.email, status: empData.status, assignedSite: empData.assignedSite, shift: empData.shift });
+      const empKey = JSON.stringify({
+        id: empData.id,
+        name: empData.name,
+        email: empData.email,
+        status: empData.status,
+        assignedSite: empData.assignedSite,
+        assignedSites: empData.assignedSites,
+        geofenceRadius: empData.geofenceRadius,
+        shift: empData.shift,
+        shiftTime: empData.shiftTime,
+        shiftStart: empData.shiftStart,
+        shiftEnd: empData.shiftEnd,
+        workDays: empData.workDays,
+        scheduleDays: empData.scheduleDays,
+      });
       if (empKey !== lastEmpKeyRef.current) {
         lastEmpKeyRef.current = empKey;
         setEmployee(empData);
@@ -596,8 +618,9 @@ export default function HomeScreen({ navigation, route, user: propUser }) {
         });
       }
 
-      const resolvedSite = resolveSiteDetails(matchedSiteDoc, cleanName, asgDoc);
+      const resolvedSite = resolveSiteDetails(matchedSiteDoc, cleanName, asgDoc, emp);
       const composedShift = resolveShift(asgDoc, emp);
+      const schedDetails = getShiftScheduleDetails(asgDoc, emp);
       const asgDate = asgDoc?.assignDate || asgDoc?.assignedAt || new Date().toISOString().split('T')[0];
       const priority = asgDoc?.priority || 'Medium';
       const status = asgDoc?.status || 'Active';
@@ -611,8 +634,15 @@ export default function HomeScreen({ navigation, route, user: propUser }) {
         address: resolvedSite?.address || asgDoc?.siteAddress || asgDoc?.address || '',
         latitude: resolvedSite?.latitude,
         longitude: resolvedSite?.longitude,
-        geofenceRadius: resolvedSite?.radius || 200,
+        geofenceRadius: resolvedSite?.radius || 100,
         shift: composedShift,
+        shiftSchedule: schedDetails.shiftSchedule,
+        workingHours: schedDetails.workingHours,
+        shiftTimeAndHours: schedDetails.shiftTimeAndHours,
+        shiftStartTime: schedDetails.shiftStartTime,
+        shiftEndTime: schedDetails.shiftEndTime,
+        workDays: schedDetails.workDays,
+        scheduledWorkingDays: schedDetails.scheduledWorkingDays,
         status: status,
         priority: priority,
         assignDate: asgDate,
@@ -623,10 +653,17 @@ export default function HomeScreen({ navigation, route, user: propUser }) {
         id: cardAsg.id,
         siteName: cleanName,
         address: resolvedSite?.address || 'Registered Worksite Address',
-        radius: resolvedSite?.radius || 200,
+        radius: resolvedSite?.radius || 100,
         latitude: resolvedSite?.latitude,
         longitude: resolvedSite?.longitude,
         shift: composedShift,
+        shiftSchedule: schedDetails.shiftSchedule,
+        workingHours: schedDetails.workingHours,
+        shiftTimeAndHours: schedDetails.shiftTimeAndHours,
+        shiftStartTime: schedDetails.shiftStartTime,
+        shiftEndTime: schedDetails.shiftEndTime,
+        workDays: schedDetails.workDays,
+        scheduledWorkingDays: schedDetails.scheduledWorkingDays,
         date: asgDate,
         priority: priority,
         status: status,
@@ -635,8 +672,30 @@ export default function HomeScreen({ navigation, route, user: propUser }) {
       });
     };
 
-    // 1. Process matching assignment docs from database
-    if (empAsg.length > 0) {
+    const isFixedEmp = Boolean(
+      emp && (
+        emp.workType === 'Fixed Site Employee' ||
+        emp.type === 'Fixed Site' ||
+        String(emp.workType || emp.type || '').toLowerCase().includes('fixed')
+      )
+    );
+
+    // For Fixed Site Employees, their assigned site comes directly from their employee profile
+    if (isFixedEmp && emp) {
+      if (Array.isArray(emp.assignedSites) && emp.assignedSites.length > 0) {
+        emp.assignedSites.forEach(s => addSiteItem(s, null, true));
+      } else if (emp.assignedSite && emp.assignedSite.includes(',')) {
+        emp.assignedSite.split(',').forEach(s => addSiteItem(s, null, true));
+      } else {
+        const profileSite = (emp.assignedSite || emp.site || emp.assignedSiteName || '').trim();
+        if (profileSite && profileSite.toLowerCase() !== 'unassigned' && profileSite.toLowerCase() !== 'none') {
+          addSiteItem(profileSite, null, true);
+        }
+      }
+    }
+
+    // 1. Process matching assignment docs from database (Field Employees, or fallback if Fixed Employee had none)
+    if (gatheredSites.length === 0 && empAsg.length > 0) {
       for (const asg of empAsg) {
         if (Array.isArray(asg.assignedSites) && asg.assignedSites.length > 0) {
           asg.assignedSites.forEach(s => addSiteItem(s, asg));
@@ -649,7 +708,7 @@ export default function HomeScreen({ navigation, route, user: propUser }) {
     }
 
     // 2. Loose fallback if empAsg was empty
-    if (gatheredSites.length === 0 && cleanDocs.length > 0) {
+    if (gatheredSites.length === 0 && !isFixedEmp && cleanDocs.length > 0) {
       const looseMatch = cleanDocs.find(a => {
         const asgSite = (a.site || a.siteName || '').trim().toLowerCase();
         const empSite = (emp?.assignedSite || emp?.site || '').trim().toLowerCase();
@@ -702,6 +761,10 @@ export default function HomeScreen({ navigation, route, user: propUser }) {
     setAssignment(primary ? primary.assignment : null);
     siteRef.current = primary ? primary.site : null;
     setSite(primary ? primary.site : null);
+
+    if (locationLogService.isPeriodicLoggingActive() && primary?.site) {
+      locationLogService.updateActiveSite(primary.site, primary.assignment);
+    }
 
     const hasSched = hasActiveShiftSchedule(primary?.assignment, emp);
     // If no active site assignment or no shift scheduled, employee must NOT have status 'On Duty'
@@ -761,15 +824,15 @@ export default function HomeScreen({ navigation, route, user: propUser }) {
           if (!locationLogService.isPeriodicLoggingActive() && currentEmp) {
             locationLogService.startPeriodicLogging({
               employee: currentEmp,
-              site,
-              assignment,
+              site: siteRef.current || site,
+              assignment: assignmentRef.current || assignment,
               attendanceId: todayRecord.id,
             });
           }
           if (!isSchedulerActive() && currentEmp) {
             schedulerStart({
               employee: currentEmp,
-              assignment,
+              assignment: assignmentRef.current || assignment,
               attendanceId: todayRecord.id,
             });
           }
@@ -802,13 +865,14 @@ export default function HomeScreen({ navigation, route, user: propUser }) {
     };
 
     const handleSnap = (collKey) => (snapshot) => {
-      if (!snapshot || snapshot.empty) {
-        Object.keys(records).forEach(k => { if (records[k]._col === collKey) delete records[k]; });
-      } else {
+      Object.keys(records).forEach(k => { if (records[k]._col === collKey) delete records[k]; });
+      if (snapshot && !snapshot.empty) {
         snapshot.docs.forEach(d => {
-          const raw = { id: d.id, _col: collKey, ...d.data() };
+          const data = d.data();
+          const canonicalId = data.id || d.id;
+          const raw = { ...data, id: canonicalId, _docId: d.id, _col: collKey };
           if (matchesMe(raw)) {
-            records[d.id] = raw;
+            records[canonicalId] = raw;
           }
         });
       }
@@ -1063,7 +1127,15 @@ export default function HomeScreen({ navigation, route, user: propUser }) {
       }
 
       try {
-        // 1. Immediately capture and save current location in the Location Log
+        // 1. Start periodic 5-minute location recording while checked in (sets activeSession first)
+        locationLogService.startPeriodicLogging({
+          employee,
+          site: siteToUse,
+          assignment,
+          attendanceId: attId,
+        });
+
+        // 2. Immediately capture and save current location in the Location Log
         await locationLogService.captureAndSaveCurrentLocation({
           employee,
           site: siteToUse,
@@ -1071,14 +1143,6 @@ export default function HomeScreen({ navigation, route, user: propUser }) {
           attendanceId: attId,
           trigger: 'check_in',
           coords: { latitude: lat, longitude: lng },
-        });
-
-        // 2. Start periodic 5-minute location recording while checked in
-        locationLogService.startPeriodicLogging({
-          employee,
-          site: siteToUse,
-          assignment,
-          attendanceId: attId,
         });
       } catch (err) {
         console.warn('Check-in locationLogService warning:', err);
@@ -1334,10 +1398,7 @@ export default function HomeScreen({ navigation, route, user: propUser }) {
   });
 
   const empShift = resolveShift(assignment, employee);
-  const daysWorked = currentMonthRecords.length;
-  const flaggedCount = currentMonthRecords.filter(r => isAttendanceRecordFlagged(r, empShift)).length;
-  const onTimeCount = Math.max(0, daysWorked - flaggedCount);
-  const monthlyRate = daysWorked > 0 ? ((onTimeCount / daysWorked) * 100).toFixed(1) : '100.0';
+  const { daysWorked, flaggedCount, monthlyRate } = calculateMonthlyAttendanceMetrics(currentMonthRecords, empShift);
 
   return (
     <View style={styles.container}>
@@ -1715,41 +1776,110 @@ export default function HomeScreen({ navigation, route, user: propUser }) {
                         Address: <Text style={styles.asgDetailBold}>{siteItem.address || '—'}</Text>
                       </Text>
                     </View>
-                    <View style={styles.asgDetailRow}>
-                      <Ionicons name="radio-outline" size={15} color="#4F46E5" />
-                      <Text style={styles.asgDetailText}>
-                        Perimeter: <Text style={styles.asgDetailBold}>{siteItem.radius}m Geofence Radius</Text>
-                      </Text>
-                    </View>
-                    <View style={styles.asgDetailRow}>
-                      <Ionicons name="time-outline" size={15} color="#6B7280" />
-                      <Text style={styles.asgDetailText}>Shift: <Text style={styles.asgDetailBold}>{siteItem.shift || '—'}</Text></Text>
-                    </View>
-                    <View style={styles.asgDetailRow}>
-                      <Ionicons name="calendar-outline" size={15} color="#6B7280" />
-                      <Text style={styles.asgDetailText}>Date: <Text style={styles.asgDetailBold}>{siteItem.date || 'Daily Scheduled'}</Text></Text>
-                    </View>
-                    <View style={styles.asgDetailRow}>
-                      <Ionicons
-                        name="flag-outline"
-                        size={15}
-                        color={
-                          (siteItem.priority || '').toLowerCase() === 'medium' ? '#F59E0B' :
-                            (siteItem.priority || '').toLowerCase() === 'low' ? '#10B981' : '#EF4444'
-                        }
-                      />
-                      <Text style={styles.asgDetailText}>
-                        Priority: <Text style={[
-                          styles.asgDetailBold,
-                          {
-                            color: (siteItem.priority || '').toLowerCase() === 'medium' ? '#F59E0B' :
-                              (siteItem.priority || '').toLowerCase() === 'low' ? '#10B981' : '#EF4444'
-                          }
-                        ]}>
-                          {siteItem.priority || 'Medium'}
-                        </Text>
-                      </Text>
-                    </View>
+
+                    {isFixed ? (
+                      <>
+                        <View style={styles.asgDetailRow}>
+                          <Ionicons name="time-outline" size={15} color="#4F46E5" />
+                          <View style={{ flex: 1, flexDirection: 'row', alignItems: 'center', flexWrap: 'wrap', gap: 6 }}>
+                            <Text style={styles.asgDetailText}>
+                              Shift Time Schedule & Working Hours:{' '}
+                              <Text style={styles.asgDetailBold}>{siteItem.shiftSchedule || siteItem.shift || '—'}</Text>
+                            </Text>
+                            {siteItem.workingHours ? (
+                              <View style={{ backgroundColor: '#EFF6FF', borderColor: '#BFDBFE', borderWidth: 1, paddingHorizontal: 7, paddingVertical: 2, borderRadius: 6 }}>
+                                <Text style={{ fontSize: 10.5, fontWeight: '700', color: '#1E5ADB' }}>
+                                  ⏱️ {siteItem.workingHours} / shift
+                                </Text>
+                              </View>
+                            ) : null}
+                          </View>
+                        </View>
+
+                        <View style={styles.asgDetailRow}>
+                          <Ionicons name="alarm-outline" size={15} color="#10B981" />
+                          <Text style={[styles.asgDetailText, { flex: 1 }]}>
+                            Shift Start Time: <Text style={styles.asgDetailBold}>{siteItem.shiftStartTime || '08:00 AM'}</Text>
+                            {siteItem.shiftEndTime ? (
+                              <Text style={styles.asgDetailText}>
+                                {'  •  '}End: <Text style={styles.asgDetailBold}>{siteItem.shiftEndTime}</Text>
+                              </Text>
+                            ) : null}
+                          </Text>
+                        </View>
+
+                        <View style={[styles.asgDetailRow, { alignItems: 'flex-start' }]}>
+                          <Ionicons name="calendar-outline" size={15} color="#4F46E5" style={{ marginTop: 2 }} />
+                          <View style={{ flex: 1 }}>
+                            <Text style={styles.asgDetailText}>
+                              Scheduled Working Days:{' '}
+                              <Text style={styles.asgDetailBold}>{siteItem.scheduledWorkingDays || 'Mon, Tue, Wed, Thu, Fri'}</Text>
+                            </Text>
+                            <View style={{ flexDirection: 'row', flexWrap: 'wrap', gap: 4, marginTop: 6 }}>
+                              {['Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat', 'Sun'].map(day => {
+                                const activeDays = Array.isArray(siteItem.workDays) ? siteItem.workDays : ['Mon', 'Tue', 'Wed', 'Thu', 'Fri'];
+                                const isActiveDay = activeDays.some(d => String(d).toLowerCase().startsWith(day.toLowerCase()));
+                                return (
+                                  <View
+                                    key={day}
+                                    style={{
+                                      paddingHorizontal: 7,
+                                      paddingVertical: 3,
+                                      borderRadius: 6,
+                                      backgroundColor: isActiveDay ? '#1E5ADB' : '#FFFFFF',
+                                      borderWidth: 1,
+                                      borderColor: isActiveDay ? '#1E5ADB' : '#E2E8F0',
+                                    }}
+                                  >
+                                    <Text style={{ fontSize: 10, fontWeight: '700', color: isActiveDay ? '#FFFFFF' : '#64748B' }}>
+                                      {day}
+                                    </Text>
+                                  </View>
+                                );
+                              })}
+                            </View>
+                          </View>
+                        </View>
+                      </>
+                    ) : (
+                      <>
+                        <View style={styles.asgDetailRow}>
+                          <Ionicons name="radio-outline" size={15} color="#4F46E5" />
+                          <Text style={styles.asgDetailText}>
+                            Perimeter: <Text style={styles.asgDetailBold}>{siteItem.radius}m Geofence Radius</Text>
+                          </Text>
+                        </View>
+                        <View style={styles.asgDetailRow}>
+                          <Ionicons name="time-outline" size={15} color="#6B7280" />
+                          <Text style={styles.asgDetailText}>Shift: <Text style={styles.asgDetailBold}>{siteItem.shift || '—'}</Text></Text>
+                        </View>
+                        <View style={styles.asgDetailRow}>
+                          <Ionicons name="calendar-outline" size={15} color="#6B7280" />
+                          <Text style={styles.asgDetailText}>Date: <Text style={styles.asgDetailBold}>{siteItem.date || 'Daily Scheduled'}</Text></Text>
+                        </View>
+                        <View style={styles.asgDetailRow}>
+                          <Ionicons
+                            name="flag-outline"
+                            size={15}
+                            color={
+                              (siteItem.priority || '').toLowerCase() === 'medium' ? '#F59E0B' :
+                                (siteItem.priority || '').toLowerCase() === 'low' ? '#10B981' : '#EF4444'
+                            }
+                          />
+                          <Text style={styles.asgDetailText}>
+                            Priority: <Text style={[
+                              styles.asgDetailBold,
+                              {
+                                color: (siteItem.priority || '').toLowerCase() === 'medium' ? '#F59E0B' :
+                                  (siteItem.priority || '').toLowerCase() === 'low' ? '#10B981' : '#EF4444'
+                              }
+                            ]}>
+                              {siteItem.priority || 'Medium'}
+                            </Text>
+                          </Text>
+                        </View>
+                      </>
+                    )}
                   </View>
 
                   <TouchableOpacity

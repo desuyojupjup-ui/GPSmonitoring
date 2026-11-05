@@ -7,13 +7,13 @@ import { auth, db, collection, addDoc, serverTimestamp, getDocs, onSnapshot, ens
 import { Ionicons } from '@expo/vector-icons';
 import { isAssignmentDatePassed, isAssignmentActiveToday, resolveShift, isAssignmentForEmployee, deduplicateAssignments } from '../utils/assignmentUtils';
 
-function resolveSiteDetails(siteObj, targetSiteName, selectedAsg) {
+function resolveSiteDetails(siteObj, targetSiteName, selectedAsg, emp = null) {
   if (!siteObj && !selectedAsg && (!targetSiteName || targetSiteName === 'Unassigned Site' || targetSiteName === 'Unassigned')) {
     return null;
   }
 
-  let lat = siteObj?.lat ?? siteObj?.latitude ?? selectedAsg?.latitude ?? selectedAsg?.lat ?? null;
-  let lng = siteObj?.lng ?? siteObj?.longitude ?? selectedAsg?.longitude ?? selectedAsg?.lng ?? null;
+  let lat = siteObj?.lat ?? siteObj?.latitude ?? selectedAsg?.latitude ?? selectedAsg?.lat ?? emp?.siteLatitude ?? null;
+  let lng = siteObj?.lng ?? siteObj?.longitude ?? selectedAsg?.longitude ?? selectedAsg?.lng ?? emp?.siteLongitude ?? null;
 
   if (lat !== null && lat !== undefined) lat = Number(lat);
   if (lng !== null && lng !== undefined) lng = Number(lng);
@@ -32,8 +32,7 @@ function resolveSiteDetails(siteObj, targetSiteName, selectedAsg) {
   };
 
   const nameLower = nameStr.toLowerCase();
-  const matchedKey = knownLocations[nameLower] ? nameLower : Object.keys(knownLocations).find(k => nameLower.includes(k) || k.includes(nameLower));
-  const matchedKnown = matchedKey ? knownLocations[matchedKey] : null;
+  const matchedKnown = knownLocations[nameLower] || null;
 
   const isInvalid = lat === null || lng === null || isNaN(lat) || isNaN(lng) || (lat === 0 && lng === 0);
 
@@ -42,15 +41,26 @@ function resolveSiteDetails(siteObj, targetSiteName, selectedAsg) {
       lat = matchedKnown.lat;
       lng = matchedKnown.lng;
     } else {
-      lat = 10.3273;
-      lng = 123.9064;
+      lat = null;
+      lng = null;
     }
   }
 
-  const rawAddress = siteObj?.address || siteObj?.location || selectedAsg?.siteAddress || selectedAsg?.address;
+  const rawAddress = siteObj?.address || siteObj?.location || selectedAsg?.siteAddress || selectedAsg?.address || emp?.siteAddress;
   const address = (rawAddress && rawAddress !== 'GPS Live Monitoring Active' && rawAddress !== 'Cebu City, Central Visayas, 6000, Philippines') 
     ? rawAddress 
-    : (matchedKnown ? matchedKnown.address : 'Cebu IT Park, Lahug, Cebu City, 6000 Cebu, Philippines');
+    : (matchedKnown ? matchedKnown.address : 'Registered Worksite Address');
+
+  const parseRad = (v) => {
+    if (v === null || v === undefined) return 0;
+    const n = parseFloat(String(v).replace(/[^0-9.]/g, ''));
+    return Number.isFinite(n) && n > 0 ? n : 0;
+  };
+  const resolvedRadius = Math.max(
+    parseRad(siteObj?.radius),
+    parseRad(selectedAsg?.geofenceRadius || selectedAsg?.radius),
+    parseRad(emp?.geofenceRadius)
+  ) || 100;
 
   return {
     ...siteObj,
@@ -61,9 +71,7 @@ function resolveSiteDetails(siteObj, targetSiteName, selectedAsg) {
     lng,
     latitude: lat,
     longitude: lng,
-    radius: siteObj?.radius 
-      ? (typeof siteObj.radius === 'number' ? siteObj.radius : parseInt(siteObj.radius.toString().replace('m', '')))
-      : (selectedAsg?.geofenceRadius || 200)
+    radius: resolvedRadius
   };
 }
 
@@ -149,9 +157,10 @@ function generateLeafletHtml(initialUserLat, initialUserLng, siteLat, siteLng, s
     var userLng = ${initialUserLng || 123.8854};
     var sLat = ${siteLat || 'null'};
     var sLng = ${siteLng || 'null'};
-    var sRadius = ${siteRadius || 200};
+    var sRadius = ${siteRadius || 100};
     var sName = ${JSON.stringify(siteName || 'Assigned Site')};
     var navigating = ${isNavigating ? 'true' : 'false'};
+    var onSiteState = ${isOnSite ? 'true' : 'false'};
 
     var center = (sLat && sLng) ? [sLat, sLng] : [userLat, userLng];
     var map = L.map('map', {
@@ -192,8 +201,8 @@ function generateLeafletHtml(initialUserLat, initialUserLng, siteLat, siteLng, s
 
         geofenceCircle = L.circle([sLat, sLng], {
           radius: sRadius,
-          color: ${isOnSite ? "'#10B981'" : "'#4F46E5'"},
-          fillColor: ${isOnSite ? "'#10B981'" : "'#4F46E5'"},
+          color: onSiteState ? '#10B981' : '#4F46E5',
+          fillColor: onSiteState ? '#10B981' : '#4F46E5',
           fillOpacity: 0.12,
           weight: 2
         }).addTo(map);
@@ -226,6 +235,7 @@ function generateLeafletHtml(initialUserLat, initialUserLng, siteLat, siteLng, s
       sLng = lng;
       sRadius = radius;
       sName = name;
+      if (typeof onSite === 'boolean') onSiteState = onSite;
       renderSite();
       updateNavLine();
     };
@@ -352,12 +362,35 @@ export default function MapScreen({ navigation, route, user: propUser }) {
   useEffect(() => {
     ensureAuthenticatedSession();
 
-    const unsubSites = onSnapshot(collection(db, 'Sites'), (snap) => {
-      const loaded = !snap.empty ? snap.docs.map(d => ({ id: d.id, ...d.data() })) : [];
-      sitesRef.current = loaded;
-      setSitesData(loaded);
+    let upperSites = [];
+    let lowerSites = [];
+    const mergeSites = () => {
+      const map = new Map();
+      [...lowerSites, ...upperSites].forEach(s => {
+        if (s && s.id) map.set(s.id, s);
+      });
+      const merged = Array.from(map.values());
+      sitesRef.current = merged;
+      setSitesData(merged);
+    };
+
+    const unsubSitesUpper = onSnapshot(collection(db, 'Sites'), (snap) => {
+      upperSites = !snap.empty ? snap.docs.map(d => ({ id: d.id, ...d.data() })) : [];
+      mergeSites();
     }, (err) => console.warn('Map Sites snap warning:', err.message));
-    return () => unsubSites();
+
+    let unsubSitesLower = () => {};
+    try {
+      unsubSitesLower = onSnapshot(collection(db, 'sites'), (snap) => {
+        lowerSites = !snap.empty ? snap.docs.map(d => ({ id: d.id, ...d.data() })) : [];
+        mergeSites();
+      }, () => {});
+    } catch (_) {}
+
+    return () => {
+      unsubSitesUpper();
+      unsubSitesLower();
+    };
   }, []);
 
   useEffect(() => {
@@ -390,8 +423,11 @@ export default function MapScreen({ navigation, route, user: propUser }) {
     setAssignment(siteItem.assignment);
     siteRef.current = resolved;
     assignmentRef.current = siteItem.assignment;
+    if (location) {
+      calculateDistance(location, resolved);
+    }
     if (resolved.lat && resolved.lng && webViewRef.current) {
-      const js = `if (window.updateSite) { window.updateSite(${resolved.lat}, ${resolved.lng}, ${resolved.radius}, ${JSON.stringify(resolved.name)}, ${isOnSite}); } if (window.centerOnSite) { window.centerOnSite(); } true;`;
+      const js = `if (window.updateSite) { window.updateSite(${resolved.lat}, ${resolved.lng}, ${resolved.radius}, ${JSON.stringify(resolved.name)}, ${isOnSite}); } if (window.centerSite) { window.centerSite(); } true;`;
       webViewRef.current.injectJavaScript(js);
     }
   };
@@ -438,7 +474,7 @@ export default function MapScreen({ navigation, route, user: propUser }) {
         });
       }
 
-      const resolvedSite = resolveSiteDetails(matchedSiteDoc, cleanName, asgDoc);
+      const resolvedSite = resolveSiteDetails(matchedSiteDoc, cleanName, asgDoc, emp);
       const composedShift = resolveShift(asgDoc, emp);
       const asgDate = asgDoc?.assignDate || asgDoc?.assignedAt || new Date().toISOString().split('T')[0];
       const priority = asgDoc?.priority || 'Medium';
@@ -453,7 +489,7 @@ export default function MapScreen({ navigation, route, user: propUser }) {
         address: resolvedSite?.address || asgDoc?.siteAddress || asgDoc?.address || '',
         latitude: resolvedSite?.latitude,
         longitude: resolvedSite?.longitude,
-        geofenceRadius: resolvedSite?.radius || 200,
+        geofenceRadius: resolvedSite?.radius || 100,
         shift: composedShift,
         status: status,
         priority: priority,
@@ -465,7 +501,7 @@ export default function MapScreen({ navigation, route, user: propUser }) {
         id: cardAsg.id,
         siteName: cleanName,
         address: resolvedSite?.address || 'Registered Worksite Address',
-        radius: resolvedSite?.radius || 200,
+        radius: resolvedSite?.radius || 100,
         latitude: resolvedSite?.latitude,
         longitude: resolvedSite?.longitude,
         shift: composedShift,
@@ -477,8 +513,29 @@ export default function MapScreen({ navigation, route, user: propUser }) {
       });
     };
 
+    const isFixedEmp = Boolean(
+      emp && (
+        emp.workType === 'Fixed Site Employee' ||
+        emp.type === 'Fixed Site' ||
+        String(emp.workType || emp.type || '').toLowerCase().includes('fixed')
+      )
+    );
+
+    if (isFixedEmp && emp) {
+      if (Array.isArray(emp.assignedSites) && emp.assignedSites.length > 0) {
+        emp.assignedSites.forEach(s => addSiteItem(s, null, true));
+      } else if (emp.assignedSite && emp.assignedSite.includes(',')) {
+        emp.assignedSite.split(',').forEach(s => addSiteItem(s, null, true));
+      } else {
+        const profileSite = (emp.assignedSite || emp.site || emp.assignedSiteName || '').trim();
+        if (profileSite && profileSite.toLowerCase() !== 'unassigned' && profileSite.toLowerCase() !== 'none') {
+          addSiteItem(profileSite, null, true);
+        }
+      }
+    }
+
     // 1. Process matching assignment docs
-    if (empAsg.length > 0) {
+    if (gatheredSites.length === 0 && empAsg.length > 0) {
       for (const asg of empAsg) {
         if (Array.isArray(asg.assignedSites) && asg.assignedSites.length > 0) {
           asg.assignedSites.forEach(s => addSiteItem(s, asg));
@@ -491,7 +548,7 @@ export default function MapScreen({ navigation, route, user: propUser }) {
     }
 
     // 2. Loose fallback if empAsg was empty
-    if (gatheredSites.length === 0 && cleanDocs.length > 0) {
+    if (gatheredSites.length === 0 && !isFixedEmp && cleanDocs.length > 0) {
       const looseMatch = cleanDocs.find(a => {
         const asgSite = (a.site || a.siteName || '').trim().toLowerCase();
         const empSite = (emp?.assignedSite || emp?.site || '').trim().toLowerCase();
@@ -646,26 +703,67 @@ export default function MapScreen({ navigation, route, user: propUser }) {
     );
   };
 
-  const calculateDistance = (currentCoords) => {
-    const sLat = site?.lat || site?.latitude;
-    const sLng = site?.lng || site?.longitude;
+  const calculateDistance = (currentCoords, targetSite = siteRef.current || site) => {
+    const sLat = parseFloat(targetSite?.lat ?? targetSite?.latitude);
+    const sLng = parseFloat(targetSite?.lng ?? targetSite?.longitude);
+    const uLat = parseFloat(currentCoords?.latitude);
+    const uLng = parseFloat(currentCoords?.longitude);
 
-    if (sLat && sLng && currentCoords) {
+    if (!isNaN(sLat) && !isNaN(sLng) && !isNaN(uLat) && !isNaN(uLng)) {
       const R = 6371e3;
-      const φ1 = currentCoords.latitude * Math.PI/180;
+      const φ1 = uLat * Math.PI/180;
       const φ2 = sLat * Math.PI/180;
-      const Δφ = (sLat - currentCoords.latitude) * Math.PI/180;
-      const Δλ = (sLng - currentCoords.longitude) * Math.PI/180;
+      const Δφ = (sLat - uLat) * Math.PI/180;
+      const Δλ = (sLng - uLng) * Math.PI/180;
       const a = Math.sin(Δφ/2) * Math.sin(Δφ/2) + Math.cos(φ1) * Math.cos(φ2) * Math.sin(Δλ/2) * Math.sin(Δλ/2);
       const c = 2 * Math.atan2(Math.sqrt(a), Math.sqrt(1-a));
-      setDistance(Math.round(R * c));
+      const d = Math.round(R * c);
+      setDistance(d);
+      return d;
     }
+    return null;
   };
+
+  // Recompute distance & sync WebView whenever location or site updates
+  useEffect(() => {
+    if (location && site) {
+      const d = calculateDistance(location, site);
+      const rad = site?.radius ? parseInt(site.radius.toString().replace(/[^\d.]/g, '')) || 200 : 200;
+      const accMargin = Math.min(Math.max(Number(location?.accuracy) || 0, 0), 40);
+      const onSiteNow = d !== null && d <= (rad + accMargin);
+      if (site.lat && site.lng && webViewRef.current) {
+        const js = `if (window.updateUserLocation) { window.updateUserLocation(${location.latitude}, ${location.longitude}); } if (window.updateSite) { window.updateSite(${site.lat}, ${site.lng}, ${rad}, ${JSON.stringify(site.name)}, ${onSiteNow}); } true;`;
+        webViewRef.current.injectJavaScript(js);
+      }
+    }
+  }, [location, site]);
 
   const siteLat = site?.lat || site?.latitude || 10.3157;
   const siteLng = site?.lng || site?.longitude || 123.8854;
-  const siteRadius = site?.radius ? parseInt(site.radius.toString().replace('m', '')) : 200;
-  const isOnSite = distance !== null && distance <= siteRadius;
+  const siteRadius = site?.radius ? parseInt(site.radius.toString().replace(/[^\d.]/g, '')) || 200 : 200;
+
+  // Compute live distance directly from current state so badge & label never lag behind
+  const liveDistance = (() => {
+    const sLat = parseFloat(site?.lat ?? site?.latitude);
+    const sLng = parseFloat(site?.lng ?? site?.longitude);
+    const uLat = parseFloat(location?.latitude);
+    const uLng = parseFloat(location?.longitude);
+    if (!isNaN(sLat) && !isNaN(sLng) && !isNaN(uLat) && !isNaN(uLng)) {
+      const R = 6371e3;
+      const φ1 = uLat * Math.PI/180;
+      const φ2 = sLat * Math.PI/180;
+      const Δφ = (sLat - uLat) * Math.PI/180;
+      const Δλ = (sLng - uLng) * Math.PI/180;
+      const a = Math.sin(Δφ/2) * Math.sin(Δφ/2) + Math.cos(φ1) * Math.cos(φ2) * Math.sin(Δλ/2) * Math.sin(Δλ/2);
+      const c = 2 * Math.atan2(Math.sqrt(a), Math.sqrt(1-a));
+      return Math.round(R * c);
+    }
+    return distance;
+  })();
+
+  const effectiveDistance = liveDistance !== null ? liveDistance : distance;
+  const accuracyMargin = Math.min(Math.max(Number(location?.accuracy) || 0, 0), 40);
+  const isOnSite = effectiveDistance !== null && effectiveDistance <= (siteRadius + accuracyMargin);
 
   const centerOnSite = () => {
     webViewRef.current?.injectJavaScript('if (window.centerSite) { window.centerSite(); } true;');
@@ -754,7 +852,7 @@ export default function MapScreen({ navigation, route, user: propUser }) {
             <View style={{ flex: 1 }}>
               <Text style={styles.navHUDTitle}>Navigating to {typeof site?.name === 'string' ? site.name : (typeof assignment?.site === 'string' ? assignment.site : 'Site')}</Text>
               <Text style={styles.navHUDSub}>
-                {distance !== null ? `${distance} meters away` : 'Calculating route...'} • Live Guided Navigation
+                {effectiveDistance !== null ? `${effectiveDistance} meters away` : 'Calculating route...'} • Live Guided Navigation
               </Text>
             </View>
             <TouchableOpacity style={styles.stopNavBtn} onPress={toggleNavigation}>
@@ -841,7 +939,7 @@ export default function MapScreen({ navigation, route, user: propUser }) {
               <View style={{ flex: 1 }}>
                 <Text style={styles.siteName}>{typeof site?.name === 'string' ? site.name : (typeof assignment?.site === 'string' ? assignment.site : 'Assigned Site')}</Text>
                 <Text style={styles.distanceText} numberOfLines={1}>
-                  {distance !== null ? `${distance}m away` : 'Locating GPS...'} • Geofence Radius: {siteRadius}m
+                  {effectiveDistance !== null ? `${effectiveDistance}m away` : 'Locating GPS...'} • Geofence Radius: {siteRadius}m
                 </Text>
               </View>
               <View style={[styles.badge, isOnSite ? styles.onSiteBadge : styles.offSiteBadge]}>

@@ -16,7 +16,7 @@ import { evaluateGeofence } from '../utils/geo';
  * @param {object|Array} site  Single site { lat, lng, radius?, polygon?, name? } or Array of site objects
  * @returns {{ ok:boolean, distanceToBoundary:number, distanceToCenter:number|null, reason:string, matchedSite?:object }}
  */
-export function verifyGeofence(lat, lng, site) {
+export function verifyGeofence(lat, lng, site, accuracy = 0) {
   const sitesList = Array.isArray(site)
     ? site
     : (site?.assignedSitesList && Array.isArray(site.assignedSitesList) ? site.assignedSitesList : [site]);
@@ -32,18 +32,26 @@ export function verifyGeofence(lat, lng, site) {
     };
   }
 
+  const accuracyMargin = Math.min(Math.max(Number(accuracy) || 0, 0), 40);
   let bestResult = null;
 
   for (const s of validSites) {
+    const rawRad = s.radius != null
+      ? parseFloat(String(s.radius).replace(/[^0-9.]/g, ''))
+      : NaN;
     const sObj = {
       ...s,
       lat: s.lat != null ? Number(s.lat) : (s.latitude != null ? Number(s.latitude) : null),
       lng: s.lng != null ? Number(s.lng) : (s.longitude != null ? Number(s.longitude) : null),
+      radius: Number.isFinite(rawRad) && rawRad > 0 ? rawRad : 100,
     };
     const r = evaluateGeofence(lat, lng, sObj);
-    if (r.inside) {
+    const isEffectivelyInside = r.inside || r.distanceToBoundary <= accuracyMargin;
+    if (isEffectivelyInside) {
       return {
         ...r,
+        inside: true,
+        distanceToBoundary: 0,
         ok: true,
         matchedSite: sObj,
         reason: `Inside the geofence for "${sObj.name || 'your site'}".`,

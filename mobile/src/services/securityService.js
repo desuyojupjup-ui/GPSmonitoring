@@ -186,15 +186,42 @@ export async function runPreAttendanceChecks({ employee, site, allSites = [], ac
   const empWorkType = (employee?.workType || employee?.employeeType || employee?.type || '').toString().toLowerCase();
   const isFieldEmployee = empWorkType.includes('mobile') || empWorkType.includes('field');
 
+  const parseRad = (v) => {
+    if (v === null || v === undefined) return 0;
+    const n = parseFloat(String(v).replace(/[^0-9.]/g, ''));
+    return Number.isFinite(n) && n > 0 ? n : 0;
+  };
+  const empRad = parseRad(employee?.geofenceRadius);
+
+  // Enrich assigned site with authoritative coordinates/radius from allSites if needed
+  let effectiveSite = site;
+  if (site && !Array.isArray(site) && Array.isArray(allSites) && allSites.length > 0) {
+    const targetName = String(site.name || site.siteName || employee?.assignedSite || '').trim().toLowerCase();
+    const matchedDbSite = targetName
+      ? allSites.find(s => {
+          const sName = String(s.name || s.siteName || s.id || '').trim().toLowerCase();
+          return sName === targetName || sName.includes(targetName) || targetName.includes(sName);
+        })
+      : null;
+    const mergedRadius = Math.max(parseRad(site.radius), parseRad(matchedDbSite?.radius), empRad) || 100;
+    effectiveSite = {
+      ...(matchedDbSite || {}),
+      ...site,
+      lat: site.lat ?? site.latitude ?? matchedDbSite?.lat ?? matchedDbSite?.latitude ?? null,
+      lng: site.lng ?? site.longitude ?? matchedDbSite?.lng ?? matchedDbSite?.longitude ?? null,
+      radius: mergedRadius,
+    };
+  }
+
   // Verify against assigned site(s)
-  const geo = verifyGeofence(latest.latitude, latest.longitude, site);
+  const geo = verifyGeofence(latest.latitude, latest.longitude, effectiveSite, latest.accuracy);
   report.geofenceOk = geo.ok;
   report.distanceToBoundary = geo.distanceToBoundary;
   report.matchedSite = geo.matchedSite || null;
 
   // If not inside assigned site, check if physically located inside any registered site
   if (!report.matchedSite && Array.isArray(allSites) && allSites.length > 0) {
-    const allSitesGeo = verifyGeofence(latest.latitude, latest.longitude, allSites);
+    const allSitesGeo = verifyGeofence(latest.latitude, latest.longitude, allSites, latest.accuracy);
     if (allSitesGeo.ok && allSitesGeo.matchedSite) {
       report.matchedSite = allSitesGeo.matchedSite;
       if (!isFieldEmployee) {
