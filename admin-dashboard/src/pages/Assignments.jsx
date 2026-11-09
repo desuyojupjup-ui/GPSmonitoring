@@ -102,7 +102,7 @@ const STATUS_STYLE = {
   'Completed':         { background: '#D1FAE5', color: '#065F46', dot: '#10B981' },
   'Cancelled':         { background: '#FEE2E2', color: '#991B1B', dot: '#EF4444' },
   'Missed Shift':      { background: '#FEE2E2', color: '#B91C1C', dot: '#DC2626' },
-  'Missing Check-Out': { background: '#FEF3C7', color: '#B45309', dot: '#F59E0B' },
+  'Missed Check-Out': { background: '#FEF3C7', color: '#B45309', dot: '#F59E0B' },
 };
 
 const PRIORITY_COLOR = {
@@ -345,7 +345,7 @@ export function getAssignmentAttendanceInfo(asg, attendanceList = []) {
 export function isAssignmentEnded(asg, now = new Date()) {
   if (!asg) return false;
   const status = (asg.status || '').toString().trim().toLowerCase();
-  if (status === 'completed' || status === 'cancelled' || status === 'archived' || status === 'expired' || status === 'missed shift' || status === 'missing check-out') {
+  if (status === 'completed' || status === 'cancelled' || status === 'archived' || status === 'expired' || status === 'missed shift' || status === 'missed check-out') {
     return true;
   }
 
@@ -422,7 +422,7 @@ export function resolveAssignmentStatus(asg, attendanceList = [], now = new Date
     }
     // If employee checked in but did not check out after shift ended
     if (attInfo.hasCheckIn && !attInfo.hasCheckOut) {
-      return 'Missing Check-Out';
+      return 'Missed Check-Out';
     }
     // If employee did NOT check in within shift schedule date and time
     return 'Missed Shift';
@@ -589,7 +589,7 @@ export default function Assignments() {
   // Background auto-sync & AI Anomaly Detection:
   // Evaluates assignments whose shift schedule has passed or is ongoing.
   // 1. If employee did NOT check in: Status is 'Missed Shift', generates High severity Anomaly Alert.
-  // 2. If employee checked in but did NOT check out after shift ended: Status is 'Missing Check-Out', generates Medium severity Anomaly Alert.
+  // 2. If employee checked in but did NOT check out after shift ended: Status is 'Missed Check-Out', generates Medium severity Anomaly Alert.
   // 3. Only if checked in AND checked out: Status is 'Completed'.
   useEffect(() => {
     const currentData = dataRef.current;
@@ -617,13 +617,13 @@ export default function Assignments() {
         const siteName = asg.site || asg.siteName || 'Assigned Site';
         const shiftStr = asg.shift || asg.shiftTime || 'Scheduled Shift';
 
-        // ── 1. Shift has ENDED ──
+        // â”€â”€ 1. Shift has ENDED â”€â”€
         if (ended) {
           let targetStatus = 'Completed';
           if (!attInfo.hasCheckIn) {
             targetStatus = 'Missed Shift';
           } else if (!attInfo.hasCheckOut) {
-            targetStatus = 'Missing Check-Out';
+            targetStatus = 'Missed Check-Out';
           }
 
           // If Missed Shift, create record in Attendance only once
@@ -646,7 +646,7 @@ export default function Assignments() {
                 site: siteName,
                 date: dateStr,
                 check_in: 'Missed (No Check-in)',
-                check_out: '—',
+                check_out: 'â€”',
                 timeIn: null,
                 timeOut: null,
                 duration: '0m',
@@ -791,7 +791,7 @@ export default function Assignments() {
             }
           }
         } else if (!upcoming) {
-          // ── 2. Shift is ONGOING (past start time) ──
+          // â”€â”€ 2. Shift is ONGOING (past start time) â”€â”€
           const shiftTimes = getAssignmentShiftTimes(asg);
           if (shiftTimes.start && dateObj) {
             const startDateTime = new Date(dateObj.year, dateObj.month, dateObj.day, shiftTimes.start.hours, shiftTimes.start.minutes, 0, 0);
@@ -834,7 +834,7 @@ export default function Assignments() {
           }
         }
 
-        // ── 3. Auto-resolve anomalies if employee checks in / checks out ──
+        // â”€â”€ 3. Auto-resolve anomalies if employee checks in / checks out â”€â”€
         if (attInfo.hasCheckIn && dateStr) {
           const checkInAlertId = `anomaly_no_checkin_${asg.id}_${dateStr}`;
           if (syncedAlertsRef.current.has(checkInAlertId) && !resolvedAlertsRef.current.has(checkInAlertId)) {
@@ -870,7 +870,7 @@ export default function Assignments() {
   const upcomingCount   = data.filter(d => resolveAssignmentStatus(d, attendance) === 'Upcoming').length;
   const completedCount  = data.filter(d => resolveAssignmentStatus(d, attendance) === 'Completed').length;
   const missedCount     = data.filter(d => resolveAssignmentStatus(d, attendance) === 'Missed Shift').length;
-  const missingOutCount = data.filter(d => resolveAssignmentStatus(d, attendance) === 'Missing Check-Out').length;
+  const missingOutCount = data.filter(d => resolveAssignmentStatus(d, attendance) === 'Missed Check-Out').length;
   const cancelledCount  = data.filter(d => resolveAssignmentStatus(d, attendance) === 'Cancelled').length;
 
   const asgStatusChartData = [
@@ -878,7 +878,7 @@ export default function Assignments() {
     { name: 'Upcoming', value: upcomingCount, color: '#F59E0B', pct: ((upcomingCount / totalAssignments) * 100).toFixed(0) },
     { name: 'Completed', value: completedCount, color: '#10B981', pct: ((completedCount / totalAssignments) * 100).toFixed(0) },
     ...(missedCount > 0 ? [{ name: 'Missed Shift', value: missedCount, color: '#DC2626', pct: ((missedCount / totalAssignments) * 100).toFixed(0) }] : []),
-    ...(missingOutCount > 0 ? [{ name: 'Missing Check-Out', value: missingOutCount, color: '#F59E0B', pct: ((missingOutCount / totalAssignments) * 100).toFixed(0) }] : []),
+    ...(missingOutCount > 0 ? [{ name: 'Missed Check-Out', value: missingOutCount, color: '#F59E0B', pct: ((missingOutCount / totalAssignments) * 100).toFixed(0) }] : []),
     { name: 'Cancelled', value: cancelledCount, color: '#EF4444', pct: ((cancelledCount / totalAssignments) * 100).toFixed(0) },
   ];
 
@@ -1292,7 +1292,7 @@ export default function Assignments() {
     { label: 'Upcoming', icon: <Clock size={14}/> },
     { label: 'Completed', icon: <CheckCircle size={14}/> },
     { label: 'Missed Shift', icon: <AlertTriangle size={14}/> },
-    { label: 'Missing Check-Out', icon: <Clock size={14}/> },
+    { label: 'Missed Check-Out', icon: <Clock size={14}/> },
     { label: 'Cancelled', icon: <XCircle size={14}/> },
   ].map(({ label, icon }) => {
     const count = data.filter(d => resolveAssignmentStatus(d, attendance) === label).length;
@@ -1401,10 +1401,10 @@ export default function Assignments() {
                               </div>
                             );
                           }
-                          return <span style={{ whiteSpace: 'nowrap' }}>{row.site || '—'}</span>;
+                          return <span style={{ whiteSpace: 'nowrap' }}>{row.site || 'â€”'}</span>;
                         })()}
                       </td>
-                      <td style={{ padding: '12px 16px', color: '#6B7280', whiteSpace: 'nowrap' }}>{row.shift || '—'}</td>
+                      <td style={{ padding: '12px 16px', color: '#6B7280', whiteSpace: 'nowrap' }}>{row.shift || 'â€”'}</td>
                       <td style={{ padding: '12px 16px', fontWeight: 700, color: PRIORITY_COLOR[row.priority] || '#374151', whiteSpace: 'nowrap' }}>{row.priority}</td>
                       <td style={{ padding: '12px 16px', whiteSpace: 'nowrap' }}>
                         {(() => {
@@ -1419,7 +1419,7 @@ export default function Assignments() {
                         })()}
                       </td>
                       <td style={{ padding: '12px 16px', color: '#6B7280', fontSize: 11, whiteSpace: 'nowrap' }}>
-                        {row.assignDate && <div style={{ fontWeight: 600, color: '#374151', marginBottom: 2 }}>📅 {row.assignDate}</div>}
+                        {row.assignDate && <div style={{ fontWeight: 600, color: '#374151', marginBottom: 2 }}>ðŸ“… {row.assignDate}</div>}
                         <div style={{ color: '#9CA3AF' }}>{row.created}</div>
                       </td>
                       <td style={{ padding: '10px 16px', whiteSpace: 'nowrap' }}>
@@ -1473,14 +1473,14 @@ export default function Assignments() {
                 {/* Empty Filler Rows */}
                 {emptyRowsCount > 0 && Array.from({ length: emptyRowsCount }).map((_, idx) => (
                   <tr key={`empty-row-${idx}`} style={{ height: 38, borderBottom: '1px dashed #F8FAFC' }}>
-                    <td style={{ padding: '8px 16px', color: '#E2E8F0', fontSize: 11, textAlign: 'center' }}>—</td>
-                    <td style={{ padding: '8px 16px', color: '#E2E8F0', fontSize: 11 }}>—</td>
-                    <td style={{ padding: '8px 16px', color: '#E2E8F0', fontSize: 11 }}>—</td>
-                    <td style={{ padding: '8px 16px', color: '#E2E8F0', fontSize: 11 }}>—</td>
-                    <td style={{ padding: '8px 16px', color: '#E2E8F0', fontSize: 11 }}>—</td>
-                    <td style={{ padding: '8px 16px', color: '#E2E8F0', fontSize: 11 }}>—</td>
-                    <td style={{ padding: '8px 16px', color: '#E2E8F0', fontSize: 11 }}>—</td>
-                    <td style={{ padding: '8px 16px', color: '#E2E8F0', fontSize: 11 }}>—</td>
+                    <td style={{ padding: '8px 16px', color: '#E2E8F0', fontSize: 11, textAlign: 'center' }}>â€”</td>
+                    <td style={{ padding: '8px 16px', color: '#E2E8F0', fontSize: 11 }}>â€”</td>
+                    <td style={{ padding: '8px 16px', color: '#E2E8F0', fontSize: 11 }}>â€”</td>
+                    <td style={{ padding: '8px 16px', color: '#E2E8F0', fontSize: 11 }}>â€”</td>
+                    <td style={{ padding: '8px 16px', color: '#E2E8F0', fontSize: 11 }}>â€”</td>
+                    <td style={{ padding: '8px 16px', color: '#E2E8F0', fontSize: 11 }}>â€”</td>
+                    <td style={{ padding: '8px 16px', color: '#E2E8F0', fontSize: 11 }}>â€”</td>
+                    <td style={{ padding: '8px 16px', color: '#E2E8F0', fontSize: 11 }}>â€”</td>
                   </tr>
                 ))}
               </tbody>
@@ -1742,7 +1742,7 @@ export default function Assignments() {
         </div>
       </div>
 
-      {/* ── Modern Add/Edit Assignment Modal ── */}
+      {/* â”€â”€ Modern Add/Edit Assignment Modal â”€â”€ */}
       {modal && (
         <div style={{
           position: 'fixed',
@@ -1849,7 +1849,7 @@ export default function Assignments() {
                             cursor: 'pointer'
                           }}
                         >
-                          <option value="">— Select Field Employee —</option>
+                          <option value="">â€” Select Field Employee â€”</option>
                           {fieldEmployees.map(e => (
                             <option key={e.id} value={e.name}>{e.name} ({e.email || 'Field Staff'})</option>
                           ))}
@@ -1984,7 +1984,7 @@ export default function Assignments() {
 
                       <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginTop: 10 }}>
                         <span style={{ fontSize: 11, color: '#64748B' }}>
-                          ✓ Mobile employee can check in/out at any assigned site.
+                          âœ“ Mobile employee can check in/out at any assigned site.
                         </span>
                         <div style={{ display: 'flex', gap: 8 }}>
                           <button
@@ -2001,7 +2001,7 @@ export default function Assignments() {
                           >
                             Select All
                           </button>
-                          <span style={{ color: '#CBD5E1' }}>•</span>
+                          <span style={{ color: '#CBD5E1' }}>â€¢</span>
                           <button
                             type="button"
                             onClick={() => {

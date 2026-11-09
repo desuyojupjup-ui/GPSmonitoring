@@ -875,7 +875,7 @@ export default function AnomalyAlertsScreen({ navigation, route, user: propUser 
 function categorizeAnomaly(type = '') {
   const t = type.toLowerCase();
   if (t.includes('selfie') || t.includes('facial') || t.includes('verification')) return 'Missed Selfie Verification';
-  if (t.includes('missed shift') || t.includes('missing check-out') || t.includes('no shift check-in') || t.includes('check-in') || t.includes('check in') || t.includes('attendance') || t.includes('shift') || t.includes('time') || t.includes('clock')) return 'Shift & Attendance Anomaly';
+  if (t.includes('missed shift') || t.includes('missing check-out') || t.includes('missed check-out') || t.includes('no shift check-in') || t.includes('check-in') || t.includes('check in') || t.includes('attendance') || t.includes('shift') || t.includes('time') || t.includes('clock')) return 'Shift & Attendance Anomaly';
   if (t.includes('geofence') || t.includes('unauthorized') || t.includes('boundary') || t.includes('perimeter')) return 'Fixed Geofence Boundary Breach';
   if (t.includes('location') || t.includes('jump') || t.includes('mock') || t.includes('spoof')) return 'Location Discrepancy';
   if (t.includes('vpn') || t.includes('proxy') || t.includes('root') || t.includes('jailbreak')) return 'Device Security Alert';
