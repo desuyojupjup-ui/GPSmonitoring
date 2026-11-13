@@ -617,7 +617,7 @@ export default function Assignments() {
         const siteName = asg.site || asg.siteName || 'Assigned Site';
         const shiftStr = asg.shift || asg.shiftTime || 'Scheduled Shift';
 
-        // â”€â”€ 1. Shift has ENDED â”€â”€
+        // ── 1. Shift has ENDED ──
         if (ended) {
           let targetStatus = 'Completed';
           if (!attInfo.hasCheckIn) {
@@ -646,7 +646,7 @@ export default function Assignments() {
                 site: siteName,
                 date: dateStr,
                 check_in: 'Missed (No Check-in)',
-                check_out: 'â€”',
+                check_out: '—',
                 timeIn: null,
                 timeOut: null,
                 duration: '0m',
@@ -791,7 +791,7 @@ export default function Assignments() {
             }
           }
         } else if (!upcoming) {
-          // â”€â”€ 2. Shift is ONGOING (past start time) â”€â”€
+          // ── 2. Shift is ONGOING (past start time) ──
           const shiftTimes = getAssignmentShiftTimes(asg);
           if (shiftTimes.start && dateObj) {
             const startDateTime = new Date(dateObj.year, dateObj.month, dateObj.day, shiftTimes.start.hours, shiftTimes.start.minutes, 0, 0);
@@ -834,7 +834,7 @@ export default function Assignments() {
           }
         }
 
-        // â”€â”€ 3. Auto-resolve anomalies if employee checks in / checks out â”€â”€
+        // ── 3. Auto-resolve anomalies if employee checks in / checks out ──
         if (attInfo.hasCheckIn && dateStr) {
           const checkInAlertId = `anomaly_no_checkin_${asg.id}_${dateStr}`;
           if (syncedAlertsRef.current.has(checkInAlertId) && !resolvedAlertsRef.current.has(checkInAlertId)) {
@@ -1401,10 +1401,10 @@ export default function Assignments() {
                               </div>
                             );
                           }
-                          return <span style={{ whiteSpace: 'nowrap' }}>{row.site || 'â€”'}</span>;
+                          return <span style={{ whiteSpace: 'nowrap' }}>{row.site || '—'}</span>;
                         })()}
                       </td>
-                      <td style={{ padding: '12px 16px', color: '#6B7280', whiteSpace: 'nowrap' }}>{row.shift || 'â€”'}</td>
+                      <td style={{ padding: '12px 16px', color: '#6B7280', whiteSpace: 'nowrap' }}>{row.shift || '—'}</td>
                       <td style={{ padding: '12px 16px', fontWeight: 700, color: PRIORITY_COLOR[row.priority] || '#374151', whiteSpace: 'nowrap' }}>{row.priority}</td>
                       <td style={{ padding: '12px 16px', whiteSpace: 'nowrap' }}>
                         {(() => {
@@ -1419,7 +1419,7 @@ export default function Assignments() {
                         })()}
                       </td>
                       <td style={{ padding: '12px 16px', color: '#6B7280', fontSize: 11, whiteSpace: 'nowrap' }}>
-                        {row.assignDate && <div style={{ fontWeight: 600, color: '#374151', marginBottom: 2 }}>ðŸ“… {row.assignDate}</div>}
+                        {row.assignDate && <div style={{ fontWeight: 600, color: '#374151', marginBottom: 2 }}>📅 {row.assignDate}</div>}
                         <div style={{ color: '#9CA3AF' }}>{row.created}</div>
                       </td>
                       <td style={{ padding: '10px 16px', whiteSpace: 'nowrap' }}>
@@ -1473,14 +1473,14 @@ export default function Assignments() {
                 {/* Empty Filler Rows */}
                 {emptyRowsCount > 0 && Array.from({ length: emptyRowsCount }).map((_, idx) => (
                   <tr key={`empty-row-${idx}`} style={{ height: 38, borderBottom: '1px dashed #F8FAFC' }}>
-                    <td style={{ padding: '8px 16px', color: '#E2E8F0', fontSize: 11, textAlign: 'center' }}>â€”</td>
-                    <td style={{ padding: '8px 16px', color: '#E2E8F0', fontSize: 11 }}>â€”</td>
-                    <td style={{ padding: '8px 16px', color: '#E2E8F0', fontSize: 11 }}>â€”</td>
-                    <td style={{ padding: '8px 16px', color: '#E2E8F0', fontSize: 11 }}>â€”</td>
-                    <td style={{ padding: '8px 16px', color: '#E2E8F0', fontSize: 11 }}>â€”</td>
-                    <td style={{ padding: '8px 16px', color: '#E2E8F0', fontSize: 11 }}>â€”</td>
-                    <td style={{ padding: '8px 16px', color: '#E2E8F0', fontSize: 11 }}>â€”</td>
-                    <td style={{ padding: '8px 16px', color: '#E2E8F0', fontSize: 11 }}>â€”</td>
+                    <td style={{ padding: '8px 16px', color: '#E2E8F0', fontSize: 11, textAlign: 'center' }}>—</td>
+                    <td style={{ padding: '8px 16px', color: '#E2E8F0', fontSize: 11 }}>—</td>
+                    <td style={{ padding: '8px 16px', color: '#E2E8F0', fontSize: 11 }}>—</td>
+                    <td style={{ padding: '8px 16px', color: '#E2E8F0', fontSize: 11 }}>—</td>
+                    <td style={{ padding: '8px 16px', color: '#E2E8F0', fontSize: 11 }}>—</td>
+                    <td style={{ padding: '8px 16px', color: '#E2E8F0', fontSize: 11 }}>—</td>
+                    <td style={{ padding: '8px 16px', color: '#E2E8F0', fontSize: 11 }}>—</td>
+                    <td style={{ padding: '8px 16px', color: '#E2E8F0', fontSize: 11 }}>—</td>
                   </tr>
                 ))}
               </tbody>
@@ -1742,7 +1742,7 @@ export default function Assignments() {
         </div>
       </div>
 
-      {/* â”€â”€ Modern Add/Edit Assignment Modal â”€â”€ */}
+      {/* ── Modern Add/Edit Assignment Modal ── */}
       {modal && (
         <div style={{
           position: 'fixed',
@@ -1849,7 +1849,7 @@ export default function Assignments() {
                             cursor: 'pointer'
                           }}
                         >
-                          <option value="">â€” Select Field Employee â€”</option>
+                          <option value="">— Select Field Employee —</option>
                           {fieldEmployees.map(e => (
                             <option key={e.id} value={e.name}>{e.name} ({e.email || 'Field Staff'})</option>
                           ))}
@@ -1984,7 +1984,7 @@ export default function Assignments() {
 
                       <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginTop: 10 }}>
                         <span style={{ fontSize: 11, color: '#64748B' }}>
-                          âœ“ Mobile employee can check in/out at any assigned site.
+                          ✓ Mobile employee can check in/out at any assigned site.
                         </span>
                         <div style={{ display: 'flex', gap: 8 }}>
                           <button
@@ -2001,7 +2001,7 @@ export default function Assignments() {
                           >
                             Select All
                           </button>
-                          <span style={{ color: '#CBD5E1' }}>â€¢</span>
+                          <span style={{ color: '#CBD5E1' }}>•</span>
                           <button
                             type="button"
                             onClick={() => {

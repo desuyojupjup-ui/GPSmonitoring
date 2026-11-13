@@ -73,6 +73,14 @@ function getInitials(name) {
   return name.split(' ').map(n => n[0]).join('').slice(0, 2).toUpperCase();
 }
 
+function formatMinutesToHoursMins(val) {
+  const mins = Math.round(Number(val) || 0);
+  if (mins <= 0) return '';
+  const h = Math.floor(mins / 60);
+  const m = mins % 60;
+  return h > 0 ? `${h}h ${m}m` : `${m}m`;
+}
+
 export default function Attendance() {
   const [attendance, setAttendance] = useState([]);
   const [assignments, setAssignments] = useState([]);
@@ -148,7 +156,7 @@ export default function Attendance() {
     };
 
     const formatTsInfo = (ts) => {
-      if (!ts) return { time: 'â€”', date: '', full: 'â€”' };
+      if (!ts) return { time: '—', date: '', full: '—' };
       if (typeof ts === 'string' && /^\d{1,2}:\d{2}(\s?[APap][Mm])?$/.test(ts.trim())) {
         return { time: ts.trim(), date: '', full: ts.trim() };
       }
@@ -158,7 +166,7 @@ export default function Attendance() {
         const dateStr = d.toLocaleDateString('en-US', { month: 'short', day: 'numeric', year: 'numeric' });
         return { time: timeStr, date: dateStr, full: `${dateStr}, ${timeStr}` };
       }
-      return { time: typeof ts === 'string' && ts !== 'â€”' ? ts : 'â€”', date: '', full: typeof ts === 'string' && ts !== 'â€”' ? ts : 'â€”' };
+      return { time: typeof ts === 'string' && ts !== '—' ? ts : '—', date: '', full: typeof ts === 'string' && ts !== '—' ? ts : '—' };
     };
 
     const getDuration = (i, o) => {
@@ -275,7 +283,7 @@ export default function Attendance() {
     }
 
     const activeAddress = raw.actualLocation || raw.locationAddress || raw.address;
-    let displaySite = matchedSiteName || activeAddress || raw.siteName || raw.site_name || raw.site || 'â€”';
+    let displaySite = matchedSiteName || activeAddress || raw.siteName || raw.site_name || raw.site || '—';
 
     // If marked out of fence or if raw.siteName was set to assigned site but active location was logged:
     if (activeAddress && (raw.inFence === false || displaySite === 'Unassigned Site' || displaySite.toLowerCase() === 'uc banilad')) {
@@ -285,7 +293,7 @@ export default function Attendance() {
     return {
       id:            raw.id,
       assignmentId:  raw.assignmentId || null,
-      employee_name: raw.employeeName || raw.employee_name || raw.name || raw.emp || 'â€”',
+      employee_name: raw.employeeName || raw.employee_name || raw.name || raw.emp || '—',
       site_name:     displaySite,
       active_location: activeAddress || null,
       isEarlyCheckOut,
@@ -299,7 +307,7 @@ export default function Attendance() {
       check_out:     outInfo.full,
       check_out_time: outInfo.time,
       check_out_date: outInfo.date,
-      duration:      raw.duration || (isMissed ? '0m' : getDuration(raw.timeIn || raw.checkIn || raw.check_in, raw.timeOut || raw.checkOut || raw.check_out)) || 'â€”',
+      duration:      raw.duration || (isMissed ? '0m' : getDuration(raw.timeIn || raw.checkIn || raw.check_in, raw.timeOut || raw.checkOut || raw.check_out)) || '—',
       status:        raw.status || 'On Site',
       verification:  raw.verification || (isMissed ? 'No Show' : (raw.inFence === false ? 'GPS Geofence' : 'Verified')),
       _raw:          raw,
@@ -307,7 +315,7 @@ export default function Attendance() {
   }
 
   useEffect(() => {
-    // â”€â”€ Direct sync-server polling (bypasses firebase.js chain for reliability) â”€â”€
+    // ── Direct sync-server polling (bypasses firebase.js chain for reliability) ──
     const pullFromSyncServer = async () => {
       try {
         const res = await fetch('/api/sync');
@@ -366,7 +374,7 @@ export default function Attendance() {
           setEmployees(data.employees);
         }
       } catch (e) {
-        // silent â€” fallback to onSnapshot below
+        // silent — fallback to onSnapshot below
       }
     };
 
@@ -419,7 +427,7 @@ export default function Attendance() {
     const list = attendance
       .filter(a => a && a.id && !deletedIdsRef.current.has(a.id))
       .map(a => {
-        // Checked in but never checked out after the shift ended → "Missed Check-Out" (not "Missed Shift")
+        // Checked in but never checked out after the shift ended -> "Missed Check-Out" (not "Missed Shift")
         const st = (a.status || '').toLowerCase();
         const hasIn = a.check_in && a.check_in !== '—' && !String(a.check_in).startsWith('Missed');
         const hasOut = a.check_out && a.check_out !== '—';
@@ -492,8 +500,8 @@ export default function Attendance() {
           list.push(normalizeRecord({
             id: autoId,
             assignmentId: asgId,
-            employee_name: eName || 'â€”',
-            employeeName: eName || 'â€”',
+            employee_name: eName || '—',
+            employeeName: eName || '—',
             employee_id: eId,
             employeeId: eId,
             email: eMail,
@@ -501,10 +509,10 @@ export default function Attendance() {
             siteName: siteName,
             site: siteName,
             check_in: 'Missed (No Check-in)',
-            check_in_time: 'â€”',
+            check_in_time: '—',
             check_in_date: formattedDate,
-            check_out: 'â€”',
-            check_out_time: 'â€”',
+            check_out: '—',
+            check_out_time: '—',
             check_out_date: '',
             duration: '0m',
             status: 'Missed Shift',
@@ -530,9 +538,9 @@ export default function Attendance() {
             id: autoEmpId,
             employee_name: emp.name,
             site_name: emp.assignedSiteName || emp.assignedSite || emp.org || 'Assigned Site',
-            check_in: emp.lastCheckIn ? emp.lastCheckIn : 'â€”',
-            check_out: emp.status === 'Completed' ? 'â€”' : 'â€”',
-            duration: emp.status === 'Completed' ? 'â€”' : 'On Site',
+            check_in: emp.lastCheckIn ? emp.lastCheckIn : '—',
+            check_out: emp.status === 'Completed' ? '—' : '—',
+            duration: emp.status === 'Completed' ? '—' : 'On Site',
             status: emp.status === 'On Duty' ? 'Checked In' : emp.status,
             verification: emp.geofenceStatus === 'Outside Assigned Site' ? 'GPS Geofence' : 'Verified'
           }));
@@ -713,8 +721,9 @@ export default function Attendance() {
   ];
 
   const totalEvaluated = presentCount + absentCount + lateCount;
+  const attendedComplianceScore = presentCount + (lateCount * 0.85);
   const presentRate = totalEvaluated > 0
-    ? Math.min(100, Math.round((presentCount / totalEvaluated) * 100))
+    ? Math.min(100, Math.round((attendedComplianceScore / totalEvaluated) * 100))
     : (employees.length ? 100 : 0);
 
   return (
@@ -743,7 +752,7 @@ export default function Attendance() {
         ))}
       </div>
 
-      {/* â”€â”€ Main Workspace Grid: Datatable on Left, 3 Charts Sidebar on Right â”€â”€ */}
+      {/* ── Main Workspace Grid: Datatable on Left, 3 Charts Sidebar on Right ── */}
       <div style={{ display: 'grid', gridTemplateColumns: '1fr 380px', gap: 24, alignItems: 'stretch' }}>
         
         {/* Attendance Records Datatable (Left Column) */}
@@ -863,7 +872,7 @@ export default function Attendance() {
                               fontWeight: 700,
                             }}>
                               <Clock size={11} color="#B45309" />
-                              Late Check-In{row.minutesLate ? ` (+${row.minutesLate}m)` : ''}
+                              Late Check-In{row.minutesLate ? ` (+${formatMinutesToHoursMins(row.minutesLate)})` : ''}
                             </div>
                           )}
                           {row.isEarlyCheckOut && (
@@ -881,7 +890,7 @@ export default function Attendance() {
                               fontWeight: 700,
                             }}>
                               <AlertTriangle size={11} color="#DC2626" />
-                              Early Check-Out{row.minutesEarly ? ` (-${row.minutesEarly}m)` : ''}
+                              Early Check-Out{row.minutesEarly ? ` (-${formatMinutesToHoursMins(row.minutesEarly)})` : ''}
                             </div>
                           )}
                         </td>
