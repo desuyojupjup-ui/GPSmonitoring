@@ -196,9 +196,12 @@ export function hasActiveShiftSchedule(assignment, employee, targetDate = new Da
     assignment?.shiftTime ||
     assignment?.scheduledShift ||
     assignment?.schedule ||
+    (assignment?.shiftStart && assignment?.shiftEnd ? `${assignment.shiftStart} - ${assignment.shiftEnd}` : '') ||
+    (assignment?.startTime && assignment?.endTime ? `${assignment.startTime} - ${assignment.endTime}` : '') ||
     employee?.shift ||
     employee?.scheduledShift ||
     employee?.shiftTime ||
+    (employee?.shiftStart && employee?.shiftEnd ? `${employee.shiftStart} - ${employee.shiftEnd}` : '') ||
     ''
   ).toString().trim();
 
@@ -214,17 +217,24 @@ export function hasActiveShiftSchedule(assignment, employee, targetDate = new Da
     return false;
   }
 
-  // Check recurring workDays on assignment or employee
-  const workDays = assignment?.workDays || assignment?.effectiveWorkDays || employee?.workDays;
+  // If an explicit assignment is provided, its own date / workDays governs today's schedule.
+  // Do NOT override an explicit single-date assignment (e.g., Sunday shift) with employee.workDays.
+  if (assignment) {
+    if (isAssignmentDatePassed(assignment, targetDate)) {
+      return false;
+    }
+    if (!isAssignmentActiveToday(assignment, targetDate)) {
+      return false;
+    }
+    return true;
+  }
+
+  // Fallback for profile-based schedules (Fixed Site Employees without an assignment doc)
+  const workDays = employee?.workDays;
   if (Array.isArray(workDays) && workDays.length > 0) {
     if (!isDayInWorkDays(workDays, targetDate)) {
       return false; // Today is not a scheduled workday
     }
-  }
-
-  // Check if assignment has passed or is inactive
-  if (assignment && isAssignmentDatePassed(assignment, targetDate)) {
-    return false;
   }
 
   return true;

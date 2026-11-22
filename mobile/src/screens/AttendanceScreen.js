@@ -10,7 +10,7 @@ import {
   auth, db, collection, onSnapshot, addDoc, updateDoc,
   doc, serverTimestamp, getDocs, query, orderBy, getCleanEmployeeEmail
 } from '../firebase';
-import { isMobileFieldWithoutSite, checkEarlyCheckout, checkLateCheckIn, isAttendanceRecordFlagged, calculateMonthlyAttendanceMetrics, hasActiveShiftSchedule, hasActiveSiteAssignment } from '../utils/assignmentUtils';
+import { isMobileFieldWithoutSite, checkEarlyCheckout, checkLateCheckIn, isAttendanceRecordFlagged, calculateMonthlyAttendanceMetrics, hasActiveShiftSchedule, hasActiveSiteAssignment, isAssignmentDatePassed, isAssignmentActiveToday, isAssignmentForEmployee } from '../utils/assignmentUtils';
 import { verifyGeofence } from '../services/geofence';
 import { writeSecurityEvent } from '../services/securityLogger';
 import ActionConfirmModal from '../components/ActionConfirmModal';
@@ -188,6 +188,7 @@ export default function AttendanceScreen({ navigation, route, user: propUser }) 
   const [employee, setEmployee] = useState(null);
   const [allRecords, setAllRecords] = useState([]);
   const [todayRecord, setTodayRecord] = useState(null);
+  const [activeAssignment, setActiveAssignment] = useState(null);
   const [loading, setLoading] = useState(true);
   const [refreshing, setRefreshing] = useState(false);
   const [checking, setChecking] = useState(false);
@@ -200,6 +201,7 @@ export default function AttendanceScreen({ navigation, route, user: propUser }) 
   });
 
   const employeeRef = useRef(null);
+  const activeAssignmentRef = useRef(null);
   const lastEmpKeyRef = useRef('');
   const lastAttKeyRef = useRef('');
   const currentEmail = getCleanEmployeeEmail(propUser, route?.params?.user, auth.currentUser);
@@ -230,6 +232,35 @@ export default function AttendanceScreen({ navigation, route, user: propUser }) 
     });
     return () => unsub();
   }, [currentEmail]);
+
+  // 1b. Fetch Today's Active Assignment (needed for Mobile Field Employees)
+  useEffect(() => {
+    let docs1 = [];
+    let docs2 = [];
+    const syncActiveAsg = () => {
+      const merged = new Map();
+      [...docs1, ...docs2].forEach(d => { if (d && d.id) merged.set(d.id, d); });
+      const emp = employeeRef.current || employee;
+      const matches = Array.from(merged.values()).filter(a =>
+        a && a.id !== 'asg1' &&
+        !isAssignmentDatePassed(a) &&
+        isAssignmentActiveToday(a) &&
+        isAssignmentForEmployee(a, emp, currentEmail, emp?.name)
+      );
+      const best = matches[0] || null;
+      activeAssignmentRef.current = best;
+      setActiveAssignment(best);
+    };
+    const u1 = onSnapshot(collection(db, 'Assignments'), snap => {
+      docs1 = !snap.empty ? snap.docs.map(d => ({ id: d.id, ...d.data() })) : [];
+      syncActiveAsg();
+    }, () => {});
+    const u2 = onSnapshot(collection(db, 'assignments'), snap => {
+      docs2 = !snap.empty ? snap.docs.map(d => ({ id: d.id, ...d.data() })) : [];
+      syncActiveAsg();
+    }, () => {});
+    return () => { u1(); u2(); };
+  }, [currentEmail, employee]);
 
   // 2. Fetch Attendance records – re-runs once employee is loaded
   useEffect(() => {
@@ -335,7 +366,7 @@ export default function AttendanceScreen({ navigation, route, user: propUser }) 
     if (!rec) return Alert.alert('No Record', 'No active check-in found for today.');
 
     const emp = employeeRef.current || employee;
-    if (!hasActiveShiftSchedule(null, emp)) {
+    if (!hasActiveShiftSchedule(activeAssignmentRef.current || activeAssignment, emp)) {
       Alert.alert(
         'Check-Out Blocked',
         'You cannot record check-out because you do not have an active scheduled shift for today.'
@@ -517,8 +548,9 @@ export default function AttendanceScreen({ navigation, route, user: propUser }) 
 
       try {
         if (emp.id !== 'emp_fallback') {
-          const hasAsg = hasActiveSiteAssignment(null, emp);
-          const hasSched = hasActiveShiftSchedule(null, emp);
+          const asg = activeAssignmentRef.current || activeAssignment;
+          const hasAsg = hasActiveSiteAssignment(asg, emp);
+          const hasSched = hasActiveShiftSchedule(asg, emp);
           const targetStatus = (hasAsg && hasSched) ? 'On Duty' : 'Online';
           await updateDoc(doc(db, 'employees', emp.id), {
             status: targetStatus,
@@ -543,7 +575,7 @@ export default function AttendanceScreen({ navigation, route, user: propUser }) 
     if (!rec) return Alert.alert('No Record', 'No active check-in found for today.');
 
     const emp = employeeRef.current || employee;
-    if (!hasActiveShiftSchedule(null, emp)) {
+    if (!hasActiveShiftSchedule(activeAssignmentRef.current || activeAssignment, emp)) {
       Alert.alert(
         'Check-Out Blocked',
         'You cannot record check-out because you do not have an active scheduled shift for today.'
@@ -744,10 +776,10 @@ export default function AttendanceScreen({ navigation, route, user: propUser }) 
                 <Text style={[styles.statusText, { color: '#991B1B' }]}>Missed Shift</Text>
               </View>
             ) : checkedIn ? (
-              <View style={[styles.statusBadge, { backgroundColor: checkedOut ? '#EDE9FE' : ((hasActiveSiteAssignment(null, employee) && hasActiveShiftSchedule(null, employee)) ? '#D1FAE5' : '#E0F2FE') }]}>
-                <View style={[styles.statusDot, { backgroundColor: checkedOut ? '#7C3AED' : ((hasActiveSiteAssignment(null, employee) && hasActiveShiftSchedule(null, employee)) ? '#10B981' : '#0284C7') }]} />
-                <Text style={[styles.statusText, { color: checkedOut ? '#5B21B6' : ((hasActiveSiteAssignment(null, employee) && hasActiveShiftSchedule(null, employee)) ? '#065F46' : '#0369A1') }]}>
-                  {checkedOut ? 'Completed' : ((hasActiveSiteAssignment(null, employee) && hasActiveShiftSchedule(null, employee)) ? 'On Site' : 'Recorded')}
+              <View style={[styles.statusBadge, { backgroundColor: checkedOut ? '#EDE9FE' : ((hasActiveSiteAssignment(activeAssignment, employee) && hasActiveShiftSchedule(activeAssignment, employee)) ? '#D1FAE5' : '#E0F2FE') }]}>
+                <View style={[styles.statusDot, { backgroundColor: checkedOut ? '#7C3AED' : ((hasActiveSiteAssignment(activeAssignment, employee) && hasActiveShiftSchedule(activeAssignment, employee)) ? '#10B981' : '#0284C7') }]} />
+                <Text style={[styles.statusText, { color: checkedOut ? '#5B21B6' : ((hasActiveSiteAssignment(activeAssignment, employee) && hasActiveShiftSchedule(activeAssignment, employee)) ? '#065F46' : '#0369A1') }]}>
+                  {checkedOut ? 'Completed' : ((hasActiveSiteAssignment(activeAssignment, employee) && hasActiveShiftSchedule(activeAssignment, employee)) ? 'On Site' : 'Recorded')}
                 </Text>
               </View>
             ) : null}
@@ -815,7 +847,7 @@ export default function AttendanceScreen({ navigation, route, user: propUser }) 
                 <Ionicons name="close-circle" size={18} color="#EF4444" />
                 <Text style={[styles.doneText, { color: '#EF4444' }]}>Shift missed for today</Text>
               </View>
-            ) : !hasActiveShiftSchedule(null, employee) ? (
+            ) : !hasActiveShiftSchedule(activeAssignment, employee) ? (
               <TouchableOpacity
                 style={[styles.actionBtn, { opacity: 0.6, backgroundColor: '#94A3B8' }]}
                 onPress={() => {
