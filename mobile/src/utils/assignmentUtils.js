@@ -140,6 +140,23 @@ export function isAssignmentActiveToday(asg, targetDate = new Date()) {
   if (!asg) return false;
   if (isAssignmentDatePassed(asg, targetDate)) return false;
 
+  // 0. If this is an explicit (non-virtual) assignment scheduled specifically for TODAY's date,
+  // it is active today regardless of any default Mon-Fri workDays array.
+  if (!asg.isVirtualFromProfile) {
+    const explicitDateRaw = asg.assignDate || asg.scheduleDate || asg.date || asg.assignmentDate || asg.scheduledDate;
+    if (explicitDateRaw) {
+      const explicitParts = extractAssignmentDateParts(explicitDateRaw);
+      if (
+        explicitParts &&
+        explicitParts.year === targetDate.getFullYear() &&
+        explicitParts.month === targetDate.getMonth() &&
+        explicitParts.day === targetDate.getDate()
+      ) {
+        return true;
+      }
+    }
+  }
+
   // 1. Check recurring workDays array
   const workDays = asg.workDays || asg.effectiveWorkDays;
   if (Array.isArray(workDays) && workDays.length > 0) {
