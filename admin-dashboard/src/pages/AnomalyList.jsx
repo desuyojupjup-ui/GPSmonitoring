@@ -5,30 +5,32 @@ import { Search, ShieldAlert, AlertTriangle, CheckCircle, ArrowUpRight, Filter, 
 import { showToast, showConfirmDelete } from '../utils/toast';
 import { ResponsiveContainer, PieChart, Pie, Cell, BarChart, Bar, XAxis, YAxis, Tooltip, CartesianGrid, ComposedChart, Line } from 'recharts';
 
-const formatAnomalyTimestamp = (ts) => {
-  if (!ts) return '—';
-  if (ts?.toDate && typeof ts.toDate === 'function') {
-    try { return ts.toDate().toLocaleString(); } catch (_) {}
-  }
-  if (typeof ts?.seconds === 'number') {
-    return new Date(ts.seconds * 1000).toLocaleString();
-  }
-  if (typeof ts === 'number') {
-    return new Date(ts).toLocaleString();
-  }
-  const d = new Date(ts);
-  return isNaN(d.getTime()) ? '—' : d.toLocaleString();
-};
-
 const getTsMillis = (ts) => {
   if (!ts) return 0;
+  if (ts instanceof Date) return isNaN(ts.getTime()) ? 0 : ts.getTime();
   if (ts?.toDate && typeof ts.toDate === 'function') {
     try { return ts.toDate().getTime(); } catch (_) {}
   }
   if (typeof ts?.seconds === 'number') return ts.seconds * 1000;
+  if (typeof ts?._seconds === 'number') return ts._seconds * 1000;
   if (typeof ts === 'number') return ts;
   const d = new Date(ts);
   return isNaN(d.getTime()) ? 0 : d.getTime();
+};
+
+const formatAnomalyTimestamp = (ts) => {
+  const ms = getTsMillis(ts);
+  return ms > 0 ? new Date(ms).toLocaleString() : '—';
+};
+
+const formatAnomalyDateParts = (ts) => {
+  const ms = getTsMillis(ts);
+  if (!ms) return { date: '—', time: '' };
+  const d = new Date(ms);
+  return {
+    date: d.toLocaleDateString([], { month: 'short', day: 'numeric' }),
+    time: d.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }),
+  };
 };
 
 // Custom Tooltip for Semi-Circle Threat Gauge
@@ -698,8 +700,15 @@ export default function AnomalyList() {
                         </div>
                       </td>
                       <td className="security-col-optional-tablet" style={{ color: '#64748B' }}>
-                        <div style={{ fontWeight: '600', color: '#334155', fontSize: '12px' }}>{new Date(item.timestamp || item.createdAt || Date.now()).toLocaleDateString([], { month: 'short', day: 'numeric' })}</div>
-                        <div style={{ fontSize: '10px', color: '#94A3B8' }}>{new Date(item.timestamp || item.createdAt || Date.now()).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}</div>
+                        {(() => {
+                          const { date, time } = formatAnomalyDateParts(item.timestamp || item.createdAt || item.detectedAt);
+                          return (
+                            <>
+                              <div style={{ fontWeight: '600', color: '#334155', fontSize: '12px' }}>{date}</div>
+                              {time ? <div style={{ fontSize: '10px', color: '#94A3B8' }}>{time}</div> : null}
+                            </>
+                          );
+                        })()}
                       </td>
                       <td style={{ textAlign: 'right', whiteSpace: 'nowrap' }}>
                         <button
