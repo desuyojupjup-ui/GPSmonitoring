@@ -150,29 +150,33 @@ export default function LoginScreen({ navigation, route, onLogin: propOnLogin })
 
       // 3. Strict Password Verification
       let passwordMatches = false;
+      const hasFirestorePassword = Boolean(
+        empData.password && typeof empData.password === 'string' && empData.password.trim().length > 0
+      );
 
-      // Check 1: Does it match the assigned password on the employee's Firestore record?
-      if (empData.password && typeof empData.password === 'string') {
+      if (hasFirestorePassword) {
+        // Authoritative check: when a password is stored on the employee's Firestore record,
+        // strictly require it so old Firebase Auth passwords cannot still log in after a password change.
         if (cleanPassword === empData.password.trim()) {
           passwordMatches = true;
         }
-      }
-
-      // Check 2: Try Firebase Auth signInWithEmailAndPassword with employee credentials
-      if (!passwordMatches && empData.email) {
-        try {
-          const cred = await signInWithEmailAndPassword(auth, empData.email, cleanPassword);
-          if (cred && cred.user) {
-            passwordMatches = true;
+      } else {
+        // Fallback Check 2: Only try Firebase Auth if no explicit password is saved on Firestore
+        if (empData.email) {
+          try {
+            const cred = await signInWithEmailAndPassword(auth, empData.email, cleanPassword);
+            if (cred && cred.user) {
+              passwordMatches = true;
+            }
+          } catch (_) {
+            // Firebase Auth credentials didn't match
           }
-        } catch (_) {
-          // Firebase Auth credentials didn't match
         }
-      }
 
-      // Check 3: If no password was explicitly saved on Firestore doc, verify default 'password123'
-      if (!passwordMatches && !empData.password && cleanPassword === 'password123') {
-        passwordMatches = true;
+        // Fallback Check 3: Default 'password123' when no Firestore password is set
+        if (!passwordMatches && cleanPassword === 'password123') {
+          passwordMatches = true;
+        }
       }
 
       // If password does not match any valid credential, REJECT!

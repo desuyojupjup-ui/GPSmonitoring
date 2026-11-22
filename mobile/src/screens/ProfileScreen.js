@@ -315,31 +315,33 @@ export default function ProfileScreen({ navigation, route, user: propUser, onLog
         }
       }
 
-      // 2. Verify current password against Firestore password, Firebase Auth, or default 'password123'
+      // 2. Verify current password strictly against Firestore password when set
+      // (so old Firebase Auth passwords are rejected once changed)
       let currentValid = false;
-      if (storedPassword && typeof storedPassword === 'string') {
+      const hasStoredPassword = Boolean(storedPassword && typeof storedPassword === 'string' && storedPassword.trim().length > 0);
+      if (hasStoredPassword) {
         if (curr === storedPassword.trim()) currentValid = true;
-      } else if (curr === 'password123') {
-        currentValid = true;
-      }
-
-      const isOwnAuthUser = Boolean(
-        auth.currentUser &&
-        targetEmail &&
-        (auth.currentUser.email || '').trim().toLowerCase() === targetEmail
-      );
-
-      if (!currentValid && targetEmail) {
-        try {
-          if (isOwnAuthUser && EmailAuthProvider && reauthenticateWithCredential) {
-            const cred = EmailAuthProvider.credential(targetEmail, curr);
-            await reauthenticateWithCredential(auth.currentUser, cred);
-            currentValid = true;
-          } else if (signInWithEmailAndPassword) {
-            const res = await signInWithEmailAndPassword(auth, targetEmail, curr);
-            if (res?.user) currentValid = true;
-          }
-        } catch (_) {}
+      } else {
+        if (curr === 'password123') {
+          currentValid = true;
+        }
+        const isOwnAuthUser = Boolean(
+          auth.currentUser &&
+          targetEmail &&
+          (auth.currentUser.email || '').trim().toLowerCase() === targetEmail
+        );
+        if (!currentValid && targetEmail) {
+          try {
+            if (isOwnAuthUser && EmailAuthProvider && reauthenticateWithCredential) {
+              const cred = EmailAuthProvider.credential(targetEmail, curr);
+              await reauthenticateWithCredential(auth.currentUser, cred);
+              currentValid = true;
+            } else if (signInWithEmailAndPassword) {
+              const res = await signInWithEmailAndPassword(auth, targetEmail, curr);
+              if (res?.user) currentValid = true;
+            }
+          } catch (_) {}
+        }
       }
 
       if (!currentValid) {
