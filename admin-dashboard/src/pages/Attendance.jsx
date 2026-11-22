@@ -258,6 +258,65 @@ export default function Attendance() {
       ? Number(raw.minutesLate)
       : (calcMinutesLate > 0 ? calcMinutesLate : null);
 
+    // Calculate late check-out (overtime beyond shift end) if shift end and timeOut exist
+    const checkOutTimeVal = raw.timeOut || raw.checkOut || raw.check_out || raw.out;
+    const checkOutDate = parseDate(checkOutTimeVal);
+    let calcMinutesLateOut = 0;
+    let isCalculatedLateOut = false;
+    if (hasExplicitShift && checkOutDate) {
+      const shiftParts = String(raw.shift).split(/\s*[-~]|(?:\s+to\s+)\s*/i).filter(Boolean);
+      const endToken = shiftParts[1]?.trim();
+      if (endToken) {
+        let eHour = null, eMin = null;
+        const ampmM = endToken.match(/^(\d{1,2}):(\d{2})(?::\d{2})?\s*([AP]M)$/i);
+        if (ampmM) {
+          let h = parseInt(ampmM[1], 10);
+          const m = parseInt(ampmM[2], 10);
+          const ap = ampmM[3].toUpperCase();
+          if (ap === 'PM' && h < 12) h += 12;
+          if (ap === 'AM' && h === 12) h = 0;
+          eHour = h;
+          eMin = m;
+        } else {
+          const h24M = endToken.match(/^(\d{1,2}):(\d{2})(?::\d{2})?$/);
+          if (h24M) {
+            eHour = parseInt(h24M[1], 10);
+            eMin = parseInt(h24M[2], 10);
+          }
+        }
+        if (eHour !== null && eMin !== null) {
+          const shiftEndDt = new Date(
+            checkOutDate.getFullYear(),
+            checkOutDate.getMonth(),
+            checkOutDate.getDate(),
+            eHour,
+            eMin,
+            0
+          );
+          const diffMs = checkOutDate.getTime() - shiftEndDt.getTime();
+          const mins = Math.round(diffMs / 60000);
+          if (mins >= 15) {
+            isCalculatedLateOut = true;
+            calcMinutesLateOut = mins;
+          }
+        }
+      }
+    }
+
+    const isLateCheckOut = Boolean(
+      hasExplicitShift &&
+      !isEarlyCheckOut &&
+      (raw.lateCheckOut ||
+       raw.overtimeCheckOut ||
+       raw.anomalyFlag === 'Late Check-Out' ||
+       (raw.minutesLateOut && Number(raw.minutesLateOut) >= 15) ||
+       isCalculatedLateOut)
+    );
+
+    const minutesLateOut = (raw.minutesLateOut != null && Number(raw.minutesLateOut) > 0)
+      ? Number(raw.minutesLateOut)
+      : (calcMinutesLateOut > 0 ? calcMinutesLateOut : null);
+
     // Resolve active physical location vs registered worksite:
     const lat = raw.latitude != null ? Number(raw.latitude) : null;
     const lng = raw.longitude != null ? Number(raw.longitude) : null;
@@ -298,6 +357,8 @@ export default function Attendance() {
       active_location: activeAddress || null,
       isEarlyCheckOut,
       minutesEarly:  raw.minutesEarly || null,
+      isLateCheckOut,
+      minutesLateOut,
       departureNote: raw.departureNote || null,
       isLateCheckIn,
       minutesLate,
@@ -891,6 +952,24 @@ export default function Attendance() {
                             }}>
                               <AlertTriangle size={11} color="#DC2626" />
                               Early Check-Out{row.minutesEarly ? ` (-${formatMinutesToHoursMins(row.minutesEarly)})` : ''}
+                            </div>
+                          )}
+                          {row.isLateCheckOut && (
+                            <div style={{
+                              display: 'inline-flex',
+                              alignItems: 'center',
+                              gap: 4,
+                              marginLeft: 6,
+                              background: '#F5F3FF',
+                              color: '#6D28D9',
+                              border: '1px solid #DDD6FE',
+                              padding: '2px 8px',
+                              borderRadius: 12,
+                              fontSize: 10,
+                              fontWeight: 700,
+                            }}>
+                              <Clock size={11} color="#6D28D9" />
+                              Late Check-Out{row.minutesLateOut ? ` (+${formatMinutesToHoursMins(row.minutesLateOut)})` : ''}
                             </div>
                           )}
                         </td>

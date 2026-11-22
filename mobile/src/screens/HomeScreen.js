@@ -40,7 +40,7 @@ import { runPreAttendanceChecks } from '../services/securityService';
 import { writeSecurityEvent } from '../services/securityLogger';
 import { getDeviceId } from '../services/deviceInfo';
 import { getPendingSyncCount, syncOfflineRecords, clearOfflineQueue } from '../services/offlineSyncService';
-import { isAssignmentDatePassed, isAssignmentActiveToday, resolveShift, getShiftScheduleDetails, isAssignmentForEmployee, deduplicateAssignments, isMobileFieldWithoutSite, checkEarlyCheckout, checkLateCheckIn, isAttendanceRecordFlagged, calculateMonthlyAttendanceMetrics, hasActiveShiftSchedule, hasActiveSiteAssignment } from '../utils/assignmentUtils';
+import { isAssignmentDatePassed, isAssignmentActiveToday, resolveShift, getShiftScheduleDetails, isAssignmentForEmployee, deduplicateAssignments, isMobileFieldWithoutSite, checkEarlyCheckout, checkLateCheckout, checkLateCheckIn, isAttendanceRecordFlagged, calculateMonthlyAttendanceMetrics, hasActiveShiftSchedule, hasActiveSiteAssignment } from '../utils/assignmentUtils';
 import {
   startSession as schedulerStart,
   stopSession as schedulerStop,
@@ -1195,6 +1195,9 @@ export default function HomeScreen({ navigation, route, user: propUser }) {
       const earlyInfo = (hasScheduledShift && scheduledShift !== 'Flexible')
         ? checkEarlyCheckout(scheduledShift, now, 15)
         : { isEarly: false, minutesEarly: 0, shiftEndStr: 'Flexible' };
+      const lateOutInfo = (hasScheduledShift && scheduledShift !== 'Flexible' && !earlyInfo.isEarly)
+        ? checkLateCheckout(scheduledShift, now, 15)
+        : { isLateOut: false, minutesLateOut: 0, shiftEndStr: 'Flexible' };
 
       let curCoords = { latitude: attendance.latitude || null, longitude: attendance.longitude || null };
       try {
@@ -1213,6 +1216,13 @@ export default function HomeScreen({ navigation, route, user: propUser }) {
           minutesEarly: earlyInfo.minutesEarly,
           anomalyFlag: 'Early Check-Out',
           departureNote: `Early Check-Out: Left ${earlyInfo.minutesEarly}m before scheduled shift end (${earlyInfo.shiftEndStr})`,
+        } : {}),
+        ...(lateOutInfo.isLateOut ? {
+          lateCheckOut: true,
+          overtimeCheckOut: true,
+          minutesLateOut: lateOutInfo.minutesLateOut,
+          anomalyFlag: 'Late Check-Out',
+          departureNote: `Late Check-Out: Checked out ${lateOutInfo.minutesLateOut}m after scheduled shift end (${lateOutInfo.shiftEndStr})`,
         } : {})
       };
 
@@ -1220,7 +1230,19 @@ export default function HomeScreen({ navigation, route, user: propUser }) {
       // Dual-write checkout to lowercase collection
       await updateDoc(doc(db, 'attendance', attendance.id), checkoutPayload).catch(() => {});
 
-      Alert.alert('Check Out Successful', 'Have a great day!');
+      if (earlyInfo.isEarly) {
+        Alert.alert(
+          'Early Check-Out Warning',
+          `You checked out ${earlyInfo.minutesEarly} min before your scheduled shift end (${earlyInfo.shiftEndStr}). This early departure has been flagged as an anomaly for review.`
+        );
+      } else if (lateOutInfo.isLateOut) {
+        Alert.alert(
+          'Late Check-Out Warning',
+          `You checked out ${lateOutInfo.minutesLateOut} min past your scheduled shift end (${lateOutInfo.shiftEndStr}). This unscheduled overtime has been flagged as an anomaly for review.`
+        );
+      } else {
+        Alert.alert('Check Out Successful', 'Have a great day!');
+      }
 
       try {
         if (employee.id && employee.id !== 'emp_fallback') {
@@ -1244,25 +1266,46 @@ export default function HomeScreen({ navigation, route, user: propUser }) {
 
       try {
         let anomalyDocId = null;
+        const asgForSecurity = {
+          ...(assignment || {}),
+          id: assignment?.id || null,
+          siteId: site?.id || null,
+          siteName: attendance.siteName || site?.name || assignment?.site || 'Scheduled Post',
+          shift: scheduledShift,
+        };
         if (earlyInfo.isEarly) {
           const departureDesc = `You checked out early at ${now.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit', hour12: true })} before scheduled shift end (${earlyInfo.shiftEndStr}; ${earlyInfo.minutesEarly}m early departure).`;
           anomalyDocId = await writeSecurityEvent({
             eventType: 'EARLY_CHECKOUT',
             employee: {
+              ...employee,
               id: employee.id,
               name: employee.name,
               email: employee.email || currentEmail,
               employeeType: employee.workType || employee.employeeType || 'Employee',
             },
-            assignment: {
-              id: assignment?.id || null,
-              siteId: site?.id || null,
-              siteName: attendance.siteName || site?.name || assignment?.site || 'Scheduled Post',
-            },
+            assignment: asgForSecurity,
             coords: curCoords,
             relatedAttendanceId: attendance.id,
             customDescription: departureDesc,
             extra: { details: `${earlyInfo.minutesEarly}m before ${earlyInfo.shiftEndStr}` },
+          }).catch(() => null);
+        } else if (lateOutInfo.isLateOut) {
+          const overtimeDesc = `You checked out late at ${now.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit', hour12: true })} past scheduled shift end (${lateOutInfo.shiftEndStr}; ${lateOutInfo.minutesLateOut}m beyond shift hours).`;
+          anomalyDocId = await writeSecurityEvent({
+            eventType: 'OVERTIME_SHIFT_EXCEEDED',
+            employee: {
+              ...employee,
+              id: employee.id,
+              name: employee.name,
+              email: employee.email || currentEmail,
+              employeeType: employee.workType || employee.employeeType || 'Employee',
+            },
+            assignment: asgForSecurity,
+            coords: curCoords,
+            relatedAttendanceId: attendance.id,
+            customDescription: overtimeDesc,
+            extra: { details: `${lateOutInfo.minutesLateOut}m after ${lateOutInfo.shiftEndStr}` },
           }).catch(() => null);
         }
 
@@ -1271,12 +1314,16 @@ export default function HomeScreen({ navigation, route, user: propUser }) {
           employeeName: employee.name,
           site_id: site?.id || 'Unknown',
           siteName: attendance.siteName || site?.name || assignment?.site || 'Unassigned Site',
-          action: earlyInfo.isEarly ? 'Check Out (Early Departure)' : 'Check Out',
+          action: earlyInfo.isEarly
+            ? 'Check Out (Early Departure)'
+            : (lateOutInfo.isLateOut ? 'Check Out (Late / Overtime)' : 'Check Out'),
           type: 'Attendance',
           anomalyId: anomalyDocId || null,
           timestamp: serverTimestamp(),
-          status: earlyInfo.isEarly ? 'Warning' : 'Normal',
-          details: earlyInfo.isEarly ? `Early departure: ${earlyInfo.minutesEarly}m before ${earlyInfo.shiftEndStr}` : 'Shift Completed'
+          status: (earlyInfo.isEarly || lateOutInfo.isLateOut) ? 'Warning' : 'Normal',
+          details: earlyInfo.isEarly
+            ? `Early departure: ${earlyInfo.minutesEarly}m before ${earlyInfo.shiftEndStr}`
+            : (lateOutInfo.isLateOut ? `Late check-out: ${lateOutInfo.minutesLateOut}m after ${lateOutInfo.shiftEndStr}` : 'Shift Completed')
         }).catch(() => {});
       } catch (err) {
         console.warn('Check-out activity/anomaly log warning:', err);

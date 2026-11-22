@@ -667,6 +667,48 @@ export function checkEarlyCheckout(asgOrShift, checkTime = new Date(), graceMinu
   };
 }
 
+/**
+ * Checks if current check-out time is later than the scheduled shift end (overtime / late check-out).
+ * Handles overnight shifts (where start > end) so evening check-outs before next-day end are not flagged.
+ * @param {object|string} asgOrShift
+ * @param {Date|number} [checkTime=new Date()]
+ * @param {number} [graceMinutes=15]
+ * @returns {{ isLateOut: boolean, minutesLateOut: number, shiftEndStr: string, shiftEndDt: Date|null }}
+ */
+export function checkLateCheckout(asgOrShift, checkTime = new Date(), graceMinutes = 15) {
+  if (!asgOrShift) {
+    return { isLateOut: false, minutesLateOut: 0, shiftEndStr: 'Flexible', shiftEndDt: null };
+  }
+
+  const endInfo = getShiftEndInfo(asgOrShift);
+  if (!endInfo || endInfo.hour === null || endInfo.raw === 'Flexible') {
+    return { isLateOut: false, minutesLateOut: 0, shiftEndStr: 'Flexible', shiftEndDt: null };
+  }
+
+  const now = checkTime instanceof Date ? checkTime : new Date(checkTime);
+  const startParsed = endInfo.startRaw ? parseTimeToHoursMinutes(endInfo.startRaw) : null;
+  const isOvernight = Boolean(
+    startParsed &&
+    (endInfo.hour < startParsed.hours || (endInfo.hour === startParsed.hours && endInfo.minute < startParsed.minutes))
+  );
+
+  let shiftEndDt = new Date(now.getFullYear(), now.getMonth(), now.getDate(), endInfo.hour, endInfo.minute, endInfo.seconds || 0);
+  if (isOvernight && now.getHours() >= startParsed.hours) {
+    // Still on the starting evening of an overnight shift — shift ends tomorrow
+    shiftEndDt = new Date(now.getFullYear(), now.getMonth(), now.getDate() + 1, endInfo.hour, endInfo.minute, endInfo.seconds || 0);
+  }
+
+  const diffMs = now.getTime() - shiftEndDt.getTime();
+  const minutesLateOut = Math.round(diffMs / 60000);
+
+  return {
+    isLateOut: minutesLateOut >= graceMinutes,
+    minutesLateOut: Math.max(0, minutesLateOut),
+    shiftEndStr: endInfo.raw,
+    shiftEndDt,
+  };
+}
+
 export function parseAttendanceTimestamp(ts) {
   if (!ts) return null;
   if (ts instanceof Date) return isNaN(ts.getTime()) ? null : ts;
