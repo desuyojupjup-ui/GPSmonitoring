@@ -880,7 +880,7 @@ body.dark-mode .sidebar::-webkit-scrollbar-thumb {
   border-bottom: 1px solid rgba(226,232,240,0.6);
   position: sticky;
   top: 0;
-  z-index: 50;
+  z-index: 1100;
   height: 62px;
 }
 
@@ -1747,11 +1747,17 @@ body.dark-mode .user-menu-logout:hover { background: rgba(239,68,68,0.1) !import
   border-radius: 10px;
   overflow: hidden;
   border: 1px solid #E8ECF0;
+  position: relative;
+  z-index: 1;
+  isolation: isolate;
 }
 
 .leaflet-container {
   height: 100%;
   width: 100%;
+  position: relative;
+  z-index: 1;
+  isolation: isolate;
 }
 
 /* ─── Bottom Grid ─── */
