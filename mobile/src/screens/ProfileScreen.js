@@ -1,10 +1,10 @@
 import React, { useState, useEffect } from 'react';
-import { View, Text, StyleSheet, TouchableOpacity, ScrollView, Image, Alert, ActivityIndicator, Modal, Switch } from 'react-native';
+import { View, Text, StyleSheet, TouchableOpacity, ScrollView, Image, Alert, ActivityIndicator, Modal, Switch, TextInput, KeyboardAvoidingView, Platform } from 'react-native';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { Ionicons } from '@expo/vector-icons';
 import * as ImagePicker from 'expo-image-picker';
 import AsyncStorage from '@react-native-async-storage/async-storage';
-import { auth, db, signOut, collection, query, where, onSnapshot, doc, updateDoc, getDocs, getCleanEmployeeEmail, performGlobalLogout } from '../firebase';
+import { auth, db, signOut, signInWithEmailAndPassword, updatePassword, EmailAuthProvider, reauthenticateWithCredential, collection, query, where, onSnapshot, doc, updateDoc, getDocs, getCleanEmployeeEmail, performGlobalLogout } from '../firebase';
 
 import DelayIncidentModal from '../components/DelayIncidentModal';
 import presenceService from '../services/presenceService';
@@ -81,6 +81,15 @@ export default function ProfileScreen({ navigation, route, user: propUser, onLog
   const [showQRModal, setShowQRModal] = useState(false);
   const [activeModal, setActiveModal] = useState(null);
   const [showDelayModal, setShowDelayModal] = useState(false);
+  const [showPasswordModal, setShowPasswordModal] = useState(false);
+  const [currentPassword, setCurrentPassword] = useState('');
+  const [newPassword, setNewPassword] = useState('');
+  const [confirmPassword, setConfirmPassword] = useState('');
+  const [showCurrPass, setShowCurrPass] = useState(false);
+  const [showNewPass, setShowNewPass] = useState(false);
+  const [showConfPass, setShowConfPass] = useState(false);
+  const [passwordError, setPasswordError] = useState('');
+  const [savingPassword, setSavingPassword] = useState(false);
   const [attendance, setAttendance] = useState([]);
   const [history, setHistory] = useState([]);
   
@@ -244,10 +253,139 @@ export default function ProfileScreen({ navigation, route, user: propUser, onLog
       fetchModalData('history');
     } else if (title === 'Settings') {
       setActiveModal('settings');
+    } else if (title === 'Change Password') {
+      setCurrentPassword('');
+      setNewPassword('');
+      setConfirmPassword('');
+      setPasswordError('');
+      setShowCurrPass(false);
+      setShowNewPass(false);
+      setShowConfPass(false);
+      setShowPasswordModal(true);
     } else if (title === 'Help & Feedback') {
       setActiveModal('support');
     } else if (title === 'App Version') {
       Alert.alert('App Update', 'GeoStride Mobile V2.0.8 is currently up to date.');
+    }
+  };
+
+  const handleChangePassword = async () => {
+    setPasswordError('');
+    const curr = currentPassword.trim();
+    const next = newPassword.trim();
+    const conf = confirmPassword.trim();
+
+    if (!curr || !next || !conf) {
+      setPasswordError('Please fill in all password fields.');
+      return;
+    }
+    if (next.length < 6) {
+      setPasswordError('New password must be at least 6 characters.');
+      return;
+    }
+    if (next !== conf) {
+      setPasswordError('New password and confirmation do not match.');
+      return;
+    }
+    if (curr === next) {
+      setPasswordError('New password must be different from your current password.');
+      return;
+    }
+
+    setSavingPassword(true);
+    try {
+      // 1. Locate employee record in Firestore (works for both Fixed Site and Mobile Field employees)
+      let empDocId = employee?.id && !String(employee.id).startsWith('cached_') ? employee.id : null;
+      let storedPassword = employee?.password || null;
+      let targetEmail = (employee?.email || currentEmail || '').trim().toLowerCase();
+
+      if (!empDocId || storedPassword == null) {
+        const snap = await getDocs(collection(db, 'employees'));
+        const match = snap.docs.find(d => {
+          const data = d.data() || {};
+          const em = (data.email || '').trim().toLowerCase();
+          return (targetEmail && em === targetEmail) || (empDocId && d.id === empDocId);
+        });
+        if (match) {
+          empDocId = match.id;
+          storedPassword = match.data()?.password || null;
+          if (!targetEmail && match.data()?.email) {
+            targetEmail = match.data().email.trim().toLowerCase();
+          }
+        }
+      }
+
+      // 2. Verify current password against Firestore password, Firebase Auth, or default 'password123'
+      let currentValid = false;
+      if (storedPassword && typeof storedPassword === 'string') {
+        if (curr === storedPassword.trim()) currentValid = true;
+      } else if (curr === 'password123') {
+        currentValid = true;
+      }
+
+      const isOwnAuthUser = Boolean(
+        auth.currentUser &&
+        targetEmail &&
+        (auth.currentUser.email || '').trim().toLowerCase() === targetEmail
+      );
+
+      if (!currentValid && targetEmail) {
+        try {
+          if (isOwnAuthUser && EmailAuthProvider && reauthenticateWithCredential) {
+            const cred = EmailAuthProvider.credential(targetEmail, curr);
+            await reauthenticateWithCredential(auth.currentUser, cred);
+            currentValid = true;
+          } else if (signInWithEmailAndPassword) {
+            const res = await signInWithEmailAndPassword(auth, targetEmail, curr);
+            if (res?.user) currentValid = true;
+          }
+        } catch (_) {}
+      }
+
+      if (!currentValid) {
+        setPasswordError('Current password is incorrect.');
+        setSavingPassword(false);
+        return;
+      }
+
+      // 3. Update Firestore employee document (primary credential store for LoginScreen)
+      if (!empDocId) {
+        setPasswordError('Could not locate your employee profile record.');
+        setSavingPassword(false);
+        return;
+      }
+
+      await updateDoc(doc(db, 'employees', empDocId), {
+        password: next,
+        passwordUpdatedAt: Date.now(),
+      });
+
+      // 4. Also sync Firebase Auth password if signed in as this employee (never touch shared admin auth)
+      if (auth.currentUser && targetEmail && (auth.currentUser.email || '').trim().toLowerCase() === targetEmail) {
+        try {
+          if (EmailAuthProvider && reauthenticateWithCredential) {
+            const cred = EmailAuthProvider.credential(targetEmail, curr);
+            await reauthenticateWithCredential(auth.currentUser, cred).catch(() => {});
+          }
+          if (updatePassword) {
+            await updatePassword(auth.currentUser, next);
+          }
+        } catch (authErr) {
+          console.warn('[ProfileScreen] Firebase Auth password sync note:', authErr?.message);
+        }
+      }
+
+      setEmployee(prev => (prev ? { ...prev, password: next } : prev));
+      setShowPasswordModal(false);
+      setCurrentPassword('');
+      setNewPassword('');
+      setConfirmPassword('');
+      Alert.alert('Password Updated', 'Your account password has been changed successfully.');
+    } catch (err) {
+      console.error('Change password error:', err);
+      setPasswordError(err?.message || 'Failed to update password. Please try again.');
+    } finally {
+      setSavingPassword(false);
     }
   };
 
@@ -533,6 +671,21 @@ export default function ProfileScreen({ navigation, route, user: propUser, onLog
 
         {/* ── 5. Menu Group 2: Support & Updates (Matches Group 2 in screenshot) ── */}
         <View style={[styles.menuSectionCard, isDarkMode && styles.darkCard, isDarkMode && styles.darkBorder]}>
+          {/* Item 0: Change Password (Indigo) — available for both Mobile Field and Fixed Site employees */}
+          <TouchableOpacity 
+            style={[styles.menuRowItem, isDarkMode && styles.darkBorder]} 
+            onPress={() => handleMenuPress('Change Password')}
+            activeOpacity={0.7}
+          >
+            <View style={styles.menuItemLeft}>
+              <View style={[styles.iconBadge, { backgroundColor: '#EEF2FF' }]}>
+                <Ionicons name="key-outline" size={18} color="#4F46E5" />
+              </View>
+              <Text style={[styles.menuItemTitle, isDarkMode && styles.darkText]}>Change Password</Text>
+            </View>
+            <Ionicons name="chevron-forward" size={18} color="#94A3B8" />
+          </TouchableOpacity>
+
           {/* Item 1: Report Incident / Delay (Coral/Pink) */}
           <TouchableOpacity 
             style={[styles.menuRowItem, isDarkMode && styles.darkBorder]} 
@@ -954,6 +1107,118 @@ export default function ProfileScreen({ navigation, route, user: propUser, onLog
             )}
           </ScrollView>
         </View>
+      </Modal>
+
+      {/* ── Change Password Modal (Both Mobile Field & Fixed Site Employees) ── */}
+      <Modal
+        visible={showPasswordModal}
+        transparent={true}
+        animationType="fade"
+        onRequestClose={() => !savingPassword && setShowPasswordModal(false)}
+      >
+        <KeyboardAvoidingView
+          style={styles.actionSheetBackdrop}
+          behavior={Platform.OS === 'ios' ? 'padding' : 'height'}
+        >
+          <TouchableOpacity
+            style={styles.pwModalBackdropTouch}
+            activeOpacity={1}
+            onPress={() => !savingPassword && setShowPasswordModal(false)}
+          >
+            <View style={[styles.pwModalCard, isDarkMode && styles.darkCard]} onStartShouldSetResponder={() => true}>
+              <View style={styles.pwHeaderRow}>
+                <View style={{ flexDirection: 'row', alignItems: 'center', gap: 10 }}>
+                  <View style={[styles.iconBadge, { backgroundColor: '#EEF2FF' }]}>
+                    <Ionicons name="lock-closed" size={18} color="#4F46E5" />
+                  </View>
+                  <View>
+                    <Text style={[styles.qrModalTitle, isDarkMode && styles.darkText]}>Change Password</Text>
+                    <Text style={{ fontSize: 11, color: '#64748B' }}>{employeeTypeLabel}</Text>
+                  </View>
+                </View>
+                <TouchableOpacity onPress={() => !savingPassword && setShowPasswordModal(false)}>
+                  <Ionicons name="close-circle" size={24} color="#94A3B8" />
+                </TouchableOpacity>
+              </View>
+
+              {passwordError ? (
+                <View style={styles.pwErrorBanner}>
+                  <Ionicons name="alert-circle" size={16} color="#DC2626" />
+                  <Text style={styles.pwErrorText}>{passwordError}</Text>
+                </View>
+              ) : null}
+
+              <Text style={[styles.pwLabel, isDarkMode && styles.darkSubText]}>Current Password</Text>
+              <View style={[styles.pwInputWrap, isDarkMode && styles.darkBorder]}>
+                <TextInput
+                  style={[styles.pwInput, isDarkMode && styles.darkText]}
+                  placeholder="Enter current password"
+                  placeholderTextColor="#94A3B8"
+                  secureTextEntry={!showCurrPass}
+                  value={currentPassword}
+                  onChangeText={(t) => { setCurrentPassword(t); setPasswordError(''); }}
+                  autoCapitalize="none"
+                />
+                <TouchableOpacity onPress={() => setShowCurrPass(v => !v)} style={{ padding: 6 }}>
+                  <Ionicons name={showCurrPass ? 'eye-outline' : 'eye-off-outline'} size={18} color="#64748B" />
+                </TouchableOpacity>
+              </View>
+
+              <Text style={[styles.pwLabel, isDarkMode && styles.darkSubText]}>New Password</Text>
+              <View style={[styles.pwInputWrap, isDarkMode && styles.darkBorder]}>
+                <TextInput
+                  style={[styles.pwInput, isDarkMode && styles.darkText]}
+                  placeholder="At least 6 characters"
+                  placeholderTextColor="#94A3B8"
+                  secureTextEntry={!showNewPass}
+                  value={newPassword}
+                  onChangeText={(t) => { setNewPassword(t); setPasswordError(''); }}
+                  autoCapitalize="none"
+                />
+                <TouchableOpacity onPress={() => setShowNewPass(v => !v)} style={{ padding: 6 }}>
+                  <Ionicons name={showNewPass ? 'eye-outline' : 'eye-off-outline'} size={18} color="#64748B" />
+                </TouchableOpacity>
+              </View>
+
+              <Text style={[styles.pwLabel, isDarkMode && styles.darkSubText]}>Confirm New Password</Text>
+              <View style={[styles.pwInputWrap, isDarkMode && styles.darkBorder]}>
+                <TextInput
+                  style={[styles.pwInput, isDarkMode && styles.darkText]}
+                  placeholder="Re-enter new password"
+                  placeholderTextColor="#94A3B8"
+                  secureTextEntry={!showConfPass}
+                  value={confirmPassword}
+                  onChangeText={(t) => { setConfirmPassword(t); setPasswordError(''); }}
+                  autoCapitalize="none"
+                />
+                <TouchableOpacity onPress={() => setShowConfPass(v => !v)} style={{ padding: 6 }}>
+                  <Ionicons name={showConfPass ? 'eye-outline' : 'eye-off-outline'} size={18} color="#64748B" />
+                </TouchableOpacity>
+              </View>
+
+              <View style={styles.pwActionsRow}>
+                <TouchableOpacity
+                  style={[styles.pwCancelBtn, isDarkMode && styles.darkBorder]}
+                  onPress={() => setShowPasswordModal(false)}
+                  disabled={savingPassword}
+                >
+                  <Text style={[styles.pwCancelBtnText, isDarkMode && styles.darkText]}>Cancel</Text>
+                </TouchableOpacity>
+                <TouchableOpacity
+                  style={[styles.pwSaveBtn, savingPassword && { opacity: 0.7 }]}
+                  onPress={handleChangePassword}
+                  disabled={savingPassword}
+                >
+                  {savingPassword ? (
+                    <ActivityIndicator color="#FFFFFF" size="small" />
+                  ) : (
+                    <Text style={styles.pwSaveBtnText}>Update Password</Text>
+                  )}
+                </TouchableOpacity>
+              </View>
+            </View>
+          </TouchableOpacity>
+        </KeyboardAvoidingView>
       </Modal>
 
       <DelayIncidentModal
@@ -1649,6 +1914,104 @@ const styles = StyleSheet.create({
     fontWeight: '600',
     color: '#334155',
     textAlign: 'center',
+  },
+
+  // Change Password Modal Styles
+  pwModalBackdropTouch: {
+    flex: 1,
+    width: '100%',
+    justifyContent: 'center',
+    alignItems: 'center',
+    padding: 20,
+  },
+  pwModalCard: {
+    width: '100%',
+    maxWidth: 400,
+    backgroundColor: '#FFFFFF',
+    borderRadius: 20,
+    padding: 20,
+    shadowColor: '#000',
+    shadowOffset: { width: 0, height: 10 },
+    shadowOpacity: 0.18,
+    shadowRadius: 20,
+    elevation: 10,
+  },
+  pwHeaderRow: {
+    flexDirection: 'row',
+    justifyContent: 'space-between',
+    alignItems: 'center',
+    marginBottom: 16,
+  },
+  pwErrorBanner: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 8,
+    backgroundColor: '#FEF2F2',
+    borderWidth: 1,
+    borderColor: '#FECACA',
+    borderRadius: 10,
+    padding: 10,
+    marginBottom: 12,
+  },
+  pwErrorText: {
+    flex: 1,
+    fontSize: 12,
+    fontWeight: '600',
+    color: '#DC2626',
+  },
+  pwLabel: {
+    fontSize: 12,
+    fontWeight: '700',
+    color: '#334155',
+    marginBottom: 6,
+    marginTop: 8,
+  },
+  pwInputWrap: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    borderWidth: 1,
+    borderColor: '#CBD5E1',
+    borderRadius: 12,
+    paddingHorizontal: 12,
+    height: 46,
+    backgroundColor: '#F8FAFC',
+  },
+  pwInput: {
+    flex: 1,
+    fontSize: 14,
+    color: '#0F172A',
+  },
+  pwActionsRow: {
+    flexDirection: 'row',
+    gap: 10,
+    marginTop: 20,
+  },
+  pwCancelBtn: {
+    flex: 1,
+    height: 44,
+    borderRadius: 12,
+    borderWidth: 1,
+    borderColor: '#CBD5E1',
+    justifyContent: 'center',
+    alignItems: 'center',
+  },
+  pwCancelBtnText: {
+    fontSize: 14,
+    fontWeight: '700',
+    color: '#475569',
+  },
+  pwSaveBtn: {
+    flex: 1.4,
+    height: 44,
+    borderRadius: 12,
+    backgroundColor: '#4F46E5',
+    justifyContent: 'center',
+    alignItems: 'center',
+  },
+  pwSaveBtnText: {
+    fontSize: 14,
+    fontWeight: '700',
+    color: '#FFFFFF',
   },
 
   // Dark Mode Styles

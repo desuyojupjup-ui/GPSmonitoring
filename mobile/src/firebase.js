@@ -1,5 +1,5 @@
 import { initializeApp, getApps, getApp } from 'firebase/app';
-import { initializeAuth, getReactNativePersistence, getAuth, signInWithEmailAndPassword, signOut, onAuthStateChanged } from 'firebase/auth';
+import { initializeAuth, getReactNativePersistence, getAuth, signInWithEmailAndPassword, signOut, onAuthStateChanged, updatePassword, EmailAuthProvider, reauthenticateWithCredential } from 'firebase/auth';
 import {
   getFirestore,
   collection as realCollection,
@@ -195,7 +195,7 @@ if (isRealFirebaseConfigured) {
   db = {};
 }
 
-export { auth, db, signOut, signInWithEmailAndPassword, onAuthStateChanged, initializeAuth, getReactNativePersistence, getFirestore };
+export { auth, db, signOut, signInWithEmailAndPassword, onAuthStateChanged, updatePassword, EmailAuthProvider, reauthenticateWithCredential, initializeAuth, getReactNativePersistence, getFirestore };
 
 // Helper to format email name
 const formatEmailToName = (email) => {
