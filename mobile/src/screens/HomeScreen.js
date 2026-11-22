@@ -40,7 +40,7 @@ import { runPreAttendanceChecks } from '../services/securityService';
 import { writeSecurityEvent } from '../services/securityLogger';
 import { getDeviceId } from '../services/deviceInfo';
 import { getPendingSyncCount, syncOfflineRecords, clearOfflineQueue } from '../services/offlineSyncService';
-import { isAssignmentDatePassed, isAssignmentActiveToday, resolveShift, getShiftScheduleDetails, isAssignmentForEmployee, deduplicateAssignments, isMobileFieldWithoutSite, checkEarlyCheckout, checkLateCheckout, checkLateCheckIn, isAttendanceRecordFlagged, calculateMonthlyAttendanceMetrics, hasActiveShiftSchedule, hasActiveSiteAssignment } from '../utils/assignmentUtils';
+import { isAssignmentDatePassed, isAssignmentActiveToday, resolveShift, getShiftScheduleDetails, isAssignmentForEmployee, deduplicateAssignments, isMobileFieldWithoutSite, checkEarlyCheckout, checkLateCheckout, checkLateCheckIn, isScheduledShiftEnded, isAttendanceRecordFlagged, calculateMonthlyAttendanceMetrics, hasActiveShiftSchedule, hasActiveSiteAssignment } from '../utils/assignmentUtils';
 import {
   startSession as schedulerStart,
   stopSession as schedulerStop,
@@ -903,6 +903,16 @@ export default function HomeScreen({ navigation, route, user: propUser }) {
       return;
     }
 
+    const shiftEndCheck = isScheduledShiftEnded(resolveShift(assignment, employee));
+    if (shiftEndCheck.ended) {
+      Alert.alert(
+        'Shift Already Ended',
+        `Your scheduled shift (${resolveShift(assignment, employee)}) ended at ${shiftEndCheck.shiftEndStr}. You can no longer check in for today's shift.`,
+        [{ text: 'OK' }]
+      );
+      return;
+    }
+
     if (isMobileFieldWithoutSite(employee, assignment, site)) {
       Alert.alert(
         'Check-In Blocked',
@@ -933,6 +943,18 @@ export default function HomeScreen({ navigation, route, user: propUser }) {
       return;
     }
 
+    const empWt = (employee?.workType || employee?.employeeType || employee?.type || '').toString().toLowerCase();
+    const isFixedEmp = !empWt.includes('mobile') && !empWt.includes('field');
+    const shiftEndCheck = isScheduledShiftEnded(resolveShift(assignment, employee));
+    if (isFixedEmp && shiftEndCheck.ended) {
+      Alert.alert(
+        'Shift Already Ended',
+        `Your scheduled shift (${resolveShift(assignment, employee)}) ended at ${shiftEndCheck.shiftEndStr}. Check-out is locked after shift hours.`,
+        [{ text: 'OK' }]
+      );
+      return;
+    }
+
     setConfirmModal({
       visible: true,
       actionType: 'check_out',
@@ -959,6 +981,16 @@ export default function HomeScreen({ navigation, route, user: propUser }) {
       Alert.alert(
         'Check-In Blocked',
         'You have no active worksite assignment scheduled for today. Past shifts that have ended or were missed cannot be checked into.',
+        [{ text: 'OK' }]
+      );
+      return;
+    }
+
+    const shiftEndCheck = isScheduledShiftEnded(resolveShift(assignment, employee));
+    if (shiftEndCheck.ended) {
+      Alert.alert(
+        'Shift Already Ended',
+        `Your scheduled shift (${resolveShift(assignment, employee)}) ended at ${shiftEndCheck.shiftEndStr}. You can no longer check in for today's shift.`,
         [{ text: 'OK' }]
       );
       return;
@@ -1187,6 +1219,18 @@ export default function HomeScreen({ navigation, route, user: propUser }) {
       return;
     }
 
+    const empWt = (employee?.workType || employee?.employeeType || employee?.type || '').toString().toLowerCase();
+    const isFixedEmp = !empWt.includes('mobile') && !empWt.includes('field');
+    const shiftEndCheck = isScheduledShiftEnded(resolveShift(assignment, employee));
+    if (isFixedEmp && shiftEndCheck.ended) {
+      Alert.alert(
+        'Shift Already Ended',
+        `Your scheduled shift (${resolveShift(assignment, employee)}) ended at ${shiftEndCheck.shiftEndStr}. Check-out is locked after shift hours.`,
+        [{ text: 'OK' }]
+      );
+      return;
+    }
+
     setChecking(true);
     try {
       const now = new Date();
@@ -1403,6 +1447,8 @@ export default function HomeScreen({ navigation, route, user: propUser }) {
 
   const hasSchedule = hasActiveShiftSchedule(assignment, employee);
   const hasActiveAssignment = hasActiveSiteAssignment(assignment, employee) && (assignedSitesList.length > 0 || site);
+  const shiftEndStatus = isScheduledShiftEnded(resolveShift(assignment, employee));
+  const isShiftEndedNow = hasSchedule && shiftEndStatus.ended;
 
   const empWorkType = (employee?.workType || employee?.employeeType || employee?.type || '').toString().toLowerCase();
   const isFixed = !empWorkType.includes('mobile') && !empWorkType.includes('field');
@@ -1710,6 +1756,24 @@ export default function HomeScreen({ navigation, route, user: propUser }) {
                   <>
                     <Ionicons name="lock-closed-outline" size={20} color="white" />
                     <Text style={styles.btnText}>No Shift Scheduled</Text>
+                  </>
+                )}
+              </TouchableOpacity>
+            ) : ((!isCheckedIn && isShiftEndedNow) || (isFixed && !isCheckedOut && isShiftEndedNow)) ? (
+              <TouchableOpacity
+                style={[styles.checkInBtn, { opacity: 0.6, backgroundColor: '#94A3B8' }]}
+                onPress={() => {
+                  Alert.alert(
+                    'Shift Already Ended',
+                    `Your scheduled shift (${resolveShift(assignment, employee)}) ended at ${shiftEndStatus.shiftEndStr}. Check-in and check-out are locked.`
+                  );
+                }}
+                disabled={checking}
+              >
+                {checking ? <ActivityIndicator color="#fff" /> : (
+                  <>
+                    <Ionicons name="lock-closed-outline" size={20} color="white" />
+                    <Text style={styles.btnText}>Shift Ended ({shiftEndStatus.shiftEndStr})</Text>
                   </>
                 )}
               </TouchableOpacity>

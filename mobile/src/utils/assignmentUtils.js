@@ -709,6 +709,56 @@ export function checkLateCheckout(asgOrShift, checkTime = new Date(), graceMinut
   };
 }
 
+/**
+ * Checks whether the scheduled shift's end time has already passed for today.
+ * Properly handles overnight shifts (e.g. 09:30 PM - 05:00 AM) so evening check-ins
+ * on the starting date are NOT treated as ended.
+ * @param {object|string} asgOrShift
+ * @param {Date|number} [checkTime=new Date()]
+ * @returns {{ ended: boolean, shiftEndStr: string, shiftEndDt: Date|null }}
+ */
+export function isScheduledShiftEnded(asgOrShift, checkTime = new Date()) {
+  if (!asgOrShift) {
+    return { ended: false, shiftEndStr: 'Flexible', shiftEndDt: null };
+  }
+
+  const endInfo = getShiftEndInfo(asgOrShift);
+  if (!endInfo || endInfo.hour === null || endInfo.raw === 'Flexible') {
+    return { ended: false, shiftEndStr: 'Flexible', shiftEndDt: null };
+  }
+
+  const now = checkTime instanceof Date ? checkTime : new Date(checkTime);
+  const startParsed = endInfo.startRaw ? parseTimeToHoursMinutes(endInfo.startRaw) : null;
+  const isOvernight = Boolean(
+    startParsed &&
+    (endInfo.hour < startParsed.hours || (endInfo.hour === startParsed.hours && endInfo.minute < startParsed.minutes))
+  );
+
+  if (isOvernight) {
+    const startMins = startParsed.hours * 60 + startParsed.minutes;
+    const endMins = endInfo.hour * 60 + endInfo.minute;
+    const nowMins = now.getHours() * 60 + now.getMinutes();
+    // Active overnight window: from startMins until midnight, OR from midnight until endMins
+    const inOvernightWindow = nowMins >= startMins || nowMins <= endMins;
+    const shiftEndDt = new Date(
+      now.getFullYear(),
+      now.getMonth(),
+      nowMins >= startMins ? now.getDate() + 1 : now.getDate(),
+      endInfo.hour,
+      endInfo.minute,
+      endInfo.seconds || 0
+    );
+    return { ended: !inOvernightWindow, shiftEndStr: endInfo.raw, shiftEndDt };
+  }
+
+  const shiftEndDt = new Date(now.getFullYear(), now.getMonth(), now.getDate(), endInfo.hour, endInfo.minute, endInfo.seconds || 0);
+  return {
+    ended: now.getTime() > shiftEndDt.getTime(),
+    shiftEndStr: endInfo.raw,
+    shiftEndDt,
+  };
+}
+
 export function parseAttendanceTimestamp(ts) {
   if (!ts) return null;
   if (ts instanceof Date) return isNaN(ts.getTime()) ? null : ts;

@@ -10,7 +10,7 @@ import {
   auth, db, collection, onSnapshot, addDoc, updateDoc,
   doc, serverTimestamp, getDocs, query, orderBy, getCleanEmployeeEmail
 } from '../firebase';
-import { isMobileFieldWithoutSite, checkEarlyCheckout, checkLateCheckout, checkLateCheckIn, isAttendanceRecordFlagged, calculateMonthlyAttendanceMetrics, hasActiveShiftSchedule, hasActiveSiteAssignment, isAssignmentDatePassed, isAssignmentActiveToday, isAssignmentForEmployee } from '../utils/assignmentUtils';
+import { isMobileFieldWithoutSite, checkEarlyCheckout, checkLateCheckout, checkLateCheckIn, isScheduledShiftEnded, resolveShift, isAttendanceRecordFlagged, calculateMonthlyAttendanceMetrics, hasActiveShiftSchedule, hasActiveSiteAssignment, isAssignmentDatePassed, isAssignmentActiveToday, isAssignmentForEmployee } from '../utils/assignmentUtils';
 import { verifyGeofence } from '../services/geofence';
 import { writeSecurityEvent } from '../services/securityLogger';
 import ActionConfirmModal from '../components/ActionConfirmModal';
@@ -350,6 +350,17 @@ export default function AttendanceScreen({ navigation, route, user: propUser }) 
       return;
     }
 
+    const schedShift = resolveShift(activeAssignmentRef.current || activeAssignment, employeeRef.current);
+    const shiftEndCheck = isScheduledShiftEnded(schedShift);
+    if (shiftEndCheck.ended) {
+      Alert.alert(
+        'Shift Already Ended',
+        `Your scheduled shift (${schedShift}) ended at ${shiftEndCheck.shiftEndStr}. You can no longer check in for today's shift.`,
+        [{ text: 'OK' }]
+      );
+      return;
+    }
+
     if (todayRecord && todayRecord.status !== 'Missed Shift' && todayRecord.status !== 'Absent' && todayRecord.status !== 'Missed') {
       return Alert.alert('Already Checked In', 'You have already checked in today.');
     }
@@ -401,6 +412,17 @@ export default function AttendanceScreen({ navigation, route, user: propUser }) 
       Alert.alert(
         'Check-In Blocked',
         'You are registered as a Mobile Field Employee, but have no assigned worksite or patrol route. You cannot check in until an administrator assigns you at least one worksite.',
+        [{ text: 'OK' }]
+      );
+      return;
+    }
+
+    const schedShift = resolveShift(activeAssignmentRef.current || activeAssignment, employeeRef.current);
+    const shiftEndCheck = isScheduledShiftEnded(schedShift);
+    if (shiftEndCheck.ended) {
+      Alert.alert(
+        'Shift Already Ended',
+        `Your scheduled shift (${schedShift}) ended at ${shiftEndCheck.shiftEndStr}. You can no longer check in for today's shift.`,
         [{ text: 'OK' }]
       );
       return;
@@ -917,6 +939,32 @@ export default function AttendanceScreen({ navigation, route, user: propUser }) 
                   <>
                     <Ionicons name="lock-closed-outline" size={18} color="white" />
                     <Text style={styles.actionBtnText}>No Shift Scheduled</Text>
+                  </>
+                )}
+              </TouchableOpacity>
+            ) : (() => {
+              const schedShift = resolveShift(activeAssignment, employee);
+              const endCheck = isScheduledShiftEnded(schedShift);
+              const wt = (employee?.workType || employee?.employeeType || employee?.type || '').toString().toLowerCase();
+              const isFixedEmp = !wt.includes('mobile') && !wt.includes('field');
+              return endCheck.ended && (!checkedIn || (isFixedEmp && !checkedOut));
+            })() ? (
+              <TouchableOpacity
+                style={[styles.actionBtn, { opacity: 0.6, backgroundColor: '#94A3B8' }]}
+                onPress={() => {
+                  const schedShift = resolveShift(activeAssignment, employee);
+                  const endCheck = isScheduledShiftEnded(schedShift);
+                  Alert.alert(
+                    'Shift Already Ended',
+                    `Your scheduled shift (${schedShift}) ended at ${endCheck.shiftEndStr}. Check-in and check-out are locked.`
+                  );
+                }}
+                disabled={checking}
+              >
+                {checking ? <ActivityIndicator color="white" size="small" /> : (
+                  <>
+                    <Ionicons name="lock-closed-outline" size={18} color="white" />
+                    <Text style={styles.actionBtnText}>Shift Ended</Text>
                   </>
                 )}
               </TouchableOpacity>
