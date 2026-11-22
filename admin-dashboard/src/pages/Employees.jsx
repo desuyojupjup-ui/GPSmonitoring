@@ -387,6 +387,45 @@ export default function Employees() {
     );
   };
 
+  const cleanupDeletedEmployeeRecords = async (empList = []) => {
+    if (!empList.length) return;
+    const deletedIds = new Set();
+    const deletedEmails = new Set();
+    const deletedNames = new Set();
+
+    empList.forEach(e => {
+      if (!e) return;
+      if (e.id) deletedIds.add(e.id.toString().trim().toLowerCase());
+      if (e.idNum) deletedIds.add(e.idNum.toString().trim().toLowerCase());
+      if (e.email) deletedEmails.add(e.email.toString().trim().toLowerCase());
+      if (e.name) deletedNames.add(e.name.toString().trim().toLowerCase());
+    });
+
+    const matchesDeletedEmp = (d = {}) => {
+      const dId = (d.employeeId || d.empId || '').toString().trim().toLowerCase();
+      const dEmail = (d.employeeEmail || d.empEmail || d.email || '').toString().trim().toLowerCase();
+      const dName = (d.employeeName || d.empName || d.name || '').toString().trim().toLowerCase();
+      if (dId && deletedIds.has(dId)) return true;
+      if (dEmail && deletedEmails.has(dEmail)) return true;
+      if (dName && deletedNames.has(dName)) return true;
+      return false;
+    };
+
+    const collectionsToClean = ['ai_analysis', 'ActivityLogs', 'notifications', 'Assignments', 'assignments'];
+    for (const colName of collectionsToClean) {
+      try {
+        const snap = await getDocs(collection(db, colName));
+        const toRemove = snap.docs.filter(d => matchesDeletedEmp(d.data()));
+        await Promise.all(toRemove.map(d => deleteDoc(doc(db, colName, d.id)).catch(() => {})));
+        try {
+          const store = JSON.parse(localStorage.getItem('subai_store_' + colName) || '[]');
+          const filtered = store.filter(x => x && !matchesDeletedEmp(x));
+          localStorage.setItem('subai_store_' + colName, JSON.stringify(filtered));
+        } catch (_) {}
+      } catch (_) {}
+    }
+  };
+
   const handleBulkDelete = async () => {
     if (selectedIds.length === 0) return;
     const confirmed = await showConfirmDelete(
@@ -395,7 +434,9 @@ export default function Employees() {
     );
     if (confirmed) {
       try {
+        const deletedEmps = employees.filter(e => selectedIds.includes(e.id));
         await Promise.all(selectedIds.map(id => deleteDoc(doc(db, 'employees', id))));
+        cleanupDeletedEmployeeRecords(deletedEmps).catch(() => {});
         showToast('Bulk Delete Successful', `${selectedIds.length} employee(s) removed from backend.`, 'success');
         setSelectedIds([]);
       } catch (err) {
@@ -536,7 +577,9 @@ export default function Employees() {
     );
     if (confirmed) {
       try {
+        const deletedEmp = employees.find(e => e.id === id) || { id };
         await deleteDoc(doc(db, 'employees', id));
+        cleanupDeletedEmployeeRecords([deletedEmp]).catch(() => {});
         showToast('Employee Removed', 'The employee record has been deleted.', 'success');
       } catch (e) {
         console.warn('Firestore delete error:', e);

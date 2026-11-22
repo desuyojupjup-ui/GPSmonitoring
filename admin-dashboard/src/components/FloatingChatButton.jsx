@@ -24,6 +24,7 @@ export default function FloatingChatButton() {
   const [logs, setLogs] = useState([]);
   const [delays, setDelays] = useState([]);
   const [anomalies, setAnomalies] = useState([]);
+  const [employeesLoaded, setEmployeesLoaded] = useState(false);
   const [messages, setMessages] = useState([
     {
       id: '1',
@@ -41,9 +42,10 @@ export default function FloatingChatButton() {
 
   useEffect(() => {
     try {
-      const unsubE = onSnapshot(query(collection(db, 'employees')), (s) =>
-        setEmployees(s.docs.map((d) => ({ id: d.id, ...d.data() })))
-      );
+      const unsubE = onSnapshot(query(collection(db, 'employees')), (s) => {
+        setEmployees(s.docs.map((d) => ({ id: d.id, ...d.data() })));
+        setEmployeesLoaded(true);
+      });
       const unsubA = onSnapshot(query(collection(db, 'Assignments')), (s) =>
         setAssignments(s.docs.map((d) => ({ id: d.id, ...d.data() })))
       );
@@ -116,8 +118,35 @@ export default function FloatingChatButton() {
     try {
       const text = rawText.toLowerCase().trim();
 
+      // ── Filter out anomalies for deleted employees or deleted anomaly IDs ──
+      const deletedAnomalyIds = new Set((() => {
+        try { return JSON.parse(localStorage.getItem('subai_deleted_anomaly_ids') || '[]'); } catch { return []; }
+      })());
+
+      const validAnomalies = anomalies.filter((a) => {
+        if (!a) return false;
+        if (deletedAnomalyIds.has(a.id) || (a.anomalyId && deletedAnomalyIds.has(a.anomalyId))) {
+          return false;
+        }
+        if (!employeesLoaded) return true;
+        const empId = (a.employeeId || '').toString().trim().toLowerCase();
+        const empEmail = (a.employeeEmail || a.email || '').toString().trim().toLowerCase();
+        const empName = (a.employeeName || '').toString().trim().toLowerCase();
+        if (!empId && !empEmail && !empName) return true;
+        return employees.some((e) => {
+          const eDocId = (e.id || '').toString().trim().toLowerCase();
+          const eIdNum = (e.idNum || '').toString().trim().toLowerCase();
+          const eEmail = (e.email || '').toString().trim().toLowerCase();
+          const eName = (e.name || '').toString().trim().toLowerCase();
+          if (empId && (eDocId === empId || eIdNum === empId)) return true;
+          if (empEmail && eEmail === empEmail) return true;
+          if (empName && eName === empName) return true;
+          return false;
+        });
+      });
+
       // ── Filter active anomalies ──
-      const activeAnomalies = anomalies.filter(
+      const activeAnomalies = validAnomalies.filter(
         (a) => a.status !== 'Resolved' && a.status !== 'Dismissed'
       );
 
@@ -324,7 +353,7 @@ export default function FloatingChatButton() {
             `• Geofence boundary exits throughout active shifts\n` +
             `• Employees clocked in beyond scheduled shift hours\n` +
             `• GPS speed jumps, mock locations, and biometric verifications\n\n` +
-            `Total historical anomalies reviewed: **${anomalies.length}**.`
+            `Total historical anomalies reviewed: **${validAnomalies.length}**.`
           );
         }
 
