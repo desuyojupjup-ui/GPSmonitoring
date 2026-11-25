@@ -111,6 +111,7 @@ export const saveUserSession = async (userObj) => {
       return;
     }
     currentAuthUser = userObj;
+    _activeMobileCompanyId = userObj?.companyId || null;
     if (userObj) {
       await AsyncStorage.setItem('@geostride_user_session', JSON.stringify(userObj));
     } else {
@@ -131,6 +132,7 @@ export const subscribeToLogout = (callback) => {
 export const performGlobalLogout = async () => {
   try {
     currentAuthUser = null;
+    _activeMobileCompanyId = null;
     await AsyncStorage.removeItem('@geostride_user_session');
   } catch (e) {
     console.warn('[Firebase] performGlobalLogout warning:', e);
@@ -158,6 +160,7 @@ export const loadUserSession = async () => {
       const parsed = JSON.parse(saved);
       if (parsed?.email && !parsed.email.toLowerCase().includes('admin@')) {
         currentAuthUser = parsed;
+        _activeMobileCompanyId = parsed.companyId || 'company_default';
         authListeners.forEach((cb) => {
           try { cb(currentAuthUser); } catch (_) {}
         });
@@ -202,7 +205,40 @@ export {
   getFirestore,
 };
 
-// ── Direct Cloud Firestore Exports (Single Source of Truth; AsyncStorage is offline cache only) ──
+// ── Direct Cloud Firestore Exports (Automatic Multi-Company Query Scoping for Employees) ──
+const MOBILE_COMPANY_COLLECTIONS = new Set([
+  'employees', 'Employees',
+  'Assignments', 'assignments',
+  'Sites', 'sites',
+  'Attendance', 'attendance', 'attendance_logs',
+  'facial_verifications',
+  'ai_analysis', 'anomaly_responses',
+  'fraud_reports', 'security_events', 'security_logs',
+  'delay_reports', 'incident_reports',
+  'notifications',
+  'LocationLogs', 'locationLogs', 'location_logs',
+  'gps_history', 'tracking_logs', 'route_logs',
+  'geofence_events', 'geofence_violations',
+  'ActivityLogs', 'device_registry',
+]);
+
+let _activeMobileCompanyId = null;
+
+export const setMobileCompanyScope = (companyId) => {
+  _activeMobileCompanyId = companyId || null;
+};
+
+const scopeQueryForMobileCompany = (_q) => {
+  if (!_q || !_activeMobileCompanyId) return _q;
+  const authEmail = (auth?.currentUser?.email || '').toLowerCase();
+  // When signed in as the employee's own Firebase Auth UID (not gateway admin),
+  // attach where('companyId', '==', companyId) so Firestore rules prove tenant isolation.
+  if (authEmail && !authEmail.includes('admin@') && _q.type === 'collection' && MOBILE_COMPANY_COLLECTIONS.has(_q.id)) {
+    return realQuery(_q, realWhere('companyId', '==', _activeMobileCompanyId));
+  }
+  return _q;
+};
+
 export const collection = (_db, _path) => realCollection(_db, _path);
 export const query = (_ref, ..._args) => realQuery(_ref, ..._args);
 export const where = (_field, _op, _val) => realWhere(_field, _op, _val);
@@ -213,7 +249,7 @@ export const serverTimestamp = () => realServerTimestamp();
 
 export const getDocs = async (_q) => {
   await ensureAuthenticatedSession();
-  return await realGetDocs(_q);
+  return await realGetDocs(scopeQueryForMobileCompany(_q));
 };
 
 export const getDoc = async (_docRef) => {
@@ -232,7 +268,7 @@ export const onSnapshot = (_q, _success, _error) => {
   const attach = () => {
     if (cancelled) return;
     try {
-      activeUnsub = realOnSnapshot(_q, _success, safeError);
+      activeUnsub = realOnSnapshot(scopeQueryForMobileCompany(_q), _success, safeError);
     } catch (e) {
       console.warn('[Firestore onSnapshot] Subscription exception:', e?.message);
     }

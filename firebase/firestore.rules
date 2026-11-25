@@ -3,9 +3,12 @@ service cloud.firestore {
   match /databases/{database}/documents {
 
     // ────────────────────────────────────────────────────────────────────────
-    // Multi-Company, Role Hierarchy & Configurable Permission Security Rules
+    // SUBAI Multi-Company, Role Hierarchy & Configurable Permission Rules
     // Hierarchy: Developer -> System Super Admin -> Company Admin -> Company User -> Employee
     // Profile mapping stored in /user_profiles/{request.auth.uid}
+    //
+    // Query-planner note: sameCompany(data) uses direct `data.companyId == userCompanyId()`
+    // so Firestore enforces strict database-level tenant isolation on BOTH get AND list queries.
     // ────────────────────────────────────────────────────────────────────────
 
     function isAuthenticated() {
@@ -49,13 +52,9 @@ service cloud.firestore {
       return hasProfile() ? profile().get('companyId', 'company_default') : 'company_default';
     }
 
-    function docCompanyId(data) {
-      return data.get('companyId', 'company_default');
-    }
-
     function sameCompany(data) {
       return isPlatformAdmin() ||
-        (hasProfile() && docCompanyId(data) == userCompanyId());
+        (hasProfile() && data.companyId == userCompanyId());
     }
 
     function hasPerm(permKey) {
@@ -113,7 +112,8 @@ service cloud.firestore {
       allow read: if isAuthenticated() && (
         !hasProfile() ||
         isPlatformAdmin() ||
-        (sameCompany(resource.data) && (hasPerm('users') || resource.data.get('email', '') == profile().get('email', '__none__')))
+        resource.data.email == profile().get('email', '__none__') ||
+        (sameCompany(resource.data) && hasPerm('users'))
       );
       allow create: if isPlatformAdmin() ||
         (hasPerm('users') && sameCompany(request.resource.data) &&
@@ -141,6 +141,7 @@ service cloud.firestore {
       allow read: if isAuthenticated() && (
         !hasProfile() ||
         isPlatformAdmin() ||
+        resource.data.email == profile().get('email', '__none__') ||
         (sameCompany(resource.data) && (
           hasPerm('employees') ||
           hasPerm('dashboard') ||
@@ -150,7 +151,7 @@ service cloud.firestore {
           hasPerm('facial_verification') ||
           hasPerm('anomaly_detection') ||
           hasPerm('reports') ||
-          isEmployeeSelf(employeeId, resource.data)
+          isEmployee()
         ))
       );
       allow create: if isPlatformAdmin() ||
@@ -169,7 +170,7 @@ service cloud.firestore {
     }
 
     match /Employees/{employeeId} {
-      allow read: if isPlatformAdmin() || (sameCompany(resource.data) && (hasPerm('employees') || isEmployeeSelf(employeeId, resource.data)));
+      allow read: if isPlatformAdmin() || (sameCompany(resource.data) && (hasPerm('employees') || isEmployee()));
       allow write: if isPlatformAdmin() || (sameCompany(request.resource.data) && hasPerm('employees'));
     }
 
@@ -194,7 +195,7 @@ service cloud.firestore {
           hasPerm('live_monitoring') ||
           hasPerm('attendance') ||
           hasPerm('reports') ||
-          isOwnEmployeeData(resource.data)
+          isEmployee()
         ));
       allow create, update: if isPlatformAdmin() ||
         (sameCompany(request.resource.data) && hasPerm('assignments'));
@@ -209,7 +210,7 @@ service cloud.firestore {
           hasPerm('live_monitoring') ||
           hasPerm('attendance') ||
           hasPerm('reports') ||
-          isOwnEmployeeData(resource.data)
+          isEmployee()
         ));
       allow create, update: if isPlatformAdmin() ||
         (sameCompany(request.resource.data) && hasPerm('assignments'));
@@ -217,7 +218,7 @@ service cloud.firestore {
         (sameCompany(resource.data) && hasPerm('assignments'));
     }
 
-    // ── Attendance Records (Company-scoped; employees can create/update own check-in/out) ──
+    // ── Attendance Records (Company-scoped; employees create/update own check-in/out only) ──
     match /Attendance/{attendanceId} {
       allow read: if isPlatformAdmin() ||
         (sameCompany(resource.data) && (
@@ -226,7 +227,7 @@ service cloud.firestore {
           hasPerm('live_monitoring') ||
           hasPerm('reports') ||
           hasPerm('analytics') ||
-          isOwnEmployeeData(resource.data)
+          isEmployee()
         ));
       allow create: if isPlatformAdmin() ||
         (sameCompany(request.resource.data) && (hasPerm('attendance') || isOwnEmployeeData(request.resource.data)));
@@ -243,7 +244,7 @@ service cloud.firestore {
           hasPerm('live_monitoring') ||
           hasPerm('reports') ||
           hasPerm('analytics') ||
-          isOwnEmployeeData(resource.data)
+          isEmployee()
         ));
       allow create: if isPlatformAdmin() ||
         (sameCompany(request.resource.data) && (hasPerm('attendance') || isOwnEmployeeData(request.resource.data)));
@@ -254,7 +255,7 @@ service cloud.firestore {
     }
     match /attendance_logs/{logId} {
       allow read: if isPlatformAdmin() ||
-        (sameCompany(resource.data) && (hasPerm('attendance') || isOwnEmployeeData(resource.data)));
+        (sameCompany(resource.data) && (hasPerm('attendance') || isEmployee()));
       allow create: if isPlatformAdmin() ||
         (sameCompany(request.resource.data) && (hasPerm('attendance') || isOwnEmployeeData(request.resource.data)));
       allow update, delete: if isPlatformAdmin() || (sameCompany(resource.data) && hasPerm('attendance'));
@@ -267,7 +268,7 @@ service cloud.firestore {
           hasPerm('facial_verification') ||
           hasPerm('dashboard') ||
           hasPerm('reports') ||
-          isOwnEmployeeData(resource.data)
+          isEmployee()
         ));
       allow create: if isPlatformAdmin() ||
         (sameCompany(request.resource.data) && (hasPerm('facial_verification') || isOwnEmployeeData(request.resource.data)));
@@ -285,7 +286,7 @@ service cloud.firestore {
           hasPerm('dashboard') ||
           hasPerm('analytics') ||
           hasPerm('reports') ||
-          isOwnEmployeeData(resource.data)
+          isEmployee()
         ));
       allow create: if isPlatformAdmin() ||
         (sameCompany(request.resource.data) && (hasPerm('anomaly_detection') || isCompanyStaff() || isOwnEmployeeData(request.resource.data)));
@@ -297,7 +298,7 @@ service cloud.firestore {
 
     match /anomaly_responses/{docId} {
       allow read: if isPlatformAdmin() ||
-        (sameCompany(resource.data) && (hasPerm('anomaly_detection') || isOwnEmployeeData(resource.data)));
+        (sameCompany(resource.data) && (hasPerm('anomaly_detection') || isEmployee()));
       allow create, update: if isPlatformAdmin() ||
         (sameCompany(request.resource.data) && (hasPerm('anomaly_detection') || isOwnEmployeeData(request.resource.data)));
       allow delete: if isPlatformAdmin() || (sameCompany(resource.data) && hasPerm('anomaly_detection'));
@@ -306,7 +307,7 @@ service cloud.firestore {
     // ── Fraud & Security Reports ───────────────────────────────────────────
     match /fraud_reports/{docId} {
       allow read: if isPlatformAdmin() ||
-        (sameCompany(resource.data) && (hasPerm('fraud_reports') || hasPerm('anomaly_detection') || hasPerm('dashboard') || isOwnEmployeeData(resource.data)));
+        (sameCompany(resource.data) && (hasPerm('fraud_reports') || hasPerm('anomaly_detection') || hasPerm('dashboard') || isEmployee()));
       allow create: if isPlatformAdmin() ||
         (sameCompany(request.resource.data) && (hasPerm('fraud_reports') || hasPerm('anomaly_detection') || isOwnEmployeeData(request.resource.data)));
       allow update: if isPlatformAdmin() ||
@@ -317,7 +318,7 @@ service cloud.firestore {
 
     match /security_events/{docId} {
       allow read: if isPlatformAdmin() ||
-        (sameCompany(resource.data) && (hasPerm('fraud_reports') || hasPerm('anomaly_detection') || isOwnEmployeeData(resource.data)));
+        (sameCompany(resource.data) && (hasPerm('fraud_reports') || hasPerm('anomaly_detection') || isEmployee()));
       allow create: if isPlatformAdmin() ||
         (sameCompany(request.resource.data) && (hasPerm('fraud_reports') || hasPerm('anomaly_detection') || isOwnEmployeeData(request.resource.data)));
       allow update, delete: if isPlatformAdmin() ||
@@ -326,7 +327,7 @@ service cloud.firestore {
 
     match /security_logs/{logId} {
       allow read: if isPlatformAdmin() ||
-        (sameCompany(resource.data) && (hasPerm('fraud_reports') || isOwnEmployeeData(resource.data)));
+        (sameCompany(resource.data) && (hasPerm('fraud_reports') || isEmployee()));
       allow create: if isPlatformAdmin() ||
         (sameCompany(request.resource.data) && (hasPerm('fraud_reports') || isOwnEmployeeData(request.resource.data)));
       allow update, delete: if isPlatformAdmin() ||
@@ -336,7 +337,7 @@ service cloud.firestore {
     // ── Delay & Incident Reports ───────────────────────────────────────────
     match /delay_reports/{docId} {
       allow read: if isPlatformAdmin() ||
-        (sameCompany(resource.data) && (hasPerm('delay_reports') || hasPerm('dashboard') || isOwnEmployeeData(resource.data)));
+        (sameCompany(resource.data) && (hasPerm('delay_reports') || hasPerm('dashboard') || isEmployee()));
       allow create: if isPlatformAdmin() ||
         (sameCompany(request.resource.data) && (hasPerm('delay_reports') || isOwnEmployeeData(request.resource.data)));
       allow update: if isPlatformAdmin() ||
@@ -347,7 +348,7 @@ service cloud.firestore {
 
     match /incident_reports/{docId} {
       allow read: if isPlatformAdmin() ||
-        (sameCompany(resource.data) && (hasPerm('delay_reports') || hasPerm('dashboard') || isOwnEmployeeData(resource.data)));
+        (sameCompany(resource.data) && (hasPerm('delay_reports') || hasPerm('dashboard') || isEmployee()));
       allow create: if isPlatformAdmin() ||
         (sameCompany(request.resource.data) && (hasPerm('delay_reports') || isOwnEmployeeData(request.resource.data)));
       allow update: if isPlatformAdmin() ||
@@ -362,8 +363,7 @@ service cloud.firestore {
         (sameCompany(resource.data) && (
           hasPerm('notifications') ||
           hasPerm('dashboard') ||
-          isOwnEmployeeData(resource.data) ||
-          resource.data.get('target', '') == 'All Employees'
+          isEmployee()
         ));
       allow create: if isPlatformAdmin() ||
         (sameCompany(request.resource.data) && (isCompanyStaff() || isEmployee()));
@@ -379,52 +379,52 @@ service cloud.firestore {
 
     // ── Telemetry, Location Logs, Geofence Events & Activity Logs ──────────
     match /LocationLogs/{logId} {
-      allow read: if isPlatformAdmin() || (sameCompany(resource.data) && (isCompanyStaff() || isOwnEmployeeData(resource.data)));
+      allow read: if isPlatformAdmin() || (sameCompany(resource.data) && (isCompanyStaff() || isEmployee()));
       allow create: if isPlatformAdmin() || (sameCompany(request.resource.data) && (isCompanyStaff() || isOwnEmployeeData(request.resource.data)));
       allow update, delete: if isPlatformAdmin() || (sameCompany(resource.data) && (isCompanyAdmin() || hasPerm('live_monitoring')));
     }
     match /locationLogs/{logId} {
-      allow read: if isPlatformAdmin() || (sameCompany(resource.data) && (isCompanyStaff() || isOwnEmployeeData(resource.data)));
+      allow read: if isPlatformAdmin() || (sameCompany(resource.data) && (isCompanyStaff() || isEmployee()));
       allow create: if isPlatformAdmin() || (sameCompany(request.resource.data) && (isCompanyStaff() || isOwnEmployeeData(request.resource.data)));
       allow update, delete: if isPlatformAdmin() || (sameCompany(resource.data) && (isCompanyAdmin() || hasPerm('live_monitoring')));
     }
     match /location_logs/{logId} {
-      allow read: if isPlatformAdmin() || (sameCompany(resource.data) && (isCompanyStaff() || isOwnEmployeeData(resource.data)));
+      allow read: if isPlatformAdmin() || (sameCompany(resource.data) && (isCompanyStaff() || isEmployee()));
       allow create: if isPlatformAdmin() || (sameCompany(request.resource.data) && (isCompanyStaff() || isOwnEmployeeData(request.resource.data)));
       allow update, delete: if isPlatformAdmin() || (sameCompany(resource.data) && (isCompanyAdmin() || hasPerm('live_monitoring')));
     }
     match /gps_history/{pointId} {
-      allow read: if isPlatformAdmin() || (sameCompany(resource.data) && (isCompanyStaff() || isOwnEmployeeData(resource.data)));
+      allow read: if isPlatformAdmin() || (sameCompany(resource.data) && (isCompanyStaff() || isEmployee()));
       allow create: if isPlatformAdmin() || (sameCompany(request.resource.data) && (isCompanyStaff() || isOwnEmployeeData(request.resource.data)));
       allow update, delete: if isPlatformAdmin() || (sameCompany(resource.data) && isCompanyAdmin());
     }
     match /tracking_logs/{logId} {
-      allow read: if isPlatformAdmin() || (sameCompany(resource.data) && (isCompanyStaff() || isOwnEmployeeData(resource.data)));
+      allow read: if isPlatformAdmin() || (sameCompany(resource.data) && (isCompanyStaff() || isEmployee()));
       allow create: if isPlatformAdmin() || (sameCompany(request.resource.data) && (isCompanyStaff() || isOwnEmployeeData(request.resource.data)));
       allow update, delete: if isPlatformAdmin() || (sameCompany(resource.data) && isCompanyAdmin());
     }
     match /route_logs/{logId} {
-      allow read: if isPlatformAdmin() || (sameCompany(resource.data) && (isCompanyStaff() || isOwnEmployeeData(resource.data)));
+      allow read: if isPlatformAdmin() || (sameCompany(resource.data) && (isCompanyStaff() || isEmployee()));
       allow create: if isPlatformAdmin() || (sameCompany(request.resource.data) && (isCompanyStaff() || isOwnEmployeeData(request.resource.data)));
       allow update, delete: if isPlatformAdmin() || (sameCompany(resource.data) && isCompanyAdmin());
     }
     match /geofence_events/{docId} {
-      allow read: if isPlatformAdmin() || (sameCompany(resource.data) && (isCompanyStaff() || isOwnEmployeeData(resource.data)));
+      allow read: if isPlatformAdmin() || (sameCompany(resource.data) && (isCompanyStaff() || isEmployee()));
       allow create: if isPlatformAdmin() || (sameCompany(request.resource.data) && (isCompanyStaff() || isOwnEmployeeData(request.resource.data)));
       allow update, delete: if isPlatformAdmin() || (sameCompany(resource.data) && isCompanyAdmin());
     }
     match /geofence_violations/{docId} {
-      allow read: if isPlatformAdmin() || (sameCompany(resource.data) && (isCompanyStaff() || isOwnEmployeeData(resource.data)));
+      allow read: if isPlatformAdmin() || (sameCompany(resource.data) && (isCompanyStaff() || isEmployee()));
       allow create: if isPlatformAdmin() || (sameCompany(request.resource.data) && (isCompanyStaff() || isOwnEmployeeData(request.resource.data)));
       allow update, delete: if isPlatformAdmin() || (sameCompany(resource.data) && isCompanyAdmin());
     }
     match /ActivityLogs/{logId} {
-      allow read: if isPlatformAdmin() || (sameCompany(resource.data) && (isCompanyStaff() || isOwnEmployeeData(resource.data)));
+      allow read: if isPlatformAdmin() || (sameCompany(resource.data) && (isCompanyStaff() || isEmployee()));
       allow create: if isPlatformAdmin() || (sameCompany(request.resource.data) && (isCompanyStaff() || isEmployee()));
       allow update, delete: if isPlatformAdmin() || (sameCompany(resource.data) && (isCompanyAdmin() || hasPerm('settings')));
     }
     match /device_registry/{docId} {
-      allow read: if isPlatformAdmin() || (sameCompany(resource.data) && (isCompanyStaff() || isOwnEmployeeData(resource.data)));
+      allow read: if isPlatformAdmin() || (sameCompany(resource.data) && (isCompanyStaff() || isEmployee()));
       allow create, update: if isPlatformAdmin() || (sameCompany(request.resource.data) && (isCompanyStaff() || isOwnEmployeeData(request.resource.data)));
       allow delete: if isPlatformAdmin() || (sameCompany(resource.data) && isCompanyAdmin());
     }

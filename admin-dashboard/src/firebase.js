@@ -658,7 +658,89 @@ export const clearActivityLogsLedger = async (companyId = null) => {
   }
 };
 
-// ── Direct Cloud Firestore Exports (Single Source of Truth — No Silent Fallback Masking) ──
+// ── Direct Cloud Firestore Exports (Single Source of Truth — Automatic Tenant Query Scoping) ──
+const COMPANY_SCOPED_COLLECTIONS = new Set([
+  'employees', 'Employees',
+  'Assignments', 'assignments',
+  'Sites', 'sites',
+  'Attendance', 'attendance', 'attendance_logs',
+  'facial_verifications',
+  'ai_analysis', 'anomaly_responses',
+  'fraud_reports', 'security_events', 'security_logs',
+  'delay_reports', 'incident_reports',
+  'notifications',
+  'LocationLogs', 'locationLogs', 'location_logs',
+  'gps_history', 'tracking_logs', 'route_logs',
+  'geofence_events', 'geofence_violations',
+  'ActivityLogs', 'device_registry',
+  'users',
+]);
+
+let _tenantScope = (() => {
+  if (typeof window === 'undefined') return { isPlatform: true, companyId: null };
+  try {
+    const raw = localStorage.getItem('subai_admin_user');
+    if (raw) {
+      const u = JSON.parse(raw);
+      const r = String(u?.role || '').trim().toLowerCase();
+      const isPlat = r.includes('developer') || r.includes('super');
+      return { isPlatform: isPlat, companyId: isPlat ? null : (u?.companyId || 'company_default') };
+    }
+  } catch (_) {}
+  return { isPlatform: true, companyId: null };
+})();
+
+export const setActiveTenantScope = ({ companyId = null, isPlatform = false } = {}) => {
+  _tenantScope = {
+    isPlatform: Boolean(isPlatform),
+    companyId: isPlatform ? null : (companyId || 'company_default'),
+  };
+};
+
+const scopeQueryForTenant = (_q) => {
+  if (!_q || _tenantScope.isPlatform || !_tenantScope.companyId) return _q;
+  // Automatically apply where('companyId', '==', companyId) on bare CollectionReferences
+  // so Firestore Security Rules statically prove multi-company isolation on list queries.
+  if (_q.type === 'collection' && COMPANY_SCOPED_COLLECTIONS.has(_q.id)) {
+    return realQuery(_q, realWhere('companyId', '==', _tenantScope.companyId));
+  }
+  return _q;
+};
+
+let _backfillStarted = false;
+export const backfillLegacyCompanyIds = async () => {
+  if (_backfillStarted || !isRealFirebaseConfigured || !db || !_tenantScope.isPlatform) return;
+  _backfillStarted = true;
+  const cols = [
+    'employees', 'Assignments', 'Sites', 'Attendance', 'attendance',
+    'facial_verifications', 'ai_analysis', 'fraud_reports', 'delay_reports',
+    'incident_reports', 'notifications', 'ActivityLogs', 'LocationLogs',
+    'location_logs', 'tracking_logs', 'security_events', 'users',
+  ];
+  try {
+    await ensureAdminAuthSession();
+    for (const colName of cols) {
+      const snap = await realGetDocs(realCollection(db, colName)).catch(() => null);
+      if (!snap || snap.empty) continue;
+      const missing = snap.docs.filter((d) => {
+        const data = d.data() || {};
+        if (colName === 'users') {
+          const r = String(data.role || '').toLowerCase();
+          if (r.includes('developer') || r.includes('super')) return false;
+        }
+        return !data.companyId;
+      });
+      await Promise.all(
+        missing.map((d) =>
+          realUpdateDoc(realDoc(db, colName, d.id), { companyId: 'company_default' }).catch(() => {})
+        )
+      );
+    }
+  } catch (err) {
+    console.warn('[SubAi] Legacy companyId backfill notice:', err?.message);
+  }
+};
+
 export const collection = (_db, _path) => realCollection(_db, _path);
 export const query = (_ref, ..._args) => realQuery(_ref, ..._args);
 export const where = (_field, _op, _val) => realWhere(_field, _op, _val);
@@ -669,7 +751,7 @@ export const serverTimestamp = () => realServerTimestamp();
 
 export const getDocs = async (_q) => {
   await ensureAdminAuthSession();
-  return await realGetDocs(_q);
+  return await realGetDocs(scopeQueryForTenant(_q));
 };
 
 export const getDoc = async (_docRef) => {
@@ -683,7 +765,8 @@ export const onSnapshot = (_q, _success, _error) => {
 
   const attach = () => {
     if (cancelled) return;
-    activeUnsub = realOnSnapshot(_q, _success, (err) => {
+    const effectiveQuery = scopeQueryForTenant(_q);
+    activeUnsub = realOnSnapshot(effectiveQuery, _success, (err) => {
       console.error('[Firestore onSnapshot] Error:', err?.code, err?.message);
       if (typeof _error === 'function') _error(err);
     });

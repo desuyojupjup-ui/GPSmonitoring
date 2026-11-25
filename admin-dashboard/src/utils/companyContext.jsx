@@ -1,5 +1,5 @@
 import React, { createContext, useContext, useState, useEffect, useMemo } from 'react';
-import { db, collection, onSnapshot, addDoc, setDoc, updateDoc, deleteDoc, doc, serverTimestamp } from '../firebase';
+import { db, collection, onSnapshot, addDoc, setDoc, updateDoc, deleteDoc, doc, serverTimestamp, setActiveTenantScope, backfillLegacyCompanyIds } from '../firebase';
 import { isPlatformAdmin } from './roles';
 
 export const DEFAULT_COMPANY_ID = 'company_default';
@@ -55,25 +55,44 @@ export function CompanyProvider({ user, children }) {
     }
   });
 
-  // Lock non-platform users strictly to their assigned companyId
+  // Lock non-platform users strictly to their assigned companyId & sync Firestore query scope
   useEffect(() => {
     if (!user) return;
     if (!isPlatformUser) {
-      setSelectedCompanyId(user.companyId || DEFAULT_COMPANY_ID);
+      const cid = user.companyId || DEFAULT_COMPANY_ID;
+      setSelectedCompanyId(cid);
+      setActiveTenantScope({ companyId: cid, isPlatform: false });
     } else {
       const saved = localStorage.getItem('subai_active_company_id');
       setSelectedCompanyId(saved || 'ALL');
+      setActiveTenantScope({ companyId: null, isPlatform: true });
+      backfillLegacyCompanyIds();
     }
   }, [user?.id, user?.uid, user?.role, user?.companyId, isPlatformUser]);
 
-  // Real-time Firestore listener for 'companies' collection
+  // Real-time Firestore listener for 'companies' collection (platform lists all; company users read their own company doc)
   useEffect(() => {
     if (!user) return;
+    if (!isPlatformUser) {
+      const cid = user.companyId || DEFAULT_COMPANY_ID;
+      const unsubOwn = onSnapshot(
+        doc(db, 'companies', cid),
+        (snap) => {
+          if (snap.exists && snap.exists()) {
+            setCompanies([{ id: snap.id, ...snap.data() }]);
+          } else {
+            setCompanies([{ id: cid, name: user.companyName || (cid === DEFAULT_COMPANY_ID ? DEFAULT_COMPANY_NAME : cid), status: 'Active' }]);
+          }
+        },
+        () => {}
+      );
+      return () => unsubOwn();
+    }
+
     const unsub = onSnapshot(
       collection(db, 'companies'),
       (snap) => {
         const list = snap.docs.map((d) => ({ id: d.id, ...d.data() }));
-        // Ensure Default Organization exists in Firestore for backward compatibility with existing records
         if (!list.some((c) => c.id === DEFAULT_COMPANY_ID)) {
           setDoc(
             doc(db, 'companies', DEFAULT_COMPANY_ID),
@@ -95,7 +114,7 @@ export function CompanyProvider({ user, children }) {
       }
     );
     return () => unsub();
-  }, [user]);
+  }, [user, isPlatformUser]);
 
   const activeCompanyId = isPlatformUser ? selectedCompanyId : (user?.companyId || DEFAULT_COMPANY_ID);
 

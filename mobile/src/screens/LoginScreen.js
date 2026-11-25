@@ -19,6 +19,8 @@ import {
   db, 
   auth, 
   collection, 
+  query,
+  where,
   getDocs, 
   doc,
   updateDoc,
@@ -94,27 +96,29 @@ export default function LoginScreen({ navigation, route, onLogin: propOnLogin })
       // 1. Ensure Firebase Auth session is active so Firestore Security Rules permit reading employees
       await ensureAuthenticatedSession();
 
-      // 2. Fetch employee record from Firestore
-      const allEmpSnap = await getDocs(collection(db, 'employees')).catch(() => ({ empty: true, docs: [] }));
+      // 2. Fetch employee record from Firestore (email query first so Firestore query-planner rules pass cleanly)
       let empData = null;
+      const emailSnap = await getDocs(query(collection(db, 'employees'), where('email', '==', cleanEmail))).catch(() => ({ empty: true, docs: [] }));
+      if (!emailSnap.empty) {
+        const d = emailSnap.docs[0];
+        empData = { id: d.id, ...d.data() };
+      } else {
+        const allEmpSnap = await getDocs(collection(db, 'employees')).catch(() => ({ empty: true, docs: [] }));
+        if (!allEmpSnap.empty) {
+          const matchingDoc = allEmpSnap.docs.find(d => {
+            const data = d.data();
+            const empMail = (data.email || data.empEmail || '').trim().toLowerCase();
+            const empId = (data.idNum || data.empId || data.employeeId || d.id || '').toString().trim().toLowerCase();
+            const empName = (data.name || data.empName || '').trim().toLowerCase();
 
-      if (!allEmpSnap.empty) {
-        const matchingDoc = allEmpSnap.docs.find(d => {
-          const data = d.data();
-          const empMail = (data.email || data.empEmail || '').trim().toLowerCase();
-          const empId = (data.idNum || data.empId || data.employeeId || d.id || '').toString().trim().toLowerCase();
-          const empName = (data.name || data.empName || '').trim().toLowerCase();
-
-          // Match by exact email, prefix, ID number, or exact name
-          if (empMail && empMail === cleanEmail) return true;
-          if (empId && (empId === cleanEmail || empId === cleanEmail.replace('emp-', ''))) return true;
-          if (empName && empName === cleanEmail) return true;
-
-          return false;
-        });
-
-        if (matchingDoc) {
-          empData = { id: matchingDoc.id, ...matchingDoc.data() };
+            if (empMail && empMail === cleanEmail) return true;
+            if (empId && (empId === cleanEmail || empId === cleanEmail.replace('emp-', ''))) return true;
+            if (empName && empName === cleanEmail) return true;
+            return false;
+          });
+          if (matchingDoc) {
+            empData = { id: matchingDoc.id, ...matchingDoc.data() };
+          }
         }
       }
 
