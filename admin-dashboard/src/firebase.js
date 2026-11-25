@@ -336,6 +336,12 @@ export const authenticateAdminUser = async (email, password) => {
     throw err;
   }
 
+  if (account.status && account.status.toLowerCase().includes('pending')) {
+    const err = new Error('This account is pending Super Admin approval. Please wait for approval before signing in.');
+    err.code = 'auth/pending-approval';
+    throw err;
+  }
+
   // Strict password validation against Firestore password OR native Firebase Auth sign-in
   const hasStoredPassword = Boolean(account.password && String(account.password).trim().length > 0);
   let passwordValid = false;
@@ -697,12 +703,25 @@ export const setActiveTenantScope = ({ companyId = null, isPlatform = false } = 
   };
 };
 
+const _queryMetaMap = new WeakMap();
+
 const scopeQueryForTenant = (_q) => {
   if (!_q || _tenantScope.isPlatform || !_tenantScope.companyId) return _q;
-  // Automatically apply where('companyId', '==', companyId) on bare CollectionReferences
-  // so Firestore Security Rules statically prove multi-company isolation on list queries.
+  const companyId = _tenantScope.companyId;
+
+  // Case 1: Bare CollectionReference
   if (_q.type === 'collection' && COMPANY_SCOPED_COLLECTIONS.has(_q.id)) {
-    return realQuery(_q, realWhere('companyId', '==', _tenantScope.companyId));
+    return realQuery(_q, realWhere('companyId', '==', companyId));
+  }
+
+  // Case 2: Query created via our exported query(collection(db, ...), ...)
+  if (_q.type === 'query' && _queryMetaMap.has(_q)) {
+    const meta = _queryMetaMap.get(_q);
+    if (meta && COMPANY_SCOPED_COLLECTIONS.has(meta.colId) && !meta.hasCompanyOrEmailFilter) {
+      // Rebuild with companyId filter and non-orderBy constraints so Firestore never requires a composite index
+      const safeConstraints = (meta.constraints || []).filter((c) => c && c.type !== 'orderBy');
+      return realQuery(meta.colRef, realWhere('companyId', '==', companyId), ...safeConstraints);
+    }
   }
   return _q;
 };
@@ -742,7 +761,23 @@ export const backfillLegacyCompanyIds = async () => {
 };
 
 export const collection = (_db, _path) => realCollection(_db, _path);
-export const query = (_ref, ..._args) => realQuery(_ref, ..._args);
+export const query = (_ref, ..._args) => {
+  const q = realQuery(_ref, ..._args);
+  if (_ref && _ref.type === 'collection') {
+    const hasCompanyOrEmailFilter = _args.some((c) => {
+      if (!c || c.type !== 'where') return false;
+      const fp = c._field?.segments ? c._field.segments.join('.') : String(c._field || '');
+      return fp === 'companyId' || fp === 'email';
+    });
+    _queryMetaMap.set(q, {
+      colRef: _ref,
+      colId: _ref.id,
+      constraints: _args,
+      hasCompanyOrEmailFilter,
+    });
+  }
+  return q;
+};
 export const where = (_field, _op, _val) => realWhere(_field, _op, _val);
 export const orderBy = (_field, _direction) => realOrderBy(_field, _direction);
 export const limit = (_num) => realLimit(_num);

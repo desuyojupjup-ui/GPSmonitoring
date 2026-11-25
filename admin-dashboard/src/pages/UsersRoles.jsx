@@ -23,8 +23,9 @@ import { useCompany, DEFAULT_COMPANY_ID } from '../utils/companyContext';
 import { ResponsiveContainer, PieChart, Pie, Cell, BarChart, Bar, XAxis, YAxis, Tooltip, CartesianGrid } from 'recharts';
 
 const STATUS_STYLE = {
-  'Active':   { background: '#D1FAE5', color: '#065F46', dot: '#10B981' },
-  'Inactive': { background: '#F1F5F9', color: '#475569', dot: '#94A3B8' },
+  'Active':           { background: '#D1FAE5', color: '#065F46', dot: '#10B981' },
+  'Pending Approval': { background: '#FEF3C7', color: '#92400E', dot: '#F59E0B' },
+  'Inactive':         { background: '#F1F5F9', color: '#475569', dot: '#94A3B8' },
 };
 
 const PROTECTED_EMAILS = new Set(['developer@subai.com', 'admin@subai.com']);
@@ -351,6 +352,23 @@ export default function UsersRoles() {
       showToast('Save Failed', e.message || 'Failed to save user to Firestore', 'error');
     } finally {
       setIsSaving(false);
+    }
+  };
+
+  const handleApproveUser = async (row) => {
+    if (!userIsPlatform) {
+      return showToast('Permission Required', 'Only System Super Admin or Developer can approve pending accounts.', 'warning');
+    }
+    try {
+      await updateDoc(doc(db, 'users', row.id), {
+        status: 'Active',
+        approvedBy: currentUser?.email || currentUser?.name || 'System Super Admin',
+        approvedAt: new Date().toISOString(),
+        updatedAt: new Date().toISOString(),
+      });
+      showToast('Account Approved', `${row.name} (${row.role}) has been approved and activated.`, 'success');
+    } catch (e) {
+      showToast('Approval Failed', e.message || 'Could not approve user.', 'error');
     }
   };
 
@@ -760,6 +778,20 @@ export default function UsersRoles() {
                           </td>
                           <td style={{ padding: '10px 16px', whiteSpace: 'nowrap' }}>
                             <div style={{ display: 'flex', gap: '6px', alignItems: 'center' }}>
+                              {userIsPlatform && row.status === 'Pending Approval' && (
+                                <button
+                                  onClick={() => handleApproveUser(row)}
+                                  title="Approve Company Admin / User"
+                                  style={{
+                                    display: 'inline-flex', alignItems: 'center', gap: '4px', padding: '5px 10px',
+                                    height: '28px', borderRadius: '6px', border: '1px solid #6EE7B7',
+                                    backgroundColor: '#ECFDF5', color: '#065F46', fontWeight: '700',
+                                    fontSize: '11px', cursor: 'pointer'
+                                  }}
+                                >
+                                  <Check size={13} color="#059669" /> Approve
+                                </button>
+                              )}
                               <button
                                 onClick={() => openEdit(row)}
                                 style={{
@@ -983,7 +1015,7 @@ export default function UsersRoles() {
               </div>
 
               <div>
-                <label style={{ fontSize: 12, fontWeight: 700, color: '#374151', display: 'block', marginBottom: 5 }}>Access Role *</label>
+                <label style={{ fontSize: 12, fontWeight: 700, color: '#374151', display: 'block', marginBottom: 5 }}>Access Tier *</label>
                 <select
                   value={form.role}
                   onChange={(e) => {
@@ -1006,11 +1038,11 @@ export default function UsersRoles() {
               </div>
 
               <div>
-                <label style={{ fontSize: 12, fontWeight: 700, color: '#374151', display: 'block', marginBottom: 5 }}>Custom Job Title</label>
+                <label style={{ fontSize: 12, fontWeight: 700, color: '#374151', display: 'block', marginBottom: 5 }}>Position / Title (Label)</label>
                 <input
                   value={form.jobTitle || ''}
                   onChange={(e) => setForm({ ...form, jobTitle: e.target.value })}
-                  placeholder="e.g. Operations Lead, Field Coordinator"
+                  placeholder="e.g. HR, Operations Lead, Field Supervisor"
                   style={{ width: '100%', padding: '9px 12px', borderRadius: 8, border: '1px solid #E5E7EB', fontSize: 13, outline: 'none', boxSizing: 'border-box' }}
                 />
               </div>
@@ -1045,7 +1077,8 @@ export default function UsersRoles() {
                   onChange={(e) => setForm({ ...form, status: e.target.value })}
                   style={{ width: '100%', padding: '9px 12px', borderRadius: 8, border: '1px solid #E5E7EB', fontSize: 13, outline: 'none', background: 'white', boxSizing: 'border-box' }}
                 >
-                  <option value="Active">Active</option>
+                  <option value="Active">Active (Approved)</option>
+                  <option value="Pending Approval">Pending Approval</option>
                   <option value="Inactive">Inactive</option>
                 </select>
               </div>
@@ -1116,34 +1149,43 @@ export default function UsersRoles() {
 
               {isPlatformAdmin({ role: form.role }) ? (
                 <div style={{ fontSize: 12, color: '#6D28D9', fontWeight: 600 }}>
-                  {form.role} automatically holds full platform-wide permissions across all companies and modules.
+                  {form.role} sits outside individual companies and manages company registration &amp; Company Admin approvals across the platform.
+                </div>
+              ) : normalizeRoleName(form.role) === 'Company Admin' ? (
+                <div style={{ fontSize: 12, color: '#1E40AF', fontWeight: 600 }}>
+                  Company Admin holds full management access strictly inside their assigned company (creating users, configuring permissions, worksites, employees, and reports).
                 </div>
               ) : (
-                <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fill, minmax(175px, 1fr))', gap: 8 }}>
-                  {MODULE_PERMISSIONS.map((mod) => {
-                    const checked = Boolean(form.permissions?.[mod.key]);
-                    return (
-                      <label
-                        key={mod.key}
-                        style={{
-                          display: 'flex', alignItems: 'center', gap: 8, padding: '7px 10px',
-                          borderRadius: 8, cursor: 'pointer',
-                          border: checked ? '1.5px solid #1E5ADB' : '1px solid #E2E8F0',
-                          background: checked ? '#EFF6FF' : '#FFFFFF',
-                          fontSize: 12, fontWeight: checked ? 700 : 500, color: checked ? '#1E40AF' : '#475569'
-                        }}
-                      >
-                        <input
-                          type="checkbox"
-                          checked={checked}
-                          onChange={() => handleTogglePermission(mod.key)}
-                          style={{ accentColor: '#1E5ADB', width: 14, height: 14, cursor: 'pointer' }}
-                        />
-                        <span>{mod.label}</span>
-                      </label>
-                    );
-                  })}
-                </div>
+                <>
+                  <div style={{ fontSize: 11, color: '#475569', marginBottom: 10 }}>
+                    <strong>Position/Title is a label only.</strong> Actual module access is strictly controlled by the checked permissions below — two companies can assign completely different permissions to the same position (e.g., HR, Manager, or Supervisor).
+                  </div>
+                  <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fill, minmax(175px, 1fr))', gap: 8 }}>
+                    {MODULE_PERMISSIONS.map((mod) => {
+                      const checked = Boolean(form.permissions?.[mod.key]);
+                      return (
+                        <label
+                          key={mod.key}
+                          style={{
+                            display: 'flex', alignItems: 'center', gap: 8, padding: '7px 10px',
+                            borderRadius: 8, cursor: 'pointer',
+                            border: checked ? '1.5px solid #1E5ADB' : '1px solid #E2E8F0',
+                            background: checked ? '#EFF6FF' : '#FFFFFF',
+                            fontSize: 12, fontWeight: checked ? 700 : 500, color: checked ? '#1E40AF' : '#475569'
+                          }}
+                        >
+                          <input
+                            type="checkbox"
+                            checked={checked}
+                            onChange={() => handleTogglePermission(mod.key)}
+                            style={{ accentColor: '#1E5ADB', width: 14, height: 14, cursor: 'pointer' }}
+                          />
+                          <span>{mod.label}</span>
+                        </label>
+                      );
+                    })}
+                  </div>
+                </>
               )}
             </div>
 
