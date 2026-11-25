@@ -92,6 +92,7 @@ function isSameDay(ts, ref) {
 const STATUS_COLOR = {
   'On Site': { bg: '#D1FAE5', text: '#065F46', dot: '#10B981' },
   'Completed': { bg: '#EDE9FE', text: '#5B21B6', dot: '#7C3AED' },
+  'Late Checkout': { bg: '#FEF3C7', text: '#92400E', dot: '#F59E0B' },
   'Flagged': { bg: '#FEE2E2', text: '#991B1B', dot: '#EF4444' },
   'Late': { bg: '#FEF3C7', text: '#92400E', dot: '#F59E0B' },
   'Present': { bg: '#DBEAFE', text: '#1E40AF', dot: '#3B82F6' },
@@ -376,15 +377,7 @@ export default function AttendanceScreen({ navigation, route, user: propUser }) 
     const rec = record || todayRecord;
     if (!rec) return Alert.alert('No Record', 'No active check-in found for today.');
 
-    const emp = employeeRef.current || employee;
-    if (!hasActiveShiftSchedule(activeAssignmentRef.current || activeAssignment, emp)) {
-      Alert.alert(
-        'Check-Out Blocked',
-        'You cannot record check-out because you do not have an active scheduled shift for today.'
-      );
-      return;
-    }
-
+    // Requirement 10: NEVER block Clock Out after scheduled shift end when checked in
     setConfirmModal({
       visible: true,
       actionType: 'check_out',
@@ -495,13 +488,17 @@ export default function AttendanceScreen({ navigation, route, user: propUser }) 
       }
       const statusText = isLate ? 'Late' : 'On Site';
 
+      const companyId = emp.companyId || activeAssignmentRef.current?.companyId || 'company_default';
       const attData = {
+        companyId,
         employee_id: emp.id,
         employeeId: emp.id,
         employeeUid: auth.currentUser?.uid || emp.id,
         employeeName: emp.name,
         email: emp.email || currentEmail,
-        site_id: matchedSite?.id || 'Unknown',
+        assignmentId: activeAssignmentRef.current?.id || null,
+        assignmentVersion: activeAssignmentRef.current?.assignmentVersion || activeAssignmentRef.current?.updatedAt || null,
+        site_id: matchedSite?.id || null,
         siteName: resolvedSiteName,
         assignedSite: emp.assignedSite || emp.site || 'Unassigned Site',
         actualLocation: activeAddressToSave,
@@ -591,30 +588,32 @@ export default function AttendanceScreen({ navigation, route, user: propUser }) 
     }
   };
 
-  // 4. Check Out
+  // 4. Check Out (Requirement 10: Always allow Clock Out past shift end, recording Late Checkout)
   const handleCheckOut = async (record) => {
     const rec = record || todayRecord;
     if (!rec) return Alert.alert('No Record', 'No active check-in found for today.');
 
-    const emp = employeeRef.current || employee;
-    if (!hasActiveShiftSchedule(activeAssignmentRef.current || activeAssignment, emp)) {
-      Alert.alert(
-        'Check-Out Blocked',
-        'You cannot record check-out because you do not have an active scheduled shift for today.'
-      );
-      return;
-    }
-
     setChecking(true);
     try {
-      const emp = employeeRef.current;
+      const emp = employeeRef.current || employee;
       const now = new Date();
       const activeAsg = activeAssignmentRef.current || activeAssignment;
+      const companyId = emp?.companyId || activeAsg?.companyId || 'company_default';
       const asgShift = activeAsg?.shift || activeAsg?.shiftTime || null;
       const empShift = emp?.shift && emp.shift !== 'Unassigned' && emp.shift !== 'Flexible' && emp.shift !== 'No Shift Scheduled' ? emp.shift : (emp?.scheduledShift || null);
       const shiftToCheck = asgShift || empShift || (rec?.shift && rec.shift !== 'Unassigned' && rec.shift !== 'Flexible' && rec.shift !== 'No Shift Scheduled' ? rec.shift : null);
       const earlyInfo = shiftToCheck ? checkEarlyCheckout(shiftToCheck, now, 15) : { isEarly: false, minutesEarly: 0, shiftEndStr: 'Flexible' };
-      const lateOutInfo = (shiftToCheck && !earlyInfo.isEarly) ? checkLateCheckout(shiftToCheck, now, 15) : { isLateOut: false, minutesLateOut: 0, shiftEndStr: 'Flexible' };
+
+      const endCheck = shiftToCheck ? isScheduledShiftEnded(shiftToCheck, now) : { ended: false, shiftEndStr: rec?.scheduledEnd || 'Flexible', shiftEndDt: null };
+      const isAfterShiftEnd = Boolean(!earlyInfo.isEarly && endCheck.ended && endCheck.shiftEndDt);
+      const minutesLateOut = isAfterShiftEnd
+        ? Math.max(1, Math.round((now.getTime() - endCheck.shiftEndDt.getTime()) / 60000))
+        : 0;
+      const lateOutInfo = {
+        isLateOut: isAfterShiftEnd,
+        minutesLateOut,
+        shiftEndStr: endCheck.shiftEndStr || rec?.scheduledEnd || 'Flexible',
+      };
 
       let curCoords = { latitude: rec?.latitude || null, longitude: rec?.longitude || null };
       try {
@@ -624,9 +623,13 @@ export default function AttendanceScreen({ navigation, route, user: propUser }) 
         }
       } catch (_) {}
 
+      const finalStatus = lateOutInfo.isLateOut ? 'Late Checkout' : 'Completed';
       const checkoutPayload = {
+        companyId,
         timeOut: serverTimestamp(),
-        status: 'Completed',
+        actualCheckOut: now.toISOString(),
+        scheduledEnd: lateOutInfo.shiftEndStr !== 'Flexible' ? lateOutInfo.shiftEndStr : (rec?.scheduledEnd || null),
+        status: finalStatus,
         ...(earlyInfo.isEarly ? {
           earlyCheckOut: true,
           earlyDeparture: true,
@@ -638,8 +641,8 @@ export default function AttendanceScreen({ navigation, route, user: propUser }) 
           lateCheckOut: true,
           overtimeCheckOut: true,
           minutesLateOut: lateOutInfo.minutesLateOut,
-          anomalyFlag: 'Late Check-Out',
-          departureNote: `Late Check-Out: Checked out ${lateOutInfo.minutesLateOut}m after scheduled shift end (${lateOutInfo.shiftEndStr})`,
+          anomalyFlag: 'Late Checkout',
+          departureNote: `Late Checkout: Scheduled End ${lateOutInfo.shiftEndStr}, Actual Clock Out ${now.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit', hour12: true })} (+${lateOutInfo.minutesLateOut}m)`,
         } : {})
       };
 
@@ -648,13 +651,13 @@ export default function AttendanceScreen({ navigation, route, user: propUser }) 
 
       if (earlyInfo.isEarly) {
         Alert.alert(
-          'Early Check-Out Warning',
-          `You checked out ${earlyInfo.minutesEarly} min before your scheduled shift end (${earlyInfo.shiftEndStr}). This early departure has been flagged as an anomaly for review.`
+          'Early Check-Out Recorded',
+          `You checked out ${earlyInfo.minutesEarly} min before your scheduled shift end (${earlyInfo.shiftEndStr}).`
         );
       } else if (lateOutInfo.isLateOut) {
         Alert.alert(
-          'Late Check-Out Warning',
-          `You checked out ${lateOutInfo.minutesLateOut} min past your scheduled shift end (${lateOutInfo.shiftEndStr}). This unscheduled overtime has been flagged as an anomaly for review.`
+          'Late Checkout Recorded',
+          `Scheduled End: ${lateOutInfo.shiftEndStr}\nActual Clock Out: ${now.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit', hour12: true })}\nStatus: Late Checkout (+${lateOutInfo.minutesLateOut}m)`
         );
       } else {
         Alert.alert('✅ Checked Out', 'Have a great day!');
@@ -924,6 +927,25 @@ export default function AttendanceScreen({ navigation, route, user: propUser }) 
                 <Ionicons name="close-circle" size={18} color="#EF4444" />
                 <Text style={[styles.doneText, { color: '#EF4444' }]}>Shift missed for today</Text>
               </View>
+            ) : (checkedIn && !checkedOut) ? (
+              <TouchableOpacity
+                style={[
+                  styles.actionBtn,
+                  styles.checkOutBtn,
+                  checking && { opacity: 0.6 }
+                ]}
+                onPress={() => requestCheckOut(null)}
+                disabled={checking}
+              >
+                {checking ? <ActivityIndicator color="white" size="small" /> : (
+                  <>
+                    <Ionicons name="log-out-outline" size={18} color="white" />
+                    <Text style={styles.actionBtnText}>
+                      {isScheduledShiftEnded(resolveShift(activeAssignment, employee)).ended ? 'Check Out (Late)' : 'Check Out'}
+                    </Text>
+                  </>
+                )}
+              </TouchableOpacity>
             ) : !hasActiveShiftSchedule(activeAssignment, employee) ? (
               <TouchableOpacity
                 style={[styles.actionBtn, { opacity: 0.6, backgroundColor: '#94A3B8' }]}
@@ -945,9 +967,8 @@ export default function AttendanceScreen({ navigation, route, user: propUser }) 
             ) : (() => {
               const schedShift = resolveShift(activeAssignment, employee);
               const endCheck = isScheduledShiftEnded(schedShift);
-              const wt = (employee?.workType || employee?.employeeType || employee?.type || '').toString().toLowerCase();
-              const isFixedEmp = !wt.includes('mobile') && !wt.includes('field');
-              return endCheck.ended && (!checkedIn || (isFixedEmp && !checkedOut));
+              // Requirement 10: Only block NEW check-in after shift end; NEVER block Check-Out!
+              return endCheck.ended && !checkedIn;
             })() ? (
               <TouchableOpacity
                 style={[styles.actionBtn, { opacity: 0.6, backgroundColor: '#94A3B8' }]}
@@ -956,7 +977,7 @@ export default function AttendanceScreen({ navigation, route, user: propUser }) 
                   const endCheck = isScheduledShiftEnded(schedShift);
                   Alert.alert(
                     'Shift Already Ended',
-                    `Your scheduled shift (${schedShift}) ended at ${endCheck.shiftEndStr}. Check-in and check-out are locked.`
+                    `Your scheduled shift (${schedShift}) ended at ${endCheck.shiftEndStr}. Check-in is closed for today.`
                   );
                 }}
                 disabled={checking}
@@ -985,27 +1006,12 @@ export default function AttendanceScreen({ navigation, route, user: propUser }) 
                   </>
                 )}
               </TouchableOpacity>
-            ) : !checkedOut ? (
-              <TouchableOpacity
-                style={[
-                  styles.actionBtn, 
-                  styles.checkOutBtn, 
-                  (checking || isMobileFieldWithoutSite(employee, null, null)) && { opacity: 0.6, backgroundColor: isMobileFieldWithoutSite(employee, null, null) ? '#94A3B8' : styles.checkOutBtn.backgroundColor }
-                ]}
-                onPress={() => requestCheckOut(null)}
-                disabled={checking}
-              >
-                {checking ? <ActivityIndicator color="white" size="small" /> : (
-                  <>
-                    <Ionicons name="log-out-outline" size={18} color="white" />
-                    <Text style={styles.actionBtnText}>Check Out</Text>
-                  </>
-                )}
-              </TouchableOpacity>
             ) : (
               <View style={styles.doneRow}>
                 <Ionicons name="checkmark-circle" size={18} color="#10B981" />
-                <Text style={styles.doneText}>Shift completed for today</Text>
+                <Text style={styles.doneText}>
+                  {todayRecord?.status === 'Late Checkout' ? 'Late Checkout recorded for today' : 'Shift completed for today'}
+                </Text>
               </View>
             )}
           </View>

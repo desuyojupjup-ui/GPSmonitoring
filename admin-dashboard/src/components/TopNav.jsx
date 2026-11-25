@@ -7,8 +7,9 @@ import {
   X, Menu, RefreshCw, Radio, Building2, Check, ArrowRight, Sparkles, ShieldAlert 
 } from 'lucide-react';
 import { showToast, showConfirmLogout } from '../utils/toast';
-import { db, collection, onSnapshot, query, doc, updateDoc, safeLocalStorageSet } from '../firebase';
-import { isPathAllowedForRole } from '../utils/roles';
+import { db, collection, onSnapshot, query, doc, updateDoc } from '../firebase';
+import { isPathAllowedForUser } from '../utils/roles';
+import { useCompany } from '../utils/companyContext';
 import { startAnomalyNotificationSync } from '../services/anomalyNotificationSync';
 
 const notifMillis = (n) => {
@@ -21,8 +22,6 @@ const notifMillis = (n) => {
   return isNaN(d.getTime()) ? 0 : d.getTime();
 };
 const sortNotifs = (list) => [...list].sort((a, b) => notifMillis(b) - notifMillis(a));
-
-const RECENT_SEARCHES = ['John Cruz', 'Maria Santos', 'Attendance', 'Greenfield Mall', 'Site Guard Duty'];
 
 const SEARCH_PAGES = [
   { label: 'Dashboard', desc: 'Workforce overview, attendance & live stats', path: '/', category: 'Page', icon: <Activity size={14} /> },
@@ -70,17 +69,34 @@ const NOTIF_COLORS = {
 };
 
 export default function TopNav({ user, onLogout, onMenuToggle }) {
+  const {
+    companies,
+    activeCompanyId,
+    setActiveCompanyId,
+    activeCompany,
+    canSwitchCompanies,
+    matchesCompany,
+  } = useCompany();
+
   const [showUserMenu, setShowUserMenu] = useState(false);
   const [showNotifs, setShowNotifs] = useState(false);
   const [showQuickActions, setShowQuickActions] = useState(false);
   const [showSearch, setShowSearch] = useState(false);
   const [searchQuery, setSearchQuery] = useState('');
   const [selectedResultIndex, setSelectedResultIndex] = useState(-1);
+  const [criticalAlerts, setCriticalAlerts] = useState([]);
+  const [hoveredAlertId, setHoveredAlertId] = useState(null);
 
-  // Live collections for universal search
-  const [employeesList, setEmployeesList] = useState([]);
-  const [sitesList, setSitesList] = useState([]);
-  const [assignmentsList, setAssignmentsList] = useState([]);
+  // Live collections for universal search (Firestore single source of truth)
+  const [rawEmployees, setRawEmployees] = useState([]);
+  const [rawSites, setRawSites] = useState([]);
+  const [rawAssignments, setRawAssignments] = useState([]);
+  const [rawNotifications, setRawNotifications] = useState([]);
+
+  const employeesList = useMemo(() => rawEmployees.filter(matchesCompany), [rawEmployees, matchesCompany]);
+  const sitesList = useMemo(() => rawSites.filter(matchesCompany), [rawSites, matchesCompany]);
+  const assignmentsList = useMemo(() => rawAssignments.filter(matchesCompany), [rawAssignments, matchesCompany]);
+  const notifications = useMemo(() => sortNotifs(rawNotifications.filter(matchesCompany)), [rawNotifications, matchesCompany]);
 
   // Theme state
   const [isDarkMode, setIsDarkMode] = useState(() => {
@@ -94,7 +110,6 @@ export default function TopNav({ user, onLogout, onMenuToggle }) {
   });
   const [showThemeMenu, setShowThemeMenu] = useState(false);
 
-  const [notifications, setNotifications] = useState([]);
   const searchRef = useRef(null);
   const searchInputRef = useRef(null);
   const userMenuRef = useRef(null);
@@ -105,64 +120,22 @@ export default function TopNav({ user, onLogout, onMenuToggle }) {
   const location = useLocation();
   const navigate = useNavigate();
 
-  // Load and subscribe to real-time employees, sites, assignments for universal search
+  // Real-time Firestore listeners for universal search
   useEffect(() => {
-    // 1. Employees
-    const loadEmployees = () => {
-      try {
-        const raw = localStorage.getItem('subai_store_employees');
-        if (raw) {
-          const parsed = JSON.parse(raw);
-          if (Array.isArray(parsed)) return parsed;
-        }
-      } catch (e) {}
-      return [];
-    };
-    setEmployeesList(loadEmployees());
     let unsubEmp = () => {};
-    try {
-      unsubEmp = onSnapshot(query(collection(db, 'employees')), (snap) => {
-        setEmployeesList(snap.docs.map(d => ({ id: d.id, ...d.data() })));
-      }, () => {});
-    } catch(e) {}
-
-    // 2. Sites
-    const loadSites = () => {
-      try {
-        const raw = localStorage.getItem('subai_store_Sites');
-        if (raw) {
-          const parsed = JSON.parse(raw);
-          if (Array.isArray(parsed)) return parsed;
-        }
-      } catch (e) {}
-      return [];
-    };
-    setSitesList(loadSites());
     let unsubSites = () => {};
-    try {
-      unsubSites = onSnapshot(query(collection(db, 'Sites')), (snap) => {
-        setSitesList(snap.docs.map(d => ({ id: d.id, ...d.data() })));
-      }, () => {});
-    } catch(e) {}
-
-    // 3. Assignments
-    const loadAssignments = () => {
-      try {
-        const raw = localStorage.getItem('subai_store_Assignments');
-        if (raw) {
-          const parsed = JSON.parse(raw);
-          if (Array.isArray(parsed)) return parsed;
-        }
-      } catch (e) {}
-      return [];
-    };
-    setAssignmentsList(loadAssignments());
     let unsubAssignments = () => {};
     try {
-      unsubAssignments = onSnapshot(query(collection(db, 'Assignments')), (snap) => {
-        setAssignmentsList(snap.docs.map(d => ({ id: d.id, ...d.data() })));
+      unsubEmp = onSnapshot(query(collection(db, 'employees')), (snap) => {
+        setRawEmployees(snap.docs.map(d => ({ id: d.id, ...d.data() })));
       }, () => {});
-    } catch(e) {}
+      unsubSites = onSnapshot(query(collection(db, 'Sites')), (snap) => {
+        setRawSites(snap.docs.map(d => ({ id: d.id, ...d.data() })));
+      }, () => {});
+      unsubAssignments = onSnapshot(query(collection(db, 'Assignments')), (snap) => {
+        setRawAssignments(snap.docs.map(d => ({ id: d.id, ...d.data() })));
+      }, () => {});
+    } catch (e) {}
 
     return () => {
       unsubEmp();
@@ -186,97 +159,79 @@ export default function TopNav({ user, onLogout, onMenuToggle }) {
     } catch(e) {}
   }, []);
 
-  // Load and subscribe to real-time notifications
+  // Auto-dismiss non-hovered critical popups after 15 seconds (readable window)
   useEffect(() => {
-    const loadFromStorage = () => {
-      try {
-        const raw = localStorage.getItem('subai_store_notifications');
-        if (raw) {
-          const list = JSON.parse(raw);
-          if (Array.isArray(list)) return list;
-        }
-      } catch (e) {}
-      return [];
-    };
+    if (criticalAlerts.length === 0) return;
+    const timer = setInterval(() => {
+      const now = Date.now();
+      setCriticalAlerts((prev) =>
+        prev.filter((alert) => alert.id === hoveredAlertId || now - (alert._shownAt || now) < 15000)
+      );
+    }, 1000);
+    return () => clearInterval(timer);
+  }, [criticalAlerts.length, hoveredAlertId]);
 
+  // Real-time Firestore notifications subscription & persistent anomaly bridge
+  useEffect(() => {
     let unsub = () => {};
     try {
       unsub = onSnapshot(query(collection(db, 'notifications')), (snap) => {
-        const live = sortNotifs(snap.docs.map(d => ({ id: d.id, ...d.data() })));
-        setNotifications(live);
-        safeLocalStorageSet('subai_store_notifications', JSON.stringify(live));
-      }, () => {
-        setNotifications(loadFromStorage());
+        const live = snap.docs.map(d => ({ id: d.id, ...d.data() }));
+        setRawNotifications(live);
+      }, (err) => {
+        console.warn('Notifications live listener error:', err);
       });
-    } catch(e) {
-      setNotifications(loadFromStorage());
-    }
+    } catch (e) {}
 
-    const handleUpdate = () => {
-      setNotifications(sortNotifs(loadFromStorage()));
-    };
-
-    // Mirror AI anomaly alerts into the notifications feed
     const stopAnomalySync = startAnomalyNotificationSync((notif) => {
-      showToast(notif.title, notif.message, notif.severity === 'High' ? 'error' : 'warning');
-    });
-
-    window.addEventListener('subai_notifications_updated', handleUpdate);
-    window.addEventListener('storage', (e) => {
-      if (e.key === 'subai_store_notifications') handleUpdate();
-    });
+      setCriticalAlerts((prev) => {
+        const deduped = prev.filter((item) => item.id !== notif.id);
+        return [{ ...notif, _shownAt: Date.now() }, ...deduped].slice(0, 4);
+      });
+    }, activeCompanyId);
 
     return () => {
       unsub();
       stopAnomalySync();
-      window.removeEventListener('subai_notifications_updated', handleUpdate);
     };
-  }, []);
+  }, [activeCompanyId]);
 
   const notifCount = notifications.filter(n => n.status === 'Unread' || n.read === false).length;
 
   const handleMarkAllRead = async () => {
-    const updated = notifications.map(n => ({ ...n, status: 'Read', read: true }));
-    setNotifications(updated);
-    safeLocalStorageSet('subai_store_notifications', JSON.stringify(updated));
+    const unread = notifications.filter(n => n.status === 'Unread' || n.read === false);
+    if (unread.length === 0) return;
     try {
-      await fetch('/api/sync', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ path: 'notifications', items: updated, fullReplace: true })
-      });
-    } catch (e) {}
-    try {
-      await Promise.all(notifications.filter(n => n.status === 'Unread' || n.read === false).map(n => 
+      await Promise.all(unread.map(n =>
         updateDoc(doc(db, 'notifications', String(n.id)), { status: 'Read', read: true }).catch(() => {})
       ));
-    } catch (e) {}
-    window.dispatchEvent(new CustomEvent('subai_notifications_updated'));
-    showToast('Notifications Read', 'All notifications marked as read.', 'info');
+      setCriticalAlerts([]);
+      showToast('Notifications Read', 'All notifications marked as read in Firestore.', 'info');
+    } catch (e) {
+      showToast('Update Failed', e.message || 'Could not update notifications.', 'error');
+    }
+  };
+
+  const handleMarkSingleRead = async (notifId) => {
+    if (!notifId) return;
+    setCriticalAlerts((prev) => prev.filter((a) => String(a.id) !== String(notifId)));
+    try {
+      await updateDoc(doc(db, 'notifications', String(notifId)), { status: 'Read', read: true });
+    } catch (e) {
+      console.warn('Mark read error:', e);
+    }
   };
 
   const handleNotificationClick = async (notif) => {
     if (notif.status === 'Unread' || notif.read === false) {
-      const updated = notifications.map(n => String(n.id) === String(notif.id) ? { ...n, status: 'Read', read: true } : n);
-      setNotifications(updated);
-      safeLocalStorageSet('subai_store_notifications', JSON.stringify(updated));
-      try {
-        await fetch('/api/sync', {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ path: 'notifications', items: updated, fullReplace: true })
-        });
-      } catch (e) {}
-      try {
-        await updateDoc(doc(db, 'notifications', String(notif.id)), { status: 'Read', read: true }).catch(() => {});
-      } catch (e) {}
-      window.dispatchEvent(new CustomEvent('subai_notifications_updated'));
+      await handleMarkSingleRead(notif.id);
     }
     setShowNotifs(false);
+    setCriticalAlerts((prev) => prev.filter((a) => String(a.id) !== String(notif.id)));
     
     // Contextual routing based on notification content
     if (notif.anomalyId || notif.category === 'AI Anomaly') {
-      navigate('/anomalies', { state: { selectedAnomalyId: notif.anomalyId } });
+      navigate('/anomalies', { state: { selectedAnomalyId: notif.anomalyId || notif.relatedRecordId } });
       return;
     }
     const text = `${notif.type || ''} ${notif.title || ''} ${notif.sender || ''} ${notif.message || ''}`.toLowerCase();
@@ -493,12 +448,14 @@ export default function TopNav({ user, onLogout, onMenuToggle }) {
     },
   ];
 
-  const currentRole = profile?.role || user?.role || 'Super Admin';
+  const activeUserObj = profile?.email ? profile : user;
   const filteredQuickActions = QUICK_ACTIONS.filter(action => {
-    if (action.id === 'add-employee') return isPathAllowedForRole(currentRole, '/employees');
-    if (action.id === 'assign-site') return isPathAllowedForRole(currentRole, '/sites');
-    if (action.id === 'create-assignment') return isPathAllowedForRole(currentRole, '/assignments');
-    if (action.id === 'ai-assistant') return isPathAllowedForRole(currentRole, '/ai-assistant');
+    if (action.id === 'add-employee') return isPathAllowedForUser(activeUserObj, '/employees');
+    if (action.id === 'assign-site') return isPathAllowedForUser(activeUserObj, '/sites');
+    if (action.id === 'create-assignment') return isPathAllowedForUser(activeUserObj, '/assignments');
+    if (action.id === 'generate-report') return isPathAllowedForUser(activeUserObj, '/reports');
+    if (action.id === 'send-notification') return isPathAllowedForUser(activeUserObj, '/notifications');
+    if (action.id === 'ai-assistant') return isPathAllowedForUser(activeUserObj, '/ai-assistant');
     return true;
   });
 
@@ -507,9 +464,9 @@ export default function TopNav({ user, onLogout, onMenuToggle }) {
     const q = searchQuery.trim().toLowerCase();
     if (!q) return null;
 
-    // 1. Matched Pages (filtered by user's role access)
+    // 1. Matched Pages (filtered by user's configurable permissions)
     const pages = SEARCH_PAGES.filter(p => 
-      isPathAllowedForRole(currentRole, p.path) && (
+      isPathAllowedForUser(activeUserObj, p.path) && (
         p.label.toLowerCase().includes(q) || 
         p.desc.toLowerCase().includes(q) || 
         p.path.toLowerCase().includes(q)
@@ -629,6 +586,31 @@ export default function TopNav({ user, onLogout, onMenuToggle }) {
       </div>
 
       <div className="topnav-right">
+        {/* Multi-Company Context Switcher / Tenant Indicator */}
+        {canSwitchCompanies ? (
+          <div style={{ display: 'flex', alignItems: 'center', gap: 6, background: '#EFF6FF', border: '1px solid #BFDBFE', borderRadius: 10, padding: '4px 10px' }} title="Switch active company view">
+            <Building2 size={14} color="#1E5ADB" />
+            <select
+              value={activeCompanyId}
+              onChange={(e) => setActiveCompanyId(e.target.value)}
+              style={{
+                border: 'none', background: 'transparent', outline: 'none',
+                fontSize: 12, fontWeight: 700, color: '#1E40AF', cursor: 'pointer', maxWidth: 165
+              }}
+            >
+              <option value="ALL">All Companies ({companies.length})</option>
+              {companies.map((c) => (
+                <option key={c.id} value={c.id}>{c.name}</option>
+              ))}
+            </select>
+          </div>
+        ) : activeCompany ? (
+          <div style={{ display: 'flex', alignItems: 'center', gap: 6, background: '#F8FAFC', border: '1px solid #E2E8F0', borderRadius: 10, padding: '5px 10px', fontSize: 12, fontWeight: 700, color: '#334155' }}>
+            <Building2 size={14} color="#1E5ADB" />
+            <span>{activeCompany.name}</span>
+          </div>
+        ) : null}
+
         {/* Universal Search Bar */}
         <div className="topnav-search-premium" ref={searchRef}>
           <div className={`search-bar ${showSearch ? 'search-bar-focused' : ''}`} onClick={() => { setShowSearch(true); searchInputRef.current?.focus(); }}>
@@ -667,32 +649,12 @@ export default function TopNav({ user, onLogout, onMenuToggle }) {
 
           {showSearch && (
             <div className="search-dropdown">
-              {/* Default State: Recent Searches & Quick Pages */}
+              {/* Default State: Quick Navigation (no dummy search suggestions) */}
               {!searchQuery.trim() ? (
                 <>
                   <div className="search-section">
-                    <div className="search-section-title">Recent Searches</div>
-                    {RECENT_SEARCHES.map((item, i) => (
-                      <div 
-                        key={i} 
-                        className="search-item" 
-                        onClick={() => {
-                          setSearchQuery(item);
-                          searchInputRef.current?.focus();
-                        }}
-                      >
-                        <RefreshCw size={13} className="search-item-icon" />
-                        <span className="search-item-nav">{item}</span>
-                        <span className="search-item-path">Click to search</span>
-                      </div>
-                    ))}
-                  </div>
-
-                  <div className="search-divider" />
-
-                  <div className="search-section">
                     <div className="search-section-title">Primary Navigation</div>
-                    {SEARCH_PAGES.slice(0, 6).map((item, i) => (
+                    {SEARCH_PAGES.filter(p => isPathAllowedForUser(activeUserObj, p.path)).slice(0, 6).map((item, i) => (
                       <div 
                         key={i} 
                         className="search-item" 
@@ -1103,6 +1065,92 @@ export default function TopNav({ user, onLogout, onMenuToggle }) {
           )}
         </div>
       </div>
+
+      {/* Persistent Readable Critical Anomaly Popup Panel (Top-Right, pauses on hover) */}
+      {criticalAlerts.length > 0 && (
+        <div
+          style={{
+            position: 'fixed',
+            top: 76,
+            right: 20,
+            zIndex: 9998,
+            display: 'flex',
+            flexDirection: 'column',
+            gap: 10,
+            width: 390,
+            maxWidth: 'calc(100vw - 32px)',
+          }}
+        >
+          {criticalAlerts.map((alert) => {
+            const isHigh = alert.severity === 'High' || alert.severity === 'Critical';
+            return (
+              <div
+                key={alert.id}
+                onMouseEnter={() => setHoveredAlertId(alert.id)}
+                onMouseLeave={() => setHoveredAlertId(null)}
+                style={{
+                  background: '#FFFFFF',
+                  borderRadius: 14,
+                  border: `1.5px solid ${isHigh ? '#FCA5A5' : '#FCD34D'}`,
+                  borderLeft: `5px solid ${isHigh ? '#DC2626' : '#F59E0B'}`,
+                  boxShadow: '0 14px 35px rgba(15, 23, 42, 0.18)',
+                  padding: '14px 16px',
+                  display: 'flex',
+                  flexDirection: 'column',
+                  gap: 8,
+                }}
+              >
+                <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', gap: 10 }}>
+                  <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
+                    <div style={{ width: 28, height: 28, borderRadius: 8, background: isHigh ? '#FEE2E2' : '#FEF3C7', color: isHigh ? '#DC2626' : '#D97706', display: 'flex', alignItems: 'center', justifyContent: 'center', flexShrink: 0 }}>
+                      <ShieldAlert size={16} />
+                    </div>
+                    <div>
+                      <div style={{ fontSize: 13, fontWeight: 800, color: '#0F172A' }}>{alert.title || 'Critical Anomaly Alert'}</div>
+                      <div style={{ fontSize: 11, color: '#64748B', fontWeight: 600 }}>
+                        {alert.employeeName ? `${alert.employeeName} • ` : ''}{alert.severity || 'High'} Severity • {alert.time || 'Just now'}
+                      </div>
+                    </div>
+                  </div>
+                  <button
+                    onClick={() => setCriticalAlerts((prev) => prev.filter((a) => a.id !== alert.id))}
+                    style={{ border: 'none', background: 'none', cursor: 'pointer', color: '#94A3B8', padding: 2 }}
+                    title="Dismiss popup"
+                  >
+                    <X size={15} />
+                  </button>
+                </div>
+
+                <div style={{ fontSize: 12.5, color: '#334155', lineHeight: 1.45 }}>
+                  {alert.message}
+                </div>
+
+                <div style={{ display: 'flex', justifyContent: 'flex-end', gap: 8, marginTop: 2 }}>
+                  <button
+                    onClick={() => handleMarkSingleRead(alert.id)}
+                    style={{
+                      padding: '5px 10px', borderRadius: 7, border: '1px solid #E2E8F0',
+                      background: '#F8FAFC', color: '#334155', fontSize: 11, fontWeight: 700, cursor: 'pointer'
+                    }}
+                  >
+                    Mark Read
+                  </button>
+                  <button
+                    onClick={() => handleNotificationClick(alert)}
+                    style={{
+                      padding: '5px 12px', borderRadius: 7, border: 'none',
+                      background: isHigh ? '#DC2626' : '#1E5ADB', color: '#FFFFFF',
+                      fontSize: 11, fontWeight: 700, cursor: 'pointer', display: 'inline-flex', alignItems: 'center', gap: 4
+                    }}
+                  >
+                    View Details <ArrowRight size={12} />
+                  </button>
+                </div>
+              </div>
+            );
+          })}
+        </div>
+      )}
     </div>
   );
 }

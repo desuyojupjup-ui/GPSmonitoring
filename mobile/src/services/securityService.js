@@ -311,23 +311,23 @@ export async function getLiveStatus({ employee, site } = {}) {
     out.root = rootResult.compromised;
     out.rootReason = rootResult.reason;
 
-    // Resolve active employee (or fallback from current session) so events are always attributed and stored
+    // Resolve active employee strictly from provided employee or authenticated session (no hardcoded dummy names)
     const currentAuth = auth?.currentUser;
-    const activeEmp = employee || {
-      id: currentAuth?.uid || 'emp_fallback',
-      name: currentAuth?.displayName || (currentAuth?.email ? currentAuth.email.split('@')[0] : 'Jupiter Desuyo'),
-      email: currentAuth?.email || 'jupiter@gmail.com',
-      employeeType: 'Field Employee',
-    };
+    const activeEmp = employee || (currentAuth && !(currentAuth.email || '').includes('admin@') ? {
+      id: currentAuth.uid,
+      name: currentAuth.displayName || (currentAuth.email ? currentAuth.email.split('@')[0] : 'Employee'),
+      email: currentAuth.email || '',
+      employeeType: 'Employee',
+      companyId: 'company_default',
+    } : null);
 
-    // If active security violation is detected during live scanning, record it to Firestore security_events
-    // (writeSecurityEvent automatically deduplicates within 60s per employee+eventType)
-    if (activeEmp) {
+    // If active security violation is detected during live scanning, record it to Firestore
+    if (activeEmp && activeEmp.id) {
       if (out.vpn) {
         writeSecurityEvent({
           eventType: 'VPN_DETECTED',
-          employee: { id: activeEmp.id, name: activeEmp.name, email: activeEmp.email, employeeType: activeEmp.employeeType },
-          assignment: { id: null, siteId: site?.id, siteName: site?.name },
+          employee: { id: activeEmp.id, name: activeEmp.name, email: activeEmp.email, employeeType: activeEmp.employeeType, companyId: activeEmp.companyId },
+          assignment: { id: null, siteId: site?.id, siteName: site?.name, companyId: activeEmp.companyId },
           coords,
           deviceInfo: { deviceId, ipAddress: ip },
           customDescription: vpnResult.reason,
@@ -336,8 +336,8 @@ export async function getLiveStatus({ employee, site } = {}) {
       if (out.mock) {
         writeSecurityEvent({
           eventType: 'FAKE_GPS_DETECTED',
-          employee: { id: activeEmp.id, name: activeEmp.name, email: activeEmp.email, employeeType: activeEmp.employeeType },
-          assignment: { id: null, siteId: site?.id, siteName: site?.name },
+          employee: { id: activeEmp.id, name: activeEmp.name, email: activeEmp.email, employeeType: activeEmp.employeeType, companyId: activeEmp.companyId },
+          assignment: { id: null, siteId: site?.id, siteName: site?.name, companyId: activeEmp.companyId },
           coords,
           deviceInfo: { deviceId, ipAddress: ip },
           customDescription: mockResult.reason,
@@ -346,8 +346,8 @@ export async function getLiveStatus({ employee, site } = {}) {
       if (out.root) {
         writeSecurityEvent({
           eventType: 'DEVICE_INTEGRITY_VIOLATION',
-          employee: { id: activeEmp.id, name: activeEmp.name, email: activeEmp.email, employeeType: activeEmp.employeeType },
-          assignment: { id: null, siteId: site?.id, siteName: site?.name },
+          employee: { id: activeEmp.id, name: activeEmp.name, email: activeEmp.email, employeeType: activeEmp.employeeType, companyId: activeEmp.companyId },
+          assignment: { id: null, siteId: site?.id, siteName: site?.name, companyId: activeEmp.companyId },
           coords,
           deviceInfo: { deviceId, ipAddress: ip },
           customDescription: rootResult.reason,

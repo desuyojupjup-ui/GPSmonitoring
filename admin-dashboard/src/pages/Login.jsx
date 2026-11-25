@@ -63,8 +63,14 @@ export default function Login({ onLogin, currentUser, onLogout }) {
       
       onLogin(authenticatedUser.email || cleanEmail, password, {
         uid: authenticatedUser.uid,
-        name: authenticatedUser.displayName || cleanEmail.split('@')[0],
-        role: authenticatedUser.role || 'Super Admin'
+        id: authenticatedUser.id || authenticatedUser.uid,
+        name: authenticatedUser.displayName || authenticatedUser.name || cleanEmail.split('@')[0],
+        role: authenticatedUser.role || 'Company User',
+        jobTitle: authenticatedUser.jobTitle || authenticatedUser.role || '',
+        companyId: authenticatedUser.companyId !== undefined ? authenticatedUser.companyId : null,
+        companyName: authenticatedUser.companyName || '',
+        permissions: authenticatedUser.permissions || null,
+        access: authenticatedUser.access || '',
       });
     } catch (err) {
       console.error('Sign-in error:', err);

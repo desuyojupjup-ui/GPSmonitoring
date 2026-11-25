@@ -1,10 +1,11 @@
 // ─────────────────────────────────────────────────────────────
-// AI Anomaly → Notifications bridge & Continuous Geofence Supervisor
-// 1. Watches `ai_analysis` collection and creates matching docs
-//    in `notifications` so anomaly alerts show in TopNav bell & page.
-// 2. Continuously monitors Fixed Site Employees on duty to detect
-//    out-of-bounds perimeter violations throughout their shift:
-//    "Employee is outside the assigned geofence (9043m away)."
+// AI Anomaly -> Persistent Notifications bridge & Active-Shift Geofence Supervisor
+// 1. Watches `ai_analysis` collection and creates persistent docs
+//    in `notifications` so anomaly alerts show in TopNav bell,
+//    critical popup panel, and Notification Center across all sessions.
+// 2. Monitors Fixed Site Employees ONLY during their active scheduled
+//    monitoring window (never raises geofence violations after shift end).
+// 3. Preserves `companyId` for multi-company isolation.
 // ─────────────────────────────────────────────────────────────
 import {
   db,
@@ -17,19 +18,10 @@ import {
   updateDoc,
   serverTimestamp,
 } from '../firebase';
+import { DEFAULT_COMPANY_ID, recordMatchesCompany } from '../utils/companyContext';
 
 const NOTIFIED_KEY = 'subai_notified_anomalies';
 const CLOSED_STATUSES = ['Resolved', 'Dismissed'];
-
-const KNOWN_LOCATIONS = {
-  office: { lat: 10.3273, lng: 123.9064, radius: 200, name: 'Cebu Office' },
-  'cebu office': { lat: 10.3273, lng: 123.9064, radius: 200, name: 'Cebu Office' },
-  'head office': { lat: 10.3273, lng: 123.9064, radius: 200, name: 'Cebu Office' },
-  'main office': { lat: 10.3273, lng: 123.9064, radius: 200, name: 'Main Office' },
-  'sm seaside': { lat: 10.2818, lng: 123.8808, radius: 200, name: 'SM Seaside City' },
-  'ayala center cebu': { lat: 10.3173, lng: 123.9058, radius: 200, name: 'Ayala Center Cebu' },
-  'cebu business park': { lat: 10.3173, lng: 123.9058, radius: 200, name: 'Cebu Business Park' },
-};
 
 function getDistanceMeters(lat1, lon1, lat2, lon2) {
   const R = 6371000;
@@ -72,7 +64,6 @@ const toMillis = (ts) => {
   return isNaN(d.getTime()) ? Date.now() : d.getTime();
 };
 
-// Round long floats like "38.74389848120117m" → "38.7m"
 const cleanText = (text) => {
   if (!text) return '';
   return String(text).replace(/(\d+\.\d{2,})(\s*)(m\b|km\/h)/g, (_, num, sp, unit) => {
@@ -82,9 +73,31 @@ const cleanText = (text) => {
   });
 };
 
+const parseShiftEndMillisToday = (shiftStr, now = new Date()) => {
+  if (!shiftStr) return null;
+  const parts = String(shiftStr).split(/\s*[-~]|(?:\s+to\s+)\s*/i).filter(Boolean);
+  if (parts.length < 2) return null;
+  const parseToken = (tok) => {
+    const m = tok.trim().match(/(\d{1,2}):(\d{2})(?:\s*([AP]M))?/i);
+    if (!m) return null;
+    let h = parseInt(m[1], 10);
+    const min = parseInt(m[2], 10);
+    const ap = m[3] ? m[3].toUpperCase() : null;
+    if (ap === 'PM' && h < 12) h += 12;
+    if (ap === 'AM' && h === 12) h = 0;
+    return { h, min };
+  };
+  const start = parseToken(parts[0]);
+  const end = parseToken(parts[1]);
+  if (!end) return null;
+  const isOvernight = start && (end.h < start.h || (end.h === start.h && end.min <= start.min));
+  const endDt = new Date(now.getFullYear(), now.getMonth(), now.getDate() + (isOvernight ? 1 : 0), end.h, end.min, 0, 0);
+  return endDt.getTime();
+};
+
 export const buildAnomalyNotification = (anomaly) => {
   const type = anomaly.type || anomaly.title || anomaly.eventType || 'Security Anomaly';
-  const severity = anomaly.severity === 'Critical' ? 'High' : anomaly.severity || 'Medium';
+  const severity = anomaly.severity === 'Critical' ? 'Critical' : (anomaly.severity || 'Medium');
   const employee = anomaly.employeeName || 'Field Employee';
   const millis = toMillis(anomaly.timestamp || anomaly.createdAt);
   const d = new Date(millis);
@@ -94,30 +107,33 @@ export const buildAnomalyNotification = (anomaly) => {
     message: `${employee} • ${cleanText(anomaly.description) || 'Outlier telemetry detected by the AI monitor.'}`,
     sender: 'AI Anomaly Monitor',
     sub: `${severity} Risk`,
-    type: 'Alert',
+    type: anomaly.eventType === 'LOCATION_TRACKING_DISABLED' ? 'Location Event' : 'Anomaly Alert',
     category: 'AI Anomaly',
     severity,
     anomalyId: anomaly.id,
+    relatedRecordId: anomaly.id,
     employeeId: anomaly.employeeId || null,
     employeeName: employee,
+    companyId: anomaly.companyId || DEFAULT_COMPANY_ID,
     link: '/anomalies',
     date: d.toLocaleDateString([], { month: 'short', day: 'numeric', year: 'numeric' }),
     time: d.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }),
     status: 'Unread',
     read: false,
     timestamp: d.toISOString(),
+    createdAt: millis,
   };
 };
 
 /**
- * Starts the sync and geofence supervisor. Returns an unsubscribe function.
- * @param {(notif: object) => void} [onNewAlert] called for anomalies that
- *        arrive after the initial load (useful for toasts).
+ * Starts the persistent anomaly-to-notification bridge and active-shift geofence supervisor.
+ * @param {(notif: object) => void} [onNewAlert] called for new alerts arriving after initial load
+ * @param {string} [activeCompanyId='ALL'] active company scope filter
  */
-export function startAnomalyNotificationSync(onNewAlert) {
+export function startAnomalyNotificationSync(onNewAlert, activeCompanyId = 'ALL') {
   const notified = loadNotified();
-  let anomalies = null; // null until first snapshot
-  let notifAnomalyIds = null; // null until first snapshot
+  let anomalies = null;
+  let notifAnomalyIds = null;
   let initialPassDone = false;
   const inFlight = new Set();
   const sitesMap = new Map();
@@ -128,6 +144,7 @@ export function startAnomalyNotificationSync(onNewAlert) {
 
     anomalies.forEach((a) => {
       if (!a?.id) return;
+      if (!recordMatchesCompany(a, activeCompanyId)) return;
       if (CLOSED_STATUSES.includes(a.status)) return;
       if (notified.has(a.id) || notifAnomalyIds.has(a.id) || inFlight.has(a.id)) {
         notified.add(a.id);
@@ -144,7 +161,7 @@ export function startAnomalyNotificationSync(onNewAlert) {
 
       if (initialPassDone && typeof onNewAlert === 'function') {
         try {
-          onNewAlert(payload);
+          onNewAlert({ id: `anomaly_${a.id}`, ...payload });
         } catch (_) {}
       }
     });
@@ -159,6 +176,8 @@ export function startAnomalyNotificationSync(onNewAlert) {
   let unsubSitesUpper = () => {};
   let unsubSitesLower = () => {};
   let unsubEmployees = () => {};
+  let unsubAtt1 = () => {};
+  let unsubAtt2 = () => {};
 
   const parseRadiusValue = (val) => {
     if (val == null) return 0;
@@ -181,7 +200,7 @@ export function startAnomalyNotificationSync(onNewAlert) {
     unsubNotif = onSnapshot(
       query(collection(db, 'notifications')),
       (snap) => {
-        notifAnomalyIds = new Set(snap.docs.map((d) => d.data()?.anomalyId).filter(Boolean));
+        notifAnomalyIds = new Set(snap.docs.map((d) => d.data()?.anomalyId || d.data()?.relatedRecordId).filter(Boolean));
         reconcile();
       },
       (err) => {
@@ -191,7 +210,7 @@ export function startAnomalyNotificationSync(onNewAlert) {
       }
     );
 
-    // 3. Cache Worksites from both 'Sites' and 'sites' collections for continuous geofence supervision
+    // 3. Cache Worksites from Firestore ('Sites' and 'sites') — NO hardcoded fallback locations
     let upperSitesDocs = [];
     let lowerSitesDocs = [];
     const rebuildSitesMap = () => {
@@ -227,17 +246,19 @@ export function startAnomalyNotificationSync(onNewAlert) {
       () => {}
     );
 
-    // 4. Continuous Live Geofence Monitoring for Fixed Site Employees on duty
+    // 4. Live Geofence Monitoring ONLY during active scheduled shift window
     unsubEmployees = onSnapshot(
       collection(db, 'employees'),
       (snap) => {
         snap.docs.forEach((d) => {
           const emp = { id: d.id, ...d.data() };
+          if (!recordMatchesCompany(emp, activeCompanyId)) return;
+
+          const empCompanyId = emp.companyId || DEFAULT_COMPANY_ID;
           const empWorkType = (emp.workType || emp.employeeType || emp.type || '').toString().toLowerCase();
           const isFieldEmp = empWorkType.includes('mobile') || empWorkType.includes('field');
-
-          // Continuous geofence boundaries apply ONLY to Fixed Site Employees who are actively On Duty / On Site
           if (isFieldEmp) return;
+
           const rawStatus = (emp.status || '').toString().trim();
           const isActivelyOnDuty = (rawStatus === 'On Duty' || rawStatus === 'On Site') && emp.isOnline !== false;
           if (!isActivelyOnDuty) return;
@@ -246,20 +267,20 @@ export function startAnomalyNotificationSync(onNewAlert) {
           const lastActiveMs = toMillis(emp.lastActive || emp.lastHeartbeat || emp.lastLocationUpdate);
           if (Date.now() - lastActiveMs > 120000) return;
 
-          // Only alert anomaly if employee has an active scheduled shift today
-          const shiftStr = (emp.shift || emp.scheduledShift || emp.shiftTime || '').toString().trim().toLowerCase();
+          const shiftStrRaw = (emp.shift || emp.scheduledShift || emp.shiftTime || '').toString().trim();
+          const shiftStr = shiftStrRaw.toLowerCase();
           if (!shiftStr || shiftStr === 'flexible' || shiftStr === 'unassigned' || shiftStr === 'none' || shiftStr === 'no shift scheduled') {
             return;
           }
 
-          // If recurring workDays specified, ensure today is a scheduled workday
+          // Ensure today is a scheduled workday if workDays specified
           if (Array.isArray(emp.workDays) && emp.workDays.length > 0) {
             const dayNames = ['Sunday', 'Monday', 'Tuesday', 'Wednesday', 'Thursday', 'Friday', 'Saturday'];
             const dayAbbrs = ['Sun', 'Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat'];
             const dayIdx = new Date().getDay();
             const full = dayNames[dayIdx].toLowerCase();
             const abbr = dayAbbrs[dayIdx].toLowerCase();
-            const isWorkDay = emp.workDays.some(w => {
+            const isWorkDay = emp.workDays.some((w) => {
               if (!w || typeof w !== 'string') return false;
               const cl = w.trim().toLowerCase();
               return cl === full || cl === abbr || full.startsWith(cl) || cl.startsWith(abbr);
@@ -267,16 +288,22 @@ export function startAnomalyNotificationSync(onNewAlert) {
             if (!isWorkDay) return;
           }
 
+          // Requirement 10: Stop geofence monitoring once the scheduled shift monitoring window has ended.
+          // (Employee remains allowed to perform Late Checkout without triggering geofence violations.)
+          const shiftEndMs = parseShiftEndMillisToday(shiftStrRaw, new Date());
+          if (shiftEndMs && Date.now() > shiftEndMs) {
+            return;
+          }
+
           const lat = emp.lat ?? emp.latitude;
           const lng = emp.lng ?? emp.longitude;
           if (lat == null || lng == null || isNaN(Number(lat)) || isNaN(Number(lng))) return;
 
-          // Resolve site from Sites map (Wait until sitesMap has loaded if assignedSite is set)
           const rawAssignedSite = (emp.assignedSite || emp.site || '').toString().trim();
           const siteKey = rawAssignedSite.toLowerCase();
           if (!siteKey || siteKey === 'unassigned' || siteKey === 'none') return;
 
-          let site =
+          const site =
             sitesMap.get(emp.assignedSiteId) ||
             sitesMap.get(rawAssignedSite) ||
             sitesMap.get(siteKey) ||
@@ -285,12 +312,6 @@ export function startAnomalyNotificationSync(onNewAlert) {
               return sName && (sName === siteKey || sName.includes(siteKey) || siteKey.includes(sName));
             }) ||
             null;
-
-          if (!site || (site.lat == null && site.latitude == null)) {
-            if (KNOWN_LOCATIONS[siteKey]) {
-              site = KNOWN_LOCATIONS[siteKey];
-            }
-          }
 
           const siteLat = site?.lat ?? site?.latitude ?? null;
           const siteLng = site?.lng ?? site?.longitude ?? null;
@@ -312,7 +333,6 @@ export function startAnomalyNotificationSync(onNewAlert) {
             if (now - lastAlert > 120000) {
               lastAdminGeofenceAlertTime.set(emp.id, now);
 
-              // Check if a recent anomaly already exists in the last 2 minutes
               const hasRecent = (anomalies || []).some(
                 (a) =>
                   (a.employeeId === emp.id || (a.employeeName && a.employeeName === emp.name)) &&
@@ -323,6 +343,7 @@ export function startAnomalyNotificationSync(onNewAlert) {
               if (!hasRecent) {
                 const desc = `Employee is outside the assigned geofence (${distOutside}m away).`;
                 const anomalyPayload = {
+                  companyId: empCompanyId,
                   employeeId: emp.id,
                   employeeName: emp.name || 'Fixed Site Employee',
                   employeeEmail: emp.email || null,
@@ -343,13 +364,9 @@ export function startAnomalyNotificationSync(onNewAlert) {
                   timestamp: serverTimestamp(),
                 };
 
-                addDoc(collection(db, 'ai_analysis'), anomalyPayload)
-                  .then((ref) => {
-                    console.log(
-                      `[adminGeofenceSync] Auto-flagged geofence breach for ${emp.name}: "${desc}" (Doc ID: ${ref.id})`
-                    );
-                  })
-                  .catch((err) => console.warn('Admin anomaly write error:', err));
+                addDoc(collection(db, 'ai_analysis'), anomalyPayload).catch((err) =>
+                  console.warn('Admin anomaly write error:', err)
+                );
 
                 if (emp.geofenceStatus !== 'Outside Assigned Site') {
                   updateDoc(doc(db, 'employees', emp.id), {
@@ -361,101 +378,25 @@ export function startAnomalyNotificationSync(onNewAlert) {
                 }
               }
             }
-          } else {
-            // Inside geofence
-            if (emp.geofenceStatus === 'Outside Assigned Site' || emp.inFence === false) {
-              updateDoc(doc(db, 'employees', emp.id), {
-                geofenceStatus: 'Inside Assigned Site',
-                inFence: true,
-                updatedAt: serverTimestamp(),
-              }).catch(() => {});
-            }
-          }
-
-          // ── Check Beyond Scheduled Shift Hours ──
-          if (isOnDuty) {
-            const shiftStr = (emp.shift || emp.shiftTime || emp.scheduledShift || '').toString().trim();
-            const sLower = shiftStr.toLowerCase();
-            if (shiftStr && sLower !== 'flexible' && sLower !== 'unassigned' && sLower !== 'none' && sLower !== 'no shift scheduled') {
-              if (Array.isArray(emp.workDays) && emp.workDays.length > 0) {
-                const dayNames = ['Sunday', 'Monday', 'Tuesday', 'Wednesday', 'Thursday', 'Friday', 'Saturday'];
-                const dayAbbrs = ['Sun', 'Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat'];
-                const dayIdx = new Date().getDay();
-                const full = dayNames[dayIdx].toLowerCase();
-                const abbr = dayAbbrs[dayIdx].toLowerCase();
-                const isWorkDay = emp.workDays.some(w => {
-                  if (!w || typeof w !== 'string') return false;
-                  const cl = w.trim().toLowerCase();
-                  return cl === full || cl === abbr || full.startsWith(cl) || cl.startsWith(abbr);
-                });
-                if (!isWorkDay) return;
-              }
-
-              const parts = shiftStr.split(/\s*[-~]|(?:\s+to\s+)\s*/i).filter(Boolean);
-              const endStr = parts.length >= 2 ? parts[1].trim() : (parts.length === 1 ? parts[0].trim() : '');
-              const endMatch = endStr.match(/(\d{1,2}):(\d{2})(?:\s*([AP]M))?/i);
-              if (endMatch) {
-                let endH = parseInt(endMatch[1], 10);
-                const endM = parseInt(endMatch[2], 10);
-                const ampm = endMatch[3] ? endMatch[3].toUpperCase() : null;
-                if (ampm === 'PM' && endH < 12) endH += 12;
-                if (ampm === 'AM' && endH === 12) endH = 0;
-
-                const now = new Date();
-                const shiftEndDt = new Date(now.getFullYear(), now.getMonth(), now.getDate(), endH, endM, 0);
-
-                if (now.getTime() > shiftEndDt.getTime()) {
-                  const elapsedMin = Math.round((now.getTime() - shiftEndDt.getTime()) / 60000);
-                  const lastOvertimeAlert = lastAdminGeofenceAlertTime.get(`overtime_${emp.id}`) || 0;
-
-                  if (elapsedMin >= 5 && (now.getTime() - lastOvertimeAlert > 30 * 60 * 1000)) {
-                    lastAdminGeofenceAlertTime.set(`overtime_${emp.id}`, now.getTime());
-
-                    const hasRecentOt = (anomalies || []).some(
-                      (a) =>
-                        (a.employeeId === emp.id || a.employeeName === emp.name) &&
-                        (a.eventType === 'OVERTIME_SHIFT_EXCEEDED' || (a.type || '').includes('Overtime')) &&
-                        now.getTime() - toMillis(a.timestamp || a.createdAt) < 30 * 60 * 1000
-                    );
-
-                    if (!hasRecentOt) {
-                      const otDesc = `Employee is still clocked in beyond scheduled shift hours (Shift ended at ${endStr}; +${elapsedMin}m overtime).`;
-                      const otPayload = {
-                        employeeId: emp.id,
-                        employeeName: emp.name || 'Employee',
-                        employeeEmail: emp.email || null,
-                        employeeType: emp.workType || 'Employee',
-                        type: 'Unscheduled Overtime / Shift Exceeded',
-                        eventType: 'OVERTIME_SHIFT_EXCEEDED',
-                        severity: 'Medium',
-                        confidence: '96%',
-                        status: 'Active',
-                        description: otDesc,
-                        location: site?.name || emp.assignedSite || 'Scheduled Post',
-                        siteId: site?.id || null,
-                        siteName: site?.name || emp.assignedSite || 'Scheduled Post',
-                        source: 'admin_live_monitor',
-                        createdAt: serverTimestamp(),
-                        timestamp: serverTimestamp(),
-                      };
-
-                      addDoc(collection(db, 'ai_analysis'), otPayload).catch(() => {});
-                    }
-                  }
-                }
-              }
-            }
+          } else if (emp.geofenceStatus === 'Outside Assigned Site' || emp.inFence === false) {
+            updateDoc(doc(db, 'employees', emp.id), {
+              geofenceStatus: 'Inside Assigned Site',
+              inFence: true,
+              updatedAt: serverTimestamp(),
+            }).catch(() => {});
           }
         });
       },
       () => {}
     );
 
-    // ── Monitor Attendance for Early Check-Out Anomalies ──
-    const handleAttEarlyCheck = (docs) => {
+    // 5. Monitor Attendance for Early Check-Out & Late Check-Out records
+    const handleAttAnomalyCheck = (docs) => {
       if (!docs) return;
       docs.forEach((d) => {
         const raw = { id: d.id, ...d.data() };
+        if (!recordMatchesCompany(raw, activeCompanyId)) return;
+
         const rawShift = (raw.shift || '').toString().trim().toLowerCase();
         if (!rawShift || rawShift === 'flexible' || rawShift === 'unassigned' || rawShift === 'none' || rawShift === 'no shift scheduled') {
           return;
@@ -475,6 +416,7 @@ export function startAnomalyNotificationSync(onNewAlert) {
           const minutes = raw.minutesEarly || 10;
           const desc = raw.departureNote || `Employee checked out early before scheduled shift end (${minutes}m early departure).`;
           const payload = {
+            companyId: raw.companyId || DEFAULT_COMPANY_ID,
             employeeId: raw.employeeId || raw.employee_id || null,
             employeeName: raw.employeeName || raw.employee_name || 'Employee',
             employeeEmail: raw.email || null,
@@ -502,18 +444,8 @@ export function startAnomalyNotificationSync(onNewAlert) {
       });
     };
 
-    const unsubAtt1 = onSnapshot(collection(db, 'Attendance'), (snap) => handleAttEarlyCheck(snap.docs), () => {});
-    const unsubAtt2 = onSnapshot(collection(db, 'attendance'), (snap) => handleAttEarlyCheck(snap.docs), () => {});
-
-    return () => {
-      unsubAi();
-      unsubNotif();
-      unsubSitesUpper();
-      unsubSitesLower();
-      unsubEmployees();
-      unsubAtt1();
-      unsubAtt2();
-    };
+    unsubAtt1 = onSnapshot(collection(db, 'Attendance'), (snap) => handleAttAnomalyCheck(snap.docs), () => {});
+    unsubAtt2 = onSnapshot(collection(db, 'attendance'), (snap) => handleAttAnomalyCheck(snap.docs), () => {});
   } catch (e) {
     console.warn('Anomaly notification sync init error:', e);
   }
@@ -524,5 +456,7 @@ export function startAnomalyNotificationSync(onNewAlert) {
     unsubSitesUpper();
     unsubSitesLower();
     unsubEmployees();
+    unsubAtt1();
+    unsubAtt2();
   };
 }

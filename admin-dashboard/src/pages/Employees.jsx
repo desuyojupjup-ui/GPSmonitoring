@@ -4,6 +4,7 @@ import { Search, Plus, Edit2, Trash2, X, Maximize, Download, UserCheck, Clock, A
 import Swal from 'sweetalert2';
 import { db, collection, onSnapshot, addDoc, updateDoc, deleteDoc, doc, query, getDocs, createSecondaryAuthUser } from '../firebase';
 import { showToast, showConfirmDelete } from '../utils/toast';
+import { useCompany, DEFAULT_COMPANY_ID } from '../utils/companyContext';
 import { ResponsiveContainer, PieChart, Pie, Cell, BarChart, Bar, XAxis, YAxis, Tooltip, CartesianGrid } from 'recharts';
 import { hasEmployeeCheckedOut, hasActiveSiteAssignment, hasActiveShiftSchedule, resolveEmployeeWorkType } from '../utils/statusUtils';
 
@@ -237,10 +238,11 @@ export const calculatePasswordStrength = (pass) => {
 };
 
 export default function Employees() {
+  const { matchesCompany, stampCompany, activeCompanyId } = useCompany();
   // Start with empty array - NO hardcoded sample data pre-filled!
-  const [employees, setEmployees]     = useState([]);
-  const [sites, setSites]             = useState([]);
-  const [assignments, setAssignments] = useState([]);
+  const [rawEmployees, setRawEmployees]     = useState([]);
+  const [rawSites, setRawSites]             = useState([]);
+  const [rawAssignments, setRawAssignments] = useState([]);
   const [loading, setLoading]         = useState(true);
   const [search, setSearch]       = useState('');
   const [wtFilter, setWtFilter]   = useState('All');
@@ -248,6 +250,11 @@ export default function Employees() {
   const [form, setForm]           = useState(EMPTY);
   const [editId, setEditId]       = useState(null);
   const [isSaving, setIsSaving]   = useState(false);
+  const [saveError, setSaveError] = useState('');
+
+  const employees = React.useMemo(() => rawEmployees.filter(matchesCompany), [rawEmployees, matchesCompany]);
+  const sites = React.useMemo(() => rawSites.filter(matchesCompany), [rawSites, matchesCompany]);
+  const assignments = React.useMemo(() => rawAssignments.filter(matchesCompany), [rawAssignments, matchesCompany]);
 
   // Pagination state
   const [page, setPage]           = useState(1);
@@ -272,7 +279,6 @@ export default function Employees() {
             empByEmail.set(key, item);
           } else {
             const existing = empByEmail.get(key);
-            // Always retain the canonical record with idNum / complete details
             if (!existing.idNum && item.idNum) {
               empByEmail.set(key, { ...existing, ...item, id: item.id });
             } else {
@@ -280,8 +286,7 @@ export default function Employees() {
             }
           }
         });
-        const uniqueEmps = Array.from(empByEmail.values());
-        setEmployees(uniqueEmps);
+        setRawEmployees(Array.from(empByEmail.values()));
         setLoading(false);
       }, (err) => {
         console.warn('Firestore subscription error:', err);
@@ -290,14 +295,12 @@ export default function Employees() {
 
       const qSites = query(collection(db, 'Sites'));
       const unsubSites = onSnapshot(qSites, (snapshot) => {
-        const liveSites = snapshot.docs.map(d => ({ id: d.id, ...d.data() }));
-        setSites(liveSites);
+        setRawSites(snapshot.docs.map(d => ({ id: d.id, ...d.data() })));
       });
 
       const qAsg = query(collection(db, 'Assignments'));
       const unsubAsg = onSnapshot(qAsg, (snapshot) => {
-        const liveAsg = snapshot.docs.map(d => ({ id: d.id, ...d.data() }));
-        setAssignments(liveAsg);
+        setRawAssignments(snapshot.docs.map(d => ({ id: d.id, ...d.data() })));
       }, () => {});
 
       return () => {
@@ -417,11 +420,6 @@ export default function Employees() {
         const snap = await getDocs(collection(db, colName));
         const toRemove = snap.docs.filter(d => matchesDeletedEmp(d.data()));
         await Promise.all(toRemove.map(d => deleteDoc(doc(db, colName, d.id)).catch(() => {})));
-        try {
-          const store = JSON.parse(localStorage.getItem('subai_store_' + colName) || '[]');
-          const filtered = store.filter(x => x && !matchesDeletedEmp(x));
-          localStorage.setItem('subai_store_' + colName, JSON.stringify(filtered));
-        } catch (_) {}
       } catch (_) {}
     }
   };
@@ -446,38 +444,71 @@ export default function Employees() {
     }
   };
 
-  // Modal Tab state ('info' | 'assignment' | 'all')
-  const [modalTab, setModalTab]   = useState('info');
   const [showPassword, setShowPassword] = useState(false);
 
   // Real-time validations for Add/Edit Employee Modal
   const cleanIdNum = (form.idNum || '').trim();
+  const cleanEmail = (form.email || '').trim().toLowerCase();
+  const cleanUsername = (form.username || '').trim().toLowerCase();
+  const targetCompanyId = form.companyId || (activeCompanyId !== 'ALL' ? activeCompanyId : DEFAULT_COMPANY_ID);
+
+  // Unique ID Number within same company; Email globally unique across live Firestore employees
   const duplicateIdEmployee = cleanIdNum
-    ? employees.find(e => e.id !== editId && (e.idNum || '').trim().toLowerCase() === cleanIdNum.toLowerCase())
+    ? rawEmployees.find(e =>
+        e.id !== editId &&
+        (e.companyId || DEFAULT_COMPANY_ID) === targetCompanyId &&
+        (e.idNum || '').trim().toLowerCase() === cleanIdNum.toLowerCase()
+      )
     : null;
 
-  const cleanEmail = (form.email || '').trim().toLowerCase();
   const isValidEmail = /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(cleanEmail);
   const duplicateEmailEmployee = cleanEmail
-    ? employees.find(e => e.id !== editId && (e.email || '').trim().toLowerCase() === cleanEmail)
+    ? rawEmployees.find(e => e.id !== editId && (e.email || '').trim().toLowerCase() === cleanEmail)
+    : null;
+
+  const duplicateUsernameEmployee = cleanUsername
+    ? rawEmployees.find(e => e.id !== editId && (e.username || '').trim().toLowerCase() === cleanUsername)
     : null;
 
   const pwdStrength = calculatePasswordStrength(form.password || '');
 
-  const validateStep1 = () => {
+  const validateEmployeeForm = (liveRecords = rawEmployees) => {
     const trimmedName = (form.name || '').trim();
     if (!trimmedName) return 'Full Name is required.';
 
     if (!cleanEmail) return 'Email Address is required.';
     if (!isValidEmail) return 'Please enter a valid email address (e.g. employee@gmail.com).';
-    if (duplicateEmailEmployee) {
-      return `Email "${cleanEmail}" is already registered to ${duplicateEmailEmployee.name || 'another employee'}.`;
+
+    const dupEmail = liveRecords.find(
+      e => e.id !== editId && (e.email || '').trim().toLowerCase() === cleanEmail
+    );
+    if (dupEmail) {
+      return `Duplicate Employee: Email "${cleanEmail}" is already registered to ${dupEmail.name || 'another employee'}.`;
     }
 
-    if (cleanIdNum && duplicateIdEmployee) {
-      return `ID Number "${cleanIdNum}" is already assigned to ${duplicateIdEmployee.name || 'another employee'}. Please use a unique ID.`;
+    if (cleanIdNum) {
+      const dupId = liveRecords.find(
+        e => e.id !== editId &&
+          (e.companyId || DEFAULT_COMPANY_ID) === targetCompanyId &&
+          (e.idNum || '').trim().toLowerCase() === cleanIdNum.toLowerCase()
+      );
+      if (dupId) {
+        return `Duplicate Employee: Employee ID "${cleanIdNum}" is already assigned to ${dupId.name || 'another employee'}.`;
+      }
     }
 
+    if (cleanUsername) {
+      const dupUser = liveRecords.find(
+        e => e.id !== editId && (e.username || '').trim().toLowerCase() === cleanUsername
+      );
+      if (dupUser) {
+        return `Duplicate Employee: Username "${cleanUsername}" is already taken.`;
+      }
+    }
+
+    if (!editId && (!form.password || form.password.length < 6)) {
+      return 'Account Password is required and must be at least 6 characters.';
+    }
     if (form.password && form.password.length < 6) {
       return 'Account Password must be at least 6 characters.';
     }
@@ -485,22 +516,12 @@ export default function Employees() {
     return null;
   };
 
-  const handleTabClick = (targetTab) => {
-    if (modalTab === 'info' && (targetTab === 'assignment' || targetTab === 'all')) {
-      const err = validateStep1();
-      if (err) {
-        showToast('Validation Error', err, 'error');
-        return;
-      }
-    }
-    setModalTab(targetTab);
-  };
-
   const location = useLocation();
 
   const openAdd  = () => { 
     setForm({ 
       ...EMPTY, 
+      username: '',
       assignedSites: [],
       shiftStart: '08:00',
       shiftEnd: '17:00',
@@ -509,8 +530,8 @@ export default function Employees() {
       workDays: ['Mon', 'Tue', 'Wed', 'Thu', 'Fri'],
     }); 
     setEditId(null); 
+    setSaveError('');
     setShowPassword(false);
-    setModalTab('info'); 
     setModal(true); 
   };
   
@@ -548,8 +569,8 @@ export default function Employees() {
       workDays: empWorkDays,
     }); 
     setEditId(emp.id); 
+    setSaveError('');
     setShowPassword(false);
-    setModalTab('info'); 
     setModal(true); 
   };
 
@@ -589,17 +610,29 @@ export default function Employees() {
   };
 
   const handleSave = async () => {
-    const step1Err = validateStep1();
-    if (step1Err) {
-      setModalTab('info');
-      return showToast('Validation Error', step1Err, 'error');
+    setSaveError('');
+    // 1. Immediate client-side check before any Firestore calls
+    const preErr = validateEmployeeForm(rawEmployees);
+    if (preErr) {
+      setSaveError(preErr);
+      return showToast('Validation Error', preErr, 'error');
     }
 
     setIsSaving(true);
     try {
+      // 2. Authoritative live Firestore duplicate check BEFORE creating/updating (Requirement 2: NEVER save after duplicate error)
+      const liveSnap = await getDocs(collection(db, 'employees'));
+      const liveRecords = liveSnap.docs.map(d => ({ id: d.id, ...d.data() }));
+      const liveDupErr = validateEmployeeForm(liveRecords);
+      if (liveDupErr) {
+        setSaveError(liveDupErr);
+        showToast('Duplicate Employee Detected', liveDupErr, 'error');
+        return; // HARD ABORT — never proceed to Firestore write
+      }
+
       const isMobile = form.workType === 'Mobile Field Employee';
       const isFixed = form.workType === 'Fixed Site Employee';
-      const existing = editId ? employees.find(e => e.id === editId) : null;
+      const existing = editId ? liveRecords.find(e => e.id === editId) : null;
 
       const sStartFormatted = to12hTime(form.shiftStart || '08:00');
       const sEndFormatted = to12hTime(form.shiftEnd || '17:00');
@@ -608,11 +641,20 @@ export default function Employees() {
         ? form.workDays
         : ['Mon', 'Tue', 'Wed', 'Thu', 'Fri'];
 
-      const dataToSave = {
+      let createdUid = existing?.uid || null;
+      if (form.password && cleanEmail) {
+        const authRes = await createSecondaryAuthUser(cleanEmail, form.password);
+        if (authRes?.uid) createdUid = authRes.uid;
+      }
+
+      const dataToSave = stampCompany({
         ...form,
+        companyId: existing?.companyId || form.companyId || undefined,
         name: (form.name || '').trim(),
         email: cleanEmail,
+        username: cleanUsername,
         idNum: cleanIdNum,
+        ...(createdUid ? { uid: createdUid } : {}),
         assignedSites: isMobile ? (existing?.assignedSites || []) : (form.assignedSite ? [form.assignedSite] : []),
         assignedSite: isMobile ? (existing?.assignedSite || '') : (form.assignedSite || ''),
         assignedDestinations: isMobile ? (existing?.assignedDestinations || []) : [],
@@ -623,23 +665,25 @@ export default function Employees() {
           shiftTime: computedShift,
           workDays: effectiveWorkDays,
           schedule: `${computedShift} (${effectiveWorkDays.join(', ')})`,
-        } : {})
-      };
-
-      if (form.password && cleanEmail) {
-        try {
-          await createSecondaryAuthUser(cleanEmail, form.password);
-        } catch (_) {}
-      }
+        } : {}),
+        updatedAt: Date.now(),
+      });
 
       if (editId) {
         await updateDoc(doc(db, 'employees', editId), dataToSave);
-        showToast('Employee Updated', 'Record saved successfully.', 'success');
+        showToast('Employee Updated', `${dataToSave.name} saved to Cloud Firestore.`, 'success');
       } else {
         const nowStr = new Date().toLocaleString('en-US', { month: 'short', day: 'numeric', year: 'numeric', hour: 'numeric', minute: 'numeric', hour12: true });
-        const newEmp = { ...dataToSave, joined: nowStr.replace(', ', '\n'), profilePic: null };
+        const newEmp = {
+          ...dataToSave,
+          faceRegistered: false,
+          faceReferencePhoto: null,
+          joined: nowStr.replace(', ', '\n'),
+          profilePic: null,
+          createdAt: Date.now(),
+        };
         await addDoc(collection(db, 'employees'), newEmp);
-        showToast('Employee Created', 'New employee added to database.', 'success');
+        showToast('Employee Created', `${dataToSave.name} created successfully.`, 'success');
       }
 
       // Fixed Site Employees have their assigned site set directly on the Employees page;
@@ -796,7 +840,19 @@ export default function Employees() {
                               {emp.profilePic ? <img src={emp.profilePic} alt={emp.name} style={{ width:'100%', height:'100%', objectFit:'cover' }} /> : (emp.name || 'Emp').split(' ').map(n=>n[0]).join('').substring(0,2)}
                             </div>
                             <div>
-                              <div style={{ fontWeight:600, color:'#111827' }}>{emp.name}</div>
+                              <div style={{ fontWeight:600, color:'#111827', display:'flex', alignItems:'center', gap:6 }}>
+                                <span>{emp.name}</span>
+                                <span
+                                  title={emp.faceRegistered && emp.faceReferencePhoto ? 'Face registered for verification' : 'Face registration required before verification'}
+                                  style={{
+                                    fontSize:9.5, fontWeight:700, padding:'1px 6px', borderRadius:10,
+                                    background: emp.faceRegistered && emp.faceReferencePhoto ? '#D1FAE5' : '#FEF3C7',
+                                    color: emp.faceRegistered && emp.faceReferencePhoto ? '#065F46' : '#92400E',
+                                  }}
+                                >
+                                  {emp.faceRegistered && emp.faceReferencePhoto ? 'Face ID ✓' : 'No Face ID'}
+                                </span>
+                              </div>
                               <div style={{ fontSize:11, color:'#6B7280' }}>{emp.email}</div>
                             </div>
                           </div>
@@ -1308,107 +1364,21 @@ export default function Employees() {
               </button>
             </div>
 
-            {/* Modern Stepper Progress Header */}
-            <div style={{ padding: '16px 28px 14px 28px', borderBottom: '1px solid #F1F5F9', background: '#FAFAFA' }}>
-              <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between' }}>
-                
-                {/* Step 1 Badge */}
-                <div
-                  onClick={() => handleTabClick('info')}
-                  style={{ display: 'flex', alignItems: 'center', gap: 10, cursor: 'pointer' }}
-                >
-                  <div style={{
-                    width: 32,
-                    height: 32,
-                    borderRadius: '50%',
-                    background: modalTab === 'info' ? '#1E5ADB' : (modalTab === 'assignment' || modalTab === 'all' ? '#10B981' : '#F1F5F9'),
-                    color: (modalTab === 'info' || modalTab === 'assignment' || modalTab === 'all') ? '#FFFFFF' : '#64748B',
-                    display: 'flex',
-                    alignItems: 'center',
-                    justifyContent: 'center',
-                    fontWeight: 800,
-                    fontSize: 13,
-                    boxShadow: modalTab === 'info' ? '0 4px 12px rgba(30, 90, 219, 0.3)' : 'none',
-                    transition: 'all 0.2s ease'
-                  }}>
-                    {modalTab === 'assignment' || modalTab === 'all' ? <Check size={16} strokeWidth={3} /> : '1'}
-                  </div>
-                  <div>
-                    <div style={{ fontSize: 12, fontWeight: 700, color: modalTab === 'info' ? '#1E5ADB' : '#0F172A' }}>1. Identity & Role</div>
-                    <div style={{ fontSize: 10, color: '#64748B', fontWeight: 500 }}>Personal & Credentials</div>
-                  </div>
+            {/* Simplified Single-Page Scrollable Employee Form (Personal Info, Account Info, Role, Deployment & Status) */}
+            <div style={{ padding: '20px 28px', maxHeight: '72vh', overflowY: 'auto', display: 'flex', flexDirection: 'column', gap: 18 }}>
+              {saveError && (
+                <div style={{ background: '#FEF2F2', border: '1.5px solid #FCA5A5', color: '#991B1B', borderRadius: 12, padding: '10px 14px', fontSize: 12.5, fontWeight: 700, display: 'flex', alignItems: 'center', gap: 8 }}>
+                  <AlertCircle size={16} color="#DC2626" />
+                  <span>{saveError}</span>
                 </div>
+              )}
 
-                {/* Connecting Line 1 */}
-                <div style={{ flex: 1, height: 2, background: (modalTab === 'assignment' || modalTab === 'all') ? '#10B981' : '#E2E8F0', margin: '0 12px', transition: 'all 0.3s ease' }} />
-
-                {/* Step 2 Badge */}
-                <div
-                  onClick={() => handleTabClick('assignment')}
-                  style={{ display: 'flex', alignItems: 'center', gap: 10, cursor: 'pointer' }}
-                >
-                  <div style={{
-                    width: 32,
-                    height: 32,
-                    borderRadius: '50%',
-                    background: modalTab === 'assignment' ? '#1E5ADB' : (modalTab === 'all' ? '#10B981' : '#F1F5F9'),
-                    color: (modalTab === 'assignment' || modalTab === 'all') ? '#FFFFFF' : '#64748B',
-                    border: modalTab === 'assignment' ? 'none' : '1.5px solid #CBD5E1',
-                    display: 'flex',
-                    alignItems: 'center',
-                    justifyContent: 'center',
-                    fontWeight: 800,
-                    fontSize: 13,
-                    boxShadow: modalTab === 'assignment' ? '0 4px 12px rgba(30, 90, 219, 0.3)' : 'none',
-                    transition: 'all 0.2s ease'
-                  }}>
-                    {modalTab === 'all' ? <Check size={16} strokeWidth={3} /> : '2'}
-                  </div>
-                  <div>
-                    <div style={{ fontSize: 12, fontWeight: 700, color: modalTab === 'assignment' ? '#1E5ADB' : '#0F172A' }}>2. Work & Deployment</div>
-                    <div style={{ fontSize: 10, color: '#64748B', fontWeight: 500 }}>Site & Geofence</div>
-                  </div>
+              {/* Section 1: Personal & Role Information */}
+              <div>
+                <div style={{ fontSize: 11.5, fontWeight: 800, color: '#1E5ADB', textTransform: 'uppercase', letterSpacing: '0.05em', marginBottom: 10 }}>
+                  1. Personal &amp; Role Information
                 </div>
-
-                {/* Connecting Line 2 */}
-                <div style={{ flex: 1, height: 2, background: modalTab === 'all' ? '#10B981' : '#E2E8F0', margin: '0 12px', transition: 'all 0.3s ease' }} />
-
-                {/* Step 3 Badge */}
-                <div
-                  onClick={() => handleTabClick('all')}
-                  style={{ display: 'flex', alignItems: 'center', gap: 10, cursor: 'pointer' }}
-                >
-                  <div style={{
-                    width: 32,
-                    height: 32,
-                    borderRadius: '50%',
-                    background: modalTab === 'all' ? '#1E5ADB' : '#F1F5F9',
-                    color: modalTab === 'all' ? '#FFFFFF' : '#64748B',
-                    border: modalTab === 'all' ? 'none' : '1.5px solid #CBD5E1',
-                    display: 'flex',
-                    alignItems: 'center',
-                    justifyContent: 'center',
-                    fontWeight: 800,
-                    fontSize: 13,
-                    boxShadow: modalTab === 'all' ? '0 4px 12px rgba(30, 90, 219, 0.3)' : 'none',
-                    transition: 'all 0.2s ease'
-                  }}>
-                    3
-                  </div>
-                  <div>
-                    <div style={{ fontSize: 12, fontWeight: 700, color: modalTab === 'all' ? '#1E5ADB' : '#0F172A' }}>3. Full Overview</div>
-                    <div style={{ fontSize: 10, color: '#64748B', fontWeight: 500 }}>Review & Save</div>
-                  </div>
-                </div>
-
-              </div>
-            </div>
-
-            {/* Modal Body Form Fields - Optimized for Scrolldown-Free Display */}
-            <div style={{ padding: '24px 28px' }}>
-              {modalTab === 'info' && (
-                <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '16px 20px', alignItems: 'start' }}>
-                  {/* Full Name */}
+                <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '14px 18px', alignItems: 'start' }}>
                   <div>
                     <label style={{ fontSize: 11, fontWeight: 700, color: '#475569', display: 'block', marginBottom: 6 }}>Full Name *</label>
                     <div style={{ position: 'relative' }}>
@@ -1416,71 +1386,38 @@ export default function Employees() {
                       <input
                         type="text"
                         value={form.name || ''}
-                        onChange={e => setForm(p => ({ ...p, name: e.target.value }))}
+                        onChange={e => { setSaveError(''); setForm(p => ({ ...p, name: e.target.value })); }}
                         placeholder="e.g. John Doe"
-                        style={{ width: '100%', padding: '10px 14px 10px 38px', borderRadius: 12, border: '1.5px solid #E2E8F0', fontSize: 13, outline: 'none', background: '#FFFFFF', fontFamily: 'Inter, sans-serif', boxSizing: 'border-box', color: '#0F172A', fontWeight: 500 }}
+                        style={{ width: '100%', padding: '10px 14px 10px 38px', borderRadius: 12, border: '1.5px solid #E2E8F0', fontSize: 13, outline: 'none', background: '#FFFFFF', boxSizing: 'border-box', color: '#0F172A', fontWeight: 500 }}
                       />
                     </div>
                   </div>
 
-                  {/* ID Number with Duplicate Check */}
                   <div>
                     <label style={{ fontSize: 11, fontWeight: 700, color: '#475569', display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: 6 }}>
-                      <span>ID Number</span>
-                      {duplicateIdEmployee && (
-                        <span style={{ fontSize: 10, color: '#EF4444', fontWeight: 700, display: 'flex', alignItems: 'center', gap: 3 }}>
-                          <AlertCircle size={11} color="#EF4444" /> Duplicate ID
-                        </span>
-                      )}
-                      {!duplicateIdEmployee && cleanIdNum && (
-                        <span style={{ fontSize: 10, color: '#10B981', fontWeight: 700, display: 'flex', alignItems: 'center', gap: 3 }}>
-                          <CheckCircle2 size={11} color="#10B981" /> Available
-                        </span>
-                      )}
+                      <span>Employee ID Number</span>
+                      {duplicateIdEmployee && <span style={{ fontSize: 10, color: '#EF4444', fontWeight: 700 }}>Duplicate ID</span>}
+                      {!duplicateIdEmployee && cleanIdNum && <span style={{ fontSize: 10, color: '#10B981', fontWeight: 700 }}>Available</span>}
                     </label>
                     <div style={{ position: 'relative' }}>
                       <IdCard size={15} color={duplicateIdEmployee ? '#EF4444' : '#94A3B8'} style={{ position: 'absolute', left: 12, top: 12 }} />
                       <input
                         type="text"
                         value={form.idNum || ''}
-                        onChange={e => setForm(p => ({ ...p, idNum: e.target.value }))}
+                        onChange={e => { setSaveError(''); setForm(p => ({ ...p, idNum: e.target.value })); }}
                         placeholder="e.g. EMP-1001"
                         style={{
-                          width: '100%',
-                          padding: '10px 14px 10px 38px',
-                          borderRadius: 12,
+                          width: '100%', padding: '10px 14px 10px 38px', borderRadius: 12,
                           border: duplicateIdEmployee ? '1.5px solid #EF4444' : (cleanIdNum ? '1.5px solid #10B981' : '1.5px solid #E2E8F0'),
-                          fontSize: 13,
-                          outline: 'none',
-                          background: duplicateIdEmployee ? '#FEF2F2' : '#FFFFFF',
-                          fontFamily: 'Inter, sans-serif',
-                          boxSizing: 'border-box',
-                          color: '#0F172A',
-                          fontWeight: 500,
-                          transition: 'all 0.15s ease'
+                          fontSize: 13, outline: 'none', background: duplicateIdEmployee ? '#FEF2F2' : '#FFFFFF',
+                          boxSizing: 'border-box', color: '#0F172A', fontWeight: 500
                         }}
                       />
                     </div>
-                    {duplicateIdEmployee ? (
-                      <div style={{ marginTop: 4, fontSize: 11, color: '#DC2626', fontWeight: 600, display: 'flex', alignItems: 'center', gap: 4 }}>
-                        <AlertCircle size={12} color="#DC2626" />
-                        Already used by {duplicateIdEmployee.name || 'another employee'}
-                      </div>
-                    ) : cleanIdNum ? (
-                      <div style={{ marginTop: 4, fontSize: 11, color: '#059669', fontWeight: 500, display: 'flex', alignItems: 'center', gap: 4 }}>
-                        <CheckCircle2 size={12} color="#10B981" />
-                        ID Number is unique and available
-                      </div>
-                    ) : (
-                      <div style={{ marginTop: 4, fontSize: 10.5, color: '#94A3B8' }}>
-                        Workforce ID number (cannot be duplicate)
-                      </div>
-                    )}
                   </div>
 
-                  {/* Department / Org */}
                   <div>
-                    <label style={{ fontSize: 11, fontWeight: 700, color: '#475569', display: 'block', marginBottom: 6 }}>Department / Org</label>
+                    <label style={{ fontSize: 11, fontWeight: 700, color: '#475569', display: 'block', marginBottom: 6 }}>Department / Unit</label>
                     <div style={{ position: 'relative' }}>
                       <Building2 size={15} color="#94A3B8" style={{ position: 'absolute', left: 12, top: 12 }} />
                       <input
@@ -1488,12 +1425,11 @@ export default function Employees() {
                         value={form.org || ''}
                         onChange={e => setForm(p => ({ ...p, org: e.target.value }))}
                         placeholder="e.g. Field Operations"
-                        style={{ width: '100%', padding: '10px 14px 10px 38px', borderRadius: 12, border: '1.5px solid #E2E8F0', fontSize: 13, outline: 'none', background: '#FFFFFF', fontFamily: 'Inter, sans-serif', boxSizing: 'border-box', color: '#0F172A', fontWeight: 500 }}
+                        style={{ width: '100%', padding: '10px 14px 10px 38px', borderRadius: 12, border: '1.5px solid #E2E8F0', fontSize: 13, outline: 'none', background: '#FFFFFF', boxSizing: 'border-box', color: '#0F172A', fontWeight: 500 }}
                       />
                     </div>
                   </div>
 
-                  {/* Role / Job Title */}
                   <div>
                     <label style={{ fontSize: 11, fontWeight: 700, color: '#475569', display: 'block', marginBottom: 6 }}>Role / Job Title</label>
                     <div style={{ position: 'relative' }}>
@@ -1502,728 +1438,281 @@ export default function Employees() {
                         type="text"
                         value={form.type || ''}
                         onChange={e => setForm(p => ({ ...p, type: e.target.value }))}
-                        placeholder="e.g. Security Guard"
-                        style={{ width: '100%', padding: '10px 14px 10px 38px', borderRadius: 12, border: '1.5px solid #E2E8F0', fontSize: 13, outline: 'none', background: '#FFFFFF', fontFamily: 'Inter, sans-serif', boxSizing: 'border-box', color: '#0F172A', fontWeight: 500 }}
+                        placeholder="e.g. Security Guard, Field Technician"
+                        style={{ width: '100%', padding: '10px 14px 10px 38px', borderRadius: 12, border: '1.5px solid #E2E8F0', fontSize: 13, outline: 'none', background: '#FFFFFF', boxSizing: 'border-box', color: '#0F172A', fontWeight: 500 }}
                       />
                     </div>
                   </div>
+                </div>
+              </div>
 
-                  {/* Email Address with @gmail.com & Required Validation */}
+              {/* Section 2: Account Credentials & Status */}
+              <div style={{ borderTop: '1px solid #F1F5F9', paddingTop: 14 }}>
+                <div style={{ fontSize: 11.5, fontWeight: 800, color: '#1E5ADB', textTransform: 'uppercase', letterSpacing: '0.05em', marginBottom: 10 }}>
+                  2. Account Information &amp; Status
+                </div>
+                <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '14px 18px', alignItems: 'start' }}>
                   <div>
                     <label style={{ fontSize: 11, fontWeight: 700, color: '#475569', display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: 6 }}>
                       <span>Email Address *</span>
-                      {duplicateEmailEmployee && (
-                        <span style={{ fontSize: 10, color: '#EF4444', fontWeight: 700 }}>Already registered</span>
-                      )}
-                      {!duplicateEmailEmployee && isValidEmail && (
-                        <span style={{ fontSize: 10, color: '#10B981', fontWeight: 700, display: 'flex', alignItems: 'center', gap: 3 }}>
-                          <CheckCircle2 size={11} color="#10B981" /> Valid Email
-                        </span>
-                      )}
+                      {duplicateEmailEmployee && <span style={{ fontSize: 10, color: '#EF4444', fontWeight: 700 }}>Already registered</span>}
+                      {!duplicateEmailEmployee && isValidEmail && <span style={{ fontSize: 10, color: '#10B981', fontWeight: 700 }}>Valid</span>}
                     </label>
                     <div style={{ position: 'relative' }}>
                       <Mail size={15} color={duplicateEmailEmployee ? '#EF4444' : '#94A3B8'} style={{ position: 'absolute', left: 12, top: 12 }} />
                       <input
                         type="email"
                         value={form.email || ''}
-                        onChange={e => setForm(p => ({ ...p, email: e.target.value }))}
+                        onChange={e => { setSaveError(''); setForm(p => ({ ...p, email: e.target.value })); }}
                         placeholder="e.g. employee@gmail.com"
                         style={{
-                          width: '100%',
-                          padding: '10px 14px 10px 38px',
-                          borderRadius: 12,
-                          border: duplicateEmailEmployee ? '1.5px solid #EF4444' : (cleanEmail && !isValidEmail ? '1.5px solid #F59E0B' : (isValidEmail ? '1.5px solid #10B981' : '1.5px solid #E2E8F0')),
-                          fontSize: 13,
-                          outline: 'none',
-                          background: duplicateEmailEmployee ? '#FEF2F2' : '#FFFFFF',
-                          fontFamily: 'Inter, sans-serif',
-                          boxSizing: 'border-box',
-                          color: '#0F172A',
-                          fontWeight: 500,
-                          transition: 'all 0.15s ease'
+                          width: '100%', padding: '10px 14px 10px 38px', borderRadius: 12,
+                          border: duplicateEmailEmployee ? '1.5px solid #EF4444' : (isValidEmail ? '1.5px solid #10B981' : '1.5px solid #E2E8F0'),
+                          fontSize: 13, outline: 'none', background: duplicateEmailEmployee ? '#FEF2F2' : '#FFFFFF',
+                          boxSizing: 'border-box', color: '#0F172A', fontWeight: 500
                         }}
                       />
                     </div>
-                    {duplicateEmailEmployee ? (
-                      <div style={{ marginTop: 4, fontSize: 11, color: '#DC2626', fontWeight: 600, display: 'flex', alignItems: 'center', gap: 4 }}>
-                        <AlertCircle size={12} color="#DC2626" />
-                        Email registered to {duplicateEmailEmployee.name || 'another employee'}
-                      </div>
-                    ) : cleanEmail && !isValidEmail ? (
-                      <div style={{ marginTop: 4, fontSize: 11, color: '#D97706', fontWeight: 500, display: 'flex', alignItems: 'center', gap: 4 }}>
-                        <AlertCircle size={12} color="#D97706" />
-                        Must be valid format (e.g. employee@gmail.com)
-                      </div>
-                    ) : isValidEmail ? (
-                      <div style={{ marginTop: 4, fontSize: 11, color: '#059669', fontWeight: 500, display: 'flex', alignItems: 'center', gap: 4 }}>
-                        <CheckCircle2 size={12} color="#10B981" />
-                        Ready for mobile login ({cleanEmail.includes('@gmail.com') ? '@gmail.com' : 'Valid email'})
-                      </div>
-                    ) : (
-                      <div style={{ marginTop: 4, fontSize: 10.5, color: '#94A3B8' }}>
-                        Required for login (supports @gmail.com & work emails)
-                      </div>
-                    )}
                   </div>
 
-                  {/* Account Password with Password Strength Indicator */}
                   <div>
                     <label style={{ fontSize: 11, fontWeight: 700, color: '#475569', display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: 6 }}>
-                      <span>Account Password</span>
-                      {form.password && (
-                        <span style={{ fontSize: 10.5, fontWeight: 800, color: pwdStrength.color }}>
-                          {pwdStrength.label}
-                        </span>
-                      )}
+                      <span>Account Password {editId ? '(Optional)' : '*'}</span>
+                      {form.password && <span style={{ fontSize: 10.5, fontWeight: 800, color: pwdStrength.color }}>{pwdStrength.label}</span>}
                     </label>
                     <div style={{ position: 'relative' }}>
                       <Lock size={15} color="#94A3B8" style={{ position: 'absolute', left: 12, top: 12 }} />
                       <input
                         type={showPassword ? 'text' : 'password'}
                         value={form.password || ''}
-                        onChange={e => setForm(p => ({ ...p, password: e.target.value }))}
-                        placeholder="Enter secure password"
+                        onChange={e => { setSaveError(''); setForm(p => ({ ...p, password: e.target.value })); }}
+                        placeholder={editId ? 'Leave blank to keep current' : 'Min. 6 characters'}
                         style={{
-                          width: '100%',
-                          padding: '10px 38px 10px 38px',
-                          borderRadius: 12,
+                          width: '100%', padding: '10px 38px 10px 38px', borderRadius: 12,
                           border: form.password ? `1.5px solid ${pwdStrength.color}` : '1.5px solid #E2E8F0',
-                          fontSize: 13,
-                          outline: 'none',
-                          background: '#FFFFFF',
-                          fontFamily: 'Inter, sans-serif',
-                          boxSizing: 'border-box',
-                          color: '#0F172A',
-                          fontWeight: 500,
-                          transition: 'all 0.15s ease'
+                          fontSize: 13, outline: 'none', background: '#FFFFFF', boxSizing: 'border-box', color: '#0F172A', fontWeight: 500
                         }}
                       />
                       <button
                         type="button"
                         onClick={() => setShowPassword(!showPassword)}
-                        style={{
-                          position: 'absolute',
-                          right: 10,
-                          top: 10,
-                          background: 'transparent',
-                          border: 'none',
-                          cursor: 'pointer',
-                          padding: 2,
-                          color: '#94A3B8',
-                          display: 'flex',
-                          alignItems: 'center',
-                          justifyContent: 'center'
-                        }}
-                        title={showPassword ? 'Hide password' : 'Show password'}
+                        style={{ position: 'absolute', right: 10, top: 10, background: 'transparent', border: 'none', cursor: 'pointer', padding: 2, color: '#94A3B8' }}
                       >
                         {showPassword ? <EyeOff size={16} /> : <Eye size={16} />}
                       </button>
                     </div>
-
-                    {/* Password Strength Meter */}
-                    {form.password ? (
-                      <div style={{ marginTop: 6 }}>
-                        <div style={{ display: 'flex', gap: 4, height: 4, borderRadius: 2, overflow: 'hidden', marginBottom: 4 }}>
-                          {[1, 2, 3, 4].map(step => (
-                            <div
-                              key={step}
-                              style={{
-                                flex: 1,
-                                height: '100%',
-                                background: step <= pwdStrength.score ? pwdStrength.color : '#E2E8F0',
-                                borderRadius: 2,
-                                transition: 'all 0.25s ease'
-                              }}
-                            />
-                          ))}
-                        </div>
-                        <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
-                          <span style={{ fontSize: 10.5, fontWeight: 700, color: pwdStrength.color }}>
-                            Strength: {pwdStrength.label}
-                          </span>
-                          <span style={{ fontSize: 10, color: '#64748B' }}>
-                            {pwdStrength.hint}
-                          </span>
-                        </div>
-                      </div>
-                    ) : (
-                      <div style={{ marginTop: 4, fontSize: 10.5, color: '#94A3B8' }}>
-                        Min. 6 characters. Letters, numbers & symbols recommended.
-                      </div>
-                    )}
                   </div>
-                </div>
-              )}
 
-              {modalTab === 'assignment' && (
-                <div style={{ display: 'flex', flexDirection: 'column', gap: 16 }}>
                   <div>
-                    <label style={{ fontSize: 11, fontWeight: 700, color: '#475569', display: 'block', marginBottom: 6 }}>Employee Work Type</label>
-                    <div style={{ position: 'relative' }}>
-                      <Building2 size={15} color="#94A3B8" style={{ position: 'absolute', left: 12, top: 12 }} />
-                      <select
-                        value={form.workType || 'Fixed Site Employee'}
-                        onChange={e => {
-                          const wt = e.target.value;
-                          setForm(p => ({
-                            ...p,
-                            workType: wt,
-                            geofenceRadius: wt === 'Fixed Site Employee' ? (p.geofenceRadius || 20) : 100
-                          }));
-                        }}
-                        style={{ width: '100%', padding: '10px 14px 10px 38px', borderRadius: 12, border: '1.5px solid #E2E8F0', fontSize: 13, outline: 'none', background: '#FFFFFF', fontFamily: 'Inter, sans-serif', boxSizing: 'border-box', color: '#0F172A', fontWeight: 500 }}
-                      >
-                        <option value="Fixed Site Employee">Fixed Site Employee</option>
-                        <option value="Mobile Field Employee">Mobile Field Employee</option>
-                      </select>
-                    </div>
+                    <label style={{ fontSize: 11, fontWeight: 700, color: '#475569', display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: 6 }}>
+                      <span>Username (Optional)</span>
+                      {duplicateUsernameEmployee && <span style={{ fontSize: 10, color: '#EF4444', fontWeight: 700 }}>Already taken</span>}
+                    </label>
+                    <input
+                      type="text"
+                      value={form.username || ''}
+                      onChange={e => { setSaveError(''); setForm(p => ({ ...p, username: e.target.value })); }}
+                      placeholder="e.g. jdoe"
+                      style={{
+                        width: '100%', padding: '10px 14px', borderRadius: 12,
+                        border: duplicateUsernameEmployee ? '1.5px solid #EF4444' : '1.5px solid #E2E8F0',
+                        fontSize: 13, outline: 'none', background: duplicateUsernameEmployee ? '#FEF2F2' : '#FFFFFF',
+                        boxSizing: 'border-box', color: '#0F172A', fontWeight: 500
+                      }}
+                    />
                   </div>
 
-                  {form.workType === 'Fixed Site Employee' && (
-                    <div style={{ background: '#F8FAFC', borderRadius: 16, padding: 18, border: '1px solid #E2E8F0', marginTop: 4 }}>
-                      <div style={{ fontSize: 12, fontWeight: 700, color: '#1E5ADB', marginBottom: 12, display: 'flex', alignItems: 'center', gap: 6 }}>
-                        <MapPin size={15} /> Fixed Site Location & Geofence Perimeter
-                      </div>
-
-                      <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 16, alignItems: 'start' }}>
-                        <div>
-                          <label style={{ fontSize: 11, fontWeight: 700, color: '#475569', display: 'block', marginBottom: 6 }}>Assigned Site</label>
-                          <select
-                            value={form.assignedSite || ''}
-                            onChange={e => {
-                              const selSite = e.target.value;
-                              const matched = sites.find(s => (s.name || s.id) === selSite);
-                              const rad = matched?.radius ? (typeof matched.radius === 'number' ? matched.radius : parseInt(matched.radius)) : 20;
-                              setForm(p => ({
-                                ...p,
-                                assignedSite: selSite,
-                                assignedSites: selSite ? [selSite] : [],
-                                geofenceRadius: rad || p.geofenceRadius || 20
-                              }));
-                            }}
-                            style={{ width: '100%', padding: '10px 14px', borderRadius: 12, border: '1.5px solid #E2E8F0', fontSize: 13, outline: 'none', background: '#FFFFFF', fontFamily: 'Inter, sans-serif', boxSizing: 'border-box', color: '#0F172A', fontWeight: 500 }}
-                          >
-                            <option value="">— Select a Site —</option>
-                            {sites.map(s => <option key={s.id} value={s.name || s.id}>{s.name} ({typeof s.radius === 'number' ? s.radius : (parseInt(s.radius) || 20)}m)</option>)}
-                          </select>
-                        </div>
-
-                        <div>
-                          <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 6 }}>
-                            <label style={{ fontSize: 11, fontWeight: 700, color: '#475569' }}>Geofence Radius</label>
-                            <span style={{ fontSize: 12, fontWeight: 800, color: '#1E5ADB', background: '#EFF6FF', padding: '2px 8px', borderRadius: 8 }}>
-                              {form.geofenceRadius || 20} meters
-                            </span>
-                          </div>
-                          <input
-                            type="range"
-                            min={20}
-                            max={1000}
-                            step={5}
-                            value={form.geofenceRadius || 20}
-                            onChange={e => setForm(p => ({ ...p, geofenceRadius: parseInt(e.target.value) || 20 }))}
-                            style={{ width: '100%', accentColor: '#1E5ADB', cursor: 'pointer' }}
-                          />
-                          <div style={{ display: 'flex', gap: 4, marginTop: 6 }}>
-                            {[
-                              { r: 20, label: '20m (Bldg)' },
-                              { r: 50, label: '50m' },
-                              { r: 100, label: '100m' },
-                              { r: 300, label: '300m' },
-                              { r: 500, label: '500m' }
-                            ].map(item => (
-                              <button
-                                key={item.r}
-                                type="button"
-                                onClick={() => setForm(p => ({ ...p, geofenceRadius: item.r }))}
-                                style={{
-                                  flex: 1,
-                                  padding: '3px 0',
-                                  borderRadius: 6,
-                                  border: (form.geofenceRadius || 20) === item.r ? '1.5px solid #1E5ADB' : '1px solid #E2E8F0',
-                                  background: (form.geofenceRadius || 20) === item.r ? '#EFF6FF' : '#FFFFFF',
-                                  color: (form.geofenceRadius || 20) === item.r ? '#1E5ADB' : '#64748B',
-                                  fontSize: 10,
-                                  fontWeight: 700,
-                                  cursor: 'pointer'
-                                }}
-                              >
-                                {item.label}
-                              </button>
-                            ))}
-                          </div>
-                          {(form.geofenceRadius || 20) <= 30 && (
-                            <div style={{ marginTop: 6, fontSize: 10, color: '#1D4ED8', fontWeight: 600, display: 'flex', alignItems: 'center', gap: 4 }}>
-                              🏢 20m Building Fit: restricts check-in strictly inside building footprint.
-                            </div>
-                          )}
-                        </div>
-                      </div>
-                    </div>
-                  )}
-
-                  {form.workType === 'Fixed Site Employee' && (
-                    <div style={{ background: '#F8FAFC', borderRadius: 16, padding: 18, border: '1px solid #E2E8F0', marginTop: 4 }}>
-                      <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 14 }}>
-                        <div style={{ fontSize: 12, fontWeight: 700, color: '#1E5ADB', display: 'flex', alignItems: 'center', gap: 6 }}>
-                          <Clock size={15} /> Shift Time Schedule & Working Hours
-                        </div>
-                        {calculateShiftHours(form.shiftStart, form.shiftEnd) && (
-                          <span style={{ fontSize: 11, fontWeight: 700, color: '#1E5ADB', background: '#EFF6FF', padding: '3px 9px', borderRadius: 8, display: 'inline-flex', alignItems: 'center', gap: 4 }}>
-                            ⏱️ {calculateShiftHours(form.shiftStart, form.shiftEnd)} / shift
-                          </span>
-                        )}
-                      </div>
-
-                      {/* Quick Shift Presets */}
-                      <div style={{ marginBottom: 14 }}>
-                        <label style={{ fontSize: 10, fontWeight: 700, color: '#64748B', display: 'block', marginBottom: 6, textTransform: 'uppercase', letterSpacing: '0.04em' }}>
-                          Quick Shift Presets
-                        </label>
-                        <div style={{ display: 'grid', gridTemplateColumns: 'repeat(4, 1fr)', gap: 8 }}>
-                          {[
-                            { label: 'Day Shift', start: '08:00', end: '17:00', time: '8:00 AM - 5:00 PM' },
-                            { label: 'Morning', start: '06:00', end: '14:00', time: '6:00 AM - 2:00 PM' },
-                            { label: 'Afternoon', start: '14:00', end: '22:00', time: '2:00 PM - 10:00 PM' },
-                            { label: 'Night Shift', start: '22:00', end: '06:00', time: '10:00 PM - 6:00 AM' },
-                          ].map(preset => {
-                            const isSelected = form.shiftStart === preset.start && form.shiftEnd === preset.end;
-                            return (
-                              <button
-                                key={preset.label}
-                                type="button"
-                                onClick={() => {
-                                  setForm(p => ({
-                                    ...p,
-                                    shiftStart: preset.start,
-                                    shiftEnd: preset.end,
-                                    shift: `${to12hTime(preset.start)} - ${to12hTime(preset.end)}`,
-                                    shiftTime: `${to12hTime(preset.start)} - ${to12hTime(preset.end)}`,
-                                  }));
-                                }}
-                                style={{
-                                  padding: '8px 6px',
-                                  borderRadius: 10,
-                                  border: isSelected ? '1.5px solid #1E5ADB' : '1px solid #E2E8F0',
-                                  background: isSelected ? '#EFF6FF' : '#FFFFFF',
-                                  color: isSelected ? '#1E5ADB' : '#334155',
-                                  cursor: 'pointer',
-                                  textAlign: 'center',
-                                  transition: 'all 0.15s ease',
-                                }}
-                              >
-                                <div style={{ fontSize: 11, fontWeight: 700 }}>{preset.label}</div>
-                                <div style={{ fontSize: 9, color: isSelected ? '#1D4ED8' : '#64748B', marginTop: 2, fontWeight: 500 }}>
-                                  {preset.time}
-                                </div>
-                              </button>
-                            );
-                          })}
-                        </div>
-                      </div>
-
-                      {/* Custom Time Range Pickers */}
-                      <div style={{ display: 'grid', gridTemplateColumns: '1fr auto 1fr', gap: 10, alignItems: 'center', marginBottom: 14 }}>
-                        <div>
-                          <label style={{ fontSize: 11, fontWeight: 700, color: '#475569', display: 'block', marginBottom: 6 }}>
-                            Shift Start Time
-                          </label>
-                          <div style={{ position: 'relative' }}>
-                            <Clock size={15} color="#94A3B8" style={{ position: 'absolute', left: 12, top: 12 }} />
-                            <input
-                              type="time"
-                              value={form.shiftStart || '08:00'}
-                              onChange={e => {
-                                const val = e.target.value;
-                                setForm(p => {
-                                  const sEnd = p.shiftEnd || '17:00';
-                                  return {
-                                    ...p,
-                                    shiftStart: val,
-                                    shift: `${to12hTime(val)} - ${to12hTime(sEnd)}`,
-                                    shiftTime: `${to12hTime(val)} - ${to12hTime(sEnd)}`,
-                                  };
-                                });
-                              }}
-                              style={{
-                                width: '100%',
-                                padding: '10px 14px 10px 38px',
-                                borderRadius: 12,
-                                border: '1.5px solid #E2E8F0',
-                                fontSize: 13,
-                                outline: 'none',
-                                background: '#FFFFFF',
-                                boxSizing: 'border-box',
-                                color: '#0F172A',
-                                fontWeight: 600,
-                              }}
-                            />
-                          </div>
-                          <div style={{ fontSize: 10, color: '#64748B', marginTop: 4, fontWeight: 500 }}>
-                            Starts: {to12hTime(form.shiftStart || '08:00')}
-                          </div>
-                        </div>
-
-                        <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'center', paddingTop: 14 }}>
-                          <span style={{ fontSize: 11, fontWeight: 800, color: '#64748B', background: '#F1F5F9', padding: '6px 10px', borderRadius: 8 }}>
-                            TO
-                          </span>
-                        </div>
-
-                        <div>
-                          <label style={{ fontSize: 11, fontWeight: 700, color: '#475569', display: 'block', marginBottom: 6 }}>
-                            Shift End Time
-                          </label>
-                          <div style={{ position: 'relative' }}>
-                            <Clock size={15} color="#94A3B8" style={{ position: 'absolute', left: 12, top: 12 }} />
-                            <input
-                              type="time"
-                              value={form.shiftEnd || '17:00'}
-                              onChange={e => {
-                                const val = e.target.value;
-                                setForm(p => {
-                                  const sStart = p.shiftStart || '08:00';
-                                  return {
-                                    ...p,
-                                    shiftEnd: val,
-                                    shift: `${to12hTime(sStart)} - ${to12hTime(val)}`,
-                                    shiftTime: `${to12hTime(sStart)} - ${to12hTime(val)}`,
-                                  };
-                                });
-                              }}
-                              style={{
-                                width: '100%',
-                                padding: '10px 14px 10px 38px',
-                                borderRadius: 12,
-                                border: '1.5px solid #E2E8F0',
-                                fontSize: 13,
-                                outline: 'none',
-                                background: '#FFFFFF',
-                                boxSizing: 'border-box',
-                                color: '#0F172A',
-                                fontWeight: 600,
-                              }}
-                            />
-                          </div>
-                          <div style={{ fontSize: 10, color: '#64748B', marginTop: 4, fontWeight: 500 }}>
-                            Ends: {to12hTime(form.shiftEnd || '17:00')}
-                          </div>
-                        </div>
-                      </div>
-
-                      {/* Scheduled Working Days */}
-                      <div>
-                        <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 6 }}>
-                          <label style={{ fontSize: 11, fontWeight: 700, color: '#475569' }}>
-                            Scheduled Working Days
-                          </label>
-                          <div style={{ display: 'flex', gap: 6 }}>
-                            {[
-                              { label: 'Mon - Fri', days: ['Mon', 'Tue', 'Wed', 'Thu', 'Fri'] },
-                              { label: 'Mon - Sat', days: ['Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat'] },
-                              { label: 'All Days', days: ['Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat', 'Sun'] }
-                            ].map(opt => (
-                              <button
-                                key={opt.label}
-                                type="button"
-                                onClick={() => setForm(p => ({ ...p, workDays: opt.days }))}
-                                style={{
-                                  fontSize: 10,
-                                  fontWeight: 600,
-                                  color: '#1E5ADB',
-                                  background: '#EFF6FF',
-                                  border: '1px solid #BFDBFE',
-                                  borderRadius: 6,
-                                  padding: '2px 7px',
-                                  cursor: 'pointer'
-                                }}
-                              >
-                                {opt.label}
-                              </button>
-                            ))}
-                          </div>
-                        </div>
-
-                        <div style={{ display: 'grid', gridTemplateColumns: 'repeat(7, 1fr)', gap: 6 }}>
-                          {['Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat', 'Sun'].map(day => {
-                            const isDayActive = Array.isArray(form.workDays) ? form.workDays.includes(day) : false;
-                            return (
-                              <button
-                                key={day}
-                                type="button"
-                                onClick={() => {
-                                  setForm(p => {
-                                    const currDays = Array.isArray(p.workDays) ? [...p.workDays] : ['Mon', 'Tue', 'Wed', 'Thu', 'Fri'];
-                                    const newDays = currDays.includes(day)
-                                      ? currDays.filter(d => d !== day)
-                                      : [...currDays, day];
-                                    return { ...p, workDays: newDays };
-                                  });
-                                }}
-                                style={{
-                                  padding: '7px 0',
-                                  borderRadius: 8,
-                                  border: isDayActive ? '1.5px solid #1E5ADB' : '1px solid #E2E8F0',
-                                  background: isDayActive ? '#1E5ADB' : '#FFFFFF',
-                                  color: isDayActive ? '#FFFFFF' : '#475569',
-                                  fontSize: 11,
-                                  fontWeight: 700,
-                                  cursor: 'pointer',
-                                  transition: 'all 0.15s ease',
-                                  display: 'flex',
-                                  alignItems: 'center',
-                                  justifyContent: 'center',
-                                  gap: 3
-                                }}
-                              >
-                                {isDayActive && <Check size={11} strokeWidth={3} />}
-                                {day}
-                              </button>
-                            );
-                          })}
-                        </div>
-                        <div style={{ marginTop: 8, fontSize: 10, color: '#64748B', display: 'flex', alignItems: 'center', gap: 4 }}>
-                          ℹ️ Selected working days: <strong style={{ color: '#0F172A' }}>{(form.workDays && form.workDays.length > 0) ? form.workDays.join(', ') : 'None selected'}</strong>
-                        </div>
-                      </div>
-                    </div>
-                  )}
-
-                  {form.workType === 'Mobile Field Employee' && (
-                    <div style={{ background: '#FFFBEB', borderRadius: 16, padding: 18, border: '1px solid #FDE68A', marginTop: 4 }}>
-                      <div style={{ fontSize: 13, fontWeight: 700, color: '#92400E', display: 'flex', alignItems: 'center', gap: 8, marginBottom: 8 }}>
-                        <Truck size={16} color="#D97706" /> Mobile Field Employee Mode
-                      </div>
-                      <p style={{ margin: 0, fontSize: 12, color: '#78350F', lineHeight: 1.5 }}>
-                        Site assignments and patrol locations for mobile field employees are scheduled and assigned in the <strong>Assignments</strong> page modal.
-                      </p>
-                    </div>
-                  )}
+                  <div>
+                    <label style={{ fontSize: 11, fontWeight: 700, color: '#475569', display: 'block', marginBottom: 6 }}>Account Status</label>
+                    <select
+                      value={form.status || 'Offline'}
+                      onChange={e => setForm(p => ({ ...p, status: e.target.value }))}
+                      style={{ width: '100%', padding: '10px 14px', borderRadius: 12, border: '1.5px solid #E2E8F0', fontSize: 13, outline: 'none', background: '#FFFFFF', boxSizing: 'border-box', color: '#0F172A', fontWeight: 500 }}
+                    >
+                      <option value="Offline">Active (Offline until mobile login)</option>
+                      <option value="Online">Online</option>
+                      <option value="Inactive">Inactive / Suspended</option>
+                    </select>
+                  </div>
                 </div>
-              )}
+              </div>
 
-              {modalTab === 'all' && (
-                <div style={{ display: 'flex', flexDirection: 'column', gap: 14 }}>
-                  <div style={{ 
-                    display: 'flex', 
-                    justifyContent: 'space-between', 
-                    alignItems: 'center', 
-                    background: '#F8FAFC', 
-                    padding: '10px 14px', 
-                    borderRadius: 10, 
-                    border: '1px solid #E2E8F0' 
-                  }}>
-                    <div style={{ display: 'flex', alignItems: 'center', gap: 6, fontSize: 12, fontWeight: 700, color: '#1E5ADB' }}>
-                      <Check size={15} color="#10B981" /> Profile Summary Review
+              {/* Section 3: Deployment Type, Worksite & Shift */}
+              <div style={{ borderTop: '1px solid #F1F5F9', paddingTop: 14, display: 'flex', flexDirection: 'column', gap: 14 }}>
+                <div style={{ fontSize: 11.5, fontWeight: 800, color: '#1E5ADB', textTransform: 'uppercase', letterSpacing: '0.05em' }}>
+                  3. Deployment Type &amp; Schedule
+                </div>
+
+                <div>
+                  <label style={{ fontSize: 11, fontWeight: 700, color: '#475569', display: 'block', marginBottom: 6 }}>Employee Work Type</label>
+                  <select
+                    value={form.workType || 'Fixed Site Employee'}
+                    onChange={e => {
+                      const wt = e.target.value;
+                      setForm(p => ({ ...p, workType: wt, geofenceRadius: wt === 'Fixed Site Employee' ? (p.geofenceRadius || 20) : 100 }));
+                    }}
+                    style={{ width: '100%', padding: '10px 14px', borderRadius: 12, border: '1.5px solid #E2E8F0', fontSize: 13, outline: 'none', background: '#FFFFFF', boxSizing: 'border-box', color: '#0F172A', fontWeight: 600 }}
+                  >
+                    <option value="Fixed Site Employee">Fixed Site Employee</option>
+                    <option value="Mobile Field Employee">Mobile Field Employee</option>
+                  </select>
+                </div>
+
+                {form.workType === 'Fixed Site Employee' && (
+                  <div style={{ background: '#F8FAFC', borderRadius: 14, padding: 16, border: '1px solid #E2E8F0', display: 'flex', flexDirection: 'column', gap: 14 }}>
+                    <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 14 }}>
+                      <div>
+                        <label style={{ fontSize: 11, fontWeight: 700, color: '#475569', display: 'block', marginBottom: 6 }}>Assigned Worksite</label>
+                        <select
+                          value={form.assignedSite || ''}
+                          onChange={e => {
+                            const selSite = e.target.value;
+                            const matched = sites.find(s => (s.name || s.id) === selSite);
+                            const rad = matched?.radius ? (typeof matched.radius === 'number' ? matched.radius : parseInt(matched.radius)) : 20;
+                            setForm(p => ({ ...p, assignedSite: selSite, assignedSites: selSite ? [selSite] : [], geofenceRadius: rad || p.geofenceRadius || 20 }));
+                          }}
+                          style={{ width: '100%', padding: '9px 12px', borderRadius: 10, border: '1.5px solid #E2E8F0', fontSize: 13, background: '#FFFFFF', boxSizing: 'border-box' }}
+                        >
+                          <option value="">— Select a Site —</option>
+                          {sites.map(s => <option key={s.id} value={s.name || s.id}>{s.name} ({typeof s.radius === 'number' ? s.radius : (parseInt(s.radius) || 20)}m)</option>)}
+                        </select>
+                      </div>
+
+                      <div>
+                        <label style={{ fontSize: 11, fontWeight: 700, color: '#475569', display: 'block', marginBottom: 6 }}>
+                          Geofence Radius: <strong style={{ color: '#1E5ADB' }}>{form.geofenceRadius || 20}m</strong>
+                        </label>
+                        <input
+                          type="range"
+                          min={20}
+                          max={1000}
+                          step={5}
+                          value={form.geofenceRadius || 20}
+                          onChange={e => setForm(p => ({ ...p, geofenceRadius: parseInt(e.target.value) || 20 }))}
+                          style={{ width: '100%', accentColor: '#1E5ADB', cursor: 'pointer' }}
+                        />
+                      </div>
                     </div>
-                    <span style={{ fontSize: 11, color: '#64748B', display: 'flex', alignItems: 'center', gap: 4 }}>
-                      <Lock size={12} color="#94A3B8" /> View-only • Click Back to modify
+
+                    <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 14 }}>
+                      <div>
+                        <label style={{ fontSize: 11, fontWeight: 700, color: '#475569', display: 'block', marginBottom: 6 }}>Shift Start Time</label>
+                        <input
+                          type="time"
+                          value={form.shiftStart || '08:00'}
+                          onChange={e => {
+                            const val = e.target.value;
+                            setForm(p => {
+                              const sEnd = p.shiftEnd || '17:00';
+                              return { ...p, shiftStart: val, shift: `${to12hTime(val)} - ${to12hTime(sEnd)}`, shiftTime: `${to12hTime(val)} - ${to12hTime(sEnd)}` };
+                            });
+                          }}
+                          style={{ width: '100%', padding: '9px 12px', borderRadius: 10, border: '1.5px solid #E2E8F0', fontSize: 13, background: '#FFFFFF', boxSizing: 'border-box' }}
+                        />
+                      </div>
+                      <div>
+                        <label style={{ fontSize: 11, fontWeight: 700, color: '#475569', display: 'block', marginBottom: 6 }}>Shift End Time</label>
+                        <input
+                          type="time"
+                          value={form.shiftEnd || '17:00'}
+                          onChange={e => {
+                            const val = e.target.value;
+                            setForm(p => {
+                              const sStart = p.shiftStart || '08:00';
+                              return { ...p, shiftEnd: val, shift: `${to12hTime(sStart)} - ${to12hTime(val)}`, shiftTime: `${to12hTime(sStart)} - ${to12hTime(val)}` };
+                            });
+                          }}
+                          style={{ width: '100%', padding: '9px 12px', borderRadius: 10, border: '1.5px solid #E2E8F0', fontSize: 13, background: '#FFFFFF', boxSizing: 'border-box' }}
+                        />
+                      </div>
+                    </div>
+
+                    <div>
+                      <label style={{ fontSize: 11, fontWeight: 700, color: '#475569', display: 'block', marginBottom: 6 }}>Working Days</label>
+                      <div style={{ display: 'grid', gridTemplateColumns: 'repeat(7, 1fr)', gap: 6 }}>
+                        {['Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat', 'Sun'].map(day => {
+                          const isDayActive = Array.isArray(form.workDays) ? form.workDays.includes(day) : false;
+                          return (
+                            <button
+                              key={day}
+                              type="button"
+                              onClick={() => {
+                                setForm(p => {
+                                  const curr = Array.isArray(p.workDays) ? [...p.workDays] : ['Mon', 'Tue', 'Wed', 'Thu', 'Fri'];
+                                  return { ...p, workDays: curr.includes(day) ? curr.filter(d => d !== day) : [...curr, day] };
+                                });
+                              }}
+                              style={{
+                                padding: '6px 0', borderRadius: 8, fontSize: 11, fontWeight: 700, cursor: 'pointer',
+                                border: isDayActive ? '1.5px solid #1E5ADB' : '1px solid #E2E8F0',
+                                background: isDayActive ? '#1E5ADB' : '#FFFFFF',
+                                color: isDayActive ? '#FFFFFF' : '#475569',
+                              }}
+                            >
+                              {day}
+                            </button>
+                          );
+                        })}
+                      </div>
+                    </div>
+                  </div>
+                )}
+
+                {form.workType === 'Mobile Field Employee' && (
+                  <div style={{ background: '#FFFBEB', borderRadius: 12, padding: 14, border: '1px solid #FDE68A', fontSize: 12, color: '#78350F' }}>
+                    <strong>Mobile Field Employee:</strong> Multi-destination routes, travel time windows, and shift dates are configured in the <strong>Assignments</strong> page.
+                  </div>
+                )}
+
+                {editId && (
+                  <div style={{ background: '#F8FAFC', borderRadius: 12, padding: 12, border: '1px solid #E2E8F0', display: 'flex', justifyContent: 'space-between', alignItems: 'center', fontSize: 12 }}>
+                    <span style={{ fontWeight: 700, color: '#334155' }}>Face Registration Status:</span>
+                    <span style={{
+                      fontWeight: 700, padding: '3px 10px', borderRadius: 12,
+                      background: form.faceRegistered && form.faceReferencePhoto ? '#D1FAE5' : '#FEF3C7',
+                      color: form.faceRegistered && form.faceReferencePhoto ? '#065F46' : '#92400E',
+                    }}>
+                      {form.faceRegistered && form.faceReferencePhoto ? 'Registered ✓' : 'Not Registered (Required on Mobile)'}
                     </span>
                   </div>
-
-                  <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 12 }}>
-                    <div style={{ background: '#FFFFFF', padding: '10px 14px', borderRadius: 10, border: '1px solid #E2E8F0' }}>
-                      <div style={{ fontSize: 10, fontWeight: 700, color: '#64748B', textTransform: 'uppercase', letterSpacing: '0.04em', marginBottom: 3 }}>Full Name</div>
-                      <div style={{ fontSize: 13, fontWeight: 600, color: '#0F172A' }}>{form.name || '—'}</div>
-                    </div>
-
-                    <div style={{ background: '#FFFFFF', padding: '10px 14px', borderRadius: 10, border: '1px solid #E2E8F0' }}>
-                      <div style={{ fontSize: 10, fontWeight: 700, color: '#64748B', textTransform: 'uppercase', letterSpacing: '0.04em', marginBottom: 3 }}>Email Address</div>
-                      <div style={{ fontSize: 13, fontWeight: 600, color: '#0F172A', wordBreak: 'break-all' }}>{form.email || '—'}</div>
-                    </div>
-
-                    <div style={{ background: '#FFFFFF', padding: '10px 14px', borderRadius: 10, border: duplicateIdEmployee ? '1.5px solid #EF4444' : '1px solid #E2E8F0' }}>
-                      <div style={{ fontSize: 10, fontWeight: 700, color: duplicateIdEmployee ? '#EF4444' : '#64748B', textTransform: 'uppercase', letterSpacing: '0.04em', marginBottom: 3, display: 'flex', alignItems: 'center', justifyContent: 'space-between' }}>
-                        <span>ID Number</span>
-                        {duplicateIdEmployee && <span style={{ color: '#EF4444' }}>Duplicate!</span>}
-                      </div>
-                      <div style={{ fontSize: 13, fontWeight: 600, color: duplicateIdEmployee ? '#EF4444' : '#0F172A' }}>{form.idNum || '—'}</div>
-                    </div>
-
-                    <div style={{ background: '#FFFFFF', padding: '10px 14px', borderRadius: 10, border: '1px solid #E2E8F0' }}>
-                      <div style={{ fontSize: 10, fontWeight: 700, color: '#64748B', textTransform: 'uppercase', letterSpacing: '0.04em', marginBottom: 3 }}>Account Password</div>
-                      <div style={{ fontSize: 13, fontWeight: 600, color: '#0F172A', display: 'flex', alignItems: 'center', gap: 6 }}>
-                        <span>{form.password ? '••••••••' : '(Not set)'}</span>
-                        {form.password && (
-                          <span style={{ fontSize: 10, fontWeight: 700, color: pwdStrength.color, background: `${pwdStrength.color}15`, padding: '1px 6px', borderRadius: 6 }}>
-                            {pwdStrength.label}
-                          </span>
-                        )}
-                      </div>
-                    </div>
-
-                    <div style={{ background: '#FFFFFF', padding: '10px 14px', borderRadius: 10, border: '1px solid #E2E8F0' }}>
-                      <div style={{ fontSize: 10, fontWeight: 700, color: '#64748B', textTransform: 'uppercase', letterSpacing: '0.04em', marginBottom: 3 }}>Department</div>
-                      <div style={{ fontSize: 13, fontWeight: 600, color: '#0F172A' }}>{form.org || '—'}</div>
-                    </div>
-
-                    <div style={{ background: '#FFFFFF', padding: '10px 14px', borderRadius: 10, border: '1px solid #E2E8F0' }}>
-                      <div style={{ fontSize: 10, fontWeight: 700, color: '#64748B', textTransform: 'uppercase', letterSpacing: '0.04em', marginBottom: 3 }}>Role / Title</div>
-                      <div style={{ fontSize: 13, fontWeight: 600, color: '#0F172A' }}>{form.type || '—'}</div>
-                    </div>
-
-                    <div style={{ 
-                      background: '#FFFFFF', 
-                      padding: '10px 14px', 
-                      borderRadius: 10, 
-                      border: '1px solid #E2E8F0',
-                      gridColumn: 'span 1'
-                    }}>
-                      <div style={{ fontSize: 10, fontWeight: 700, color: '#64748B', textTransform: 'uppercase', letterSpacing: '0.04em', marginBottom: 3 }}>Work Type</div>
-                      <div style={{ 
-                        fontSize: 13, 
-                        fontWeight: 700, 
-                        color: form.workType === 'Mobile Field Employee' ? '#92400E' : '#5B21B6',
-                        display: 'flex',
-                        alignItems: 'center',
-                        gap: 6
-                      }}>
-                        {form.workType === 'Mobile Field Employee' ? <Truck size={14} color="#D97706" /> : <Building2 size={14} color="#7C3AED" />}
-                        {form.workType || 'Fixed Site Employee'}
-                      </div>
-                    </div>
-
-                    {form.workType === 'Fixed Site Employee' && (
-                      <>
-                        <div style={{ background: '#FFFFFF', padding: '10px 14px', borderRadius: 10, border: '1px solid #E2E8F0' }}>
-                          <div style={{ fontSize: 10, fontWeight: 700, color: '#64748B', textTransform: 'uppercase', letterSpacing: '0.04em', marginBottom: 3 }}>Assigned Fixed Site & Geofence</div>
-                          <div style={{ fontSize: 13, fontWeight: 600, color: '#0F172A', display: 'flex', alignItems: 'center', gap: 6 }}>
-                            <MapPin size={14} color="#1E5ADB" />
-                            {form.assignedSite ? (
-                              <>
-                                <span>{form.assignedSite}</span>
-                                <span style={{ fontSize: 11, background: '#EFF6FF', color: '#1E5ADB', padding: '2px 8px', borderRadius: 6, fontWeight: 700 }}>
-                                  {form.geofenceRadius || 20}m radius
-                                </span>
-                              </>
-                            ) : (
-                              <span style={{ color: '#94A3B8' }}>No site assigned</span>
-                            )}
-                          </div>
-                        </div>
-
-                        <div style={{ background: '#FFFFFF', padding: '10px 14px', borderRadius: 10, border: '1px solid #E2E8F0' }}>
-                          <div style={{ fontSize: 10, fontWeight: 700, color: '#64748B', textTransform: 'uppercase', letterSpacing: '0.04em', marginBottom: 3 }}>Shift Time Schedule & Working Days</div>
-                          <div style={{ fontSize: 13, fontWeight: 600, color: '#0F172A', display: 'flex', alignItems: 'center', gap: 6, flexWrap: 'wrap' }}>
-                            <Clock size={14} color="#1E5ADB" />
-                            <span>{to12hTime(form.shiftStart || '08:00')} - {to12hTime(form.shiftEnd || '17:00')}</span>
-                            {calculateShiftHours(form.shiftStart, form.shiftEnd) && (
-                              <span style={{ fontSize: 10, background: '#EFF6FF', color: '#1E5ADB', padding: '2px 6px', borderRadius: 6, fontWeight: 700 }}>
-                                {calculateShiftHours(form.shiftStart, form.shiftEnd)}
-                              </span>
-                            )}
-                          </div>
-                          <div style={{ fontSize: 11, color: '#64748B', marginTop: 4, display: 'flex', alignItems: 'center', gap: 4 }}>
-                            <Calendar size={12} color="#94A3B8" />
-                            <span>Working Days: <strong style={{ color: '#334155' }}>{(form.workDays && form.workDays.length > 0) ? form.workDays.join(', ') : 'Mon - Fri'}</strong></span>
-                          </div>
-                        </div>
-                      </>
-                    )}
-                  </div>
-                </div>
-              )}
+                )}
+              </div>
             </div>
 
-            {/* Modal Bottom Action Bar with Stepper Controls */}
+            {/* Clean Single Primary Action Bar (ONE Save Employee Button) */}
             <div style={{
-              padding: '16px 28px 22px 28px',
+              padding: '16px 28px 20px 28px',
               borderTop: '1px solid #F1F5F9',
               background: '#FAFAFA',
               display: 'flex',
-              justifyContent: 'space-between',
-              alignItems: 'center'
+              justifyContent: 'flex-end',
+              alignItems: 'center',
+              gap: 12
             }}>
-              <div style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
-                {modalTab !== 'info' ? (
-                  <button
-                    onClick={() => setModalTab(modalTab === 'all' ? 'assignment' : 'info')}
-                    style={{
-                      padding: '9px 18px',
-                      borderRadius: 12,
-                      border: '1px solid #CBD5E1',
-                      background: '#FFFFFF',
-                      color: '#334155',
-                      fontSize: 13,
-                      fontWeight: 600,
-                      cursor: 'pointer',
-                      display: 'flex',
-                      alignItems: 'center',
-                      gap: 6
-                    }}
-                  >
-                    <ChevronLeft size={16} /> Back
-                  </button>
-                ) : (
-                  <button
-                    onClick={() => setModal(false)}
-                    style={{
-                      padding: '9px 18px',
-                      borderRadius: 12,
-                      border: '1px solid #CBD5E1',
-                      background: '#FFFFFF',
-                      color: '#64748B',
-                      fontSize: 13,
-                      fontWeight: 600,
-                      cursor: 'pointer'
-                    }}
-                  >
-                    Cancel
-                  </button>
-                )}
-              </div>
-
-              <div style={{ display: 'flex', gap: 12 }}>
-                {modalTab !== 'all' ? (
-                  <button
-                    onClick={() => {
-                      if (modalTab === 'info') {
-                        const err = validateStep1();
-                        if (err) {
-                          return showToast('Validation Error', err, 'error');
-                        }
-                        setModalTab('assignment');
-                      } else {
-                        setModalTab('all');
-                      }
-                    }}
-                    style={{
-                      padding: '9px 20px',
-                      borderRadius: 12,
-                      border: '1px solid #1E5ADB',
-                      background: '#EFF6FF',
-                      color: '#1E5ADB',
-                      fontSize: 13,
-                      fontWeight: 700,
-                      cursor: 'pointer',
-                      display: 'flex',
-                      alignItems: 'center',
-                      gap: 6
-                    }}
-                  >
-                    Next Step <ChevronRight size={16} />
-                  </button>
-                ) : null}
-
-                <button
-                  onClick={handleSave}
-                  disabled={isSaving}
-                  style={{
-                    padding: '9px 24px',
-                    borderRadius: 12,
-                    border: 'none',
-                    background: 'linear-gradient(135deg, #1E5ADB 0%, #1E40AF 100%)',
-                    color: '#FFFFFF',
-                    fontSize: 13,
-                    fontWeight: 700,
-                    cursor: isSaving ? 'not-allowed' : 'pointer',
-                    boxShadow: '0 4px 14px rgba(30, 90, 219, 0.35)',
-                    opacity: isSaving ? 0.7 : 1
-                  }}
-                >
-                  {isSaving ? 'Saving Profile...' : 'Save Employee'}
-                </button>
-              </div>
+              <button
+                onClick={() => setModal(false)}
+                disabled={isSaving}
+                style={{
+                  padding: '10px 20px', borderRadius: 12, border: '1px solid #CBD5E1',
+                  background: '#FFFFFF', color: '#475569', fontSize: 13, fontWeight: 600, cursor: 'pointer'
+                }}
+              >
+                Cancel
+              </button>
+              <button
+                onClick={handleSave}
+                disabled={isSaving || Boolean(duplicateEmailEmployee) || Boolean(duplicateIdEmployee) || Boolean(duplicateUsernameEmployee)}
+                style={{
+                  padding: '10px 26px', borderRadius: 12, border: 'none',
+                  background: 'linear-gradient(135deg, #1E5ADB 0%, #1E40AF 100%)',
+                  color: '#FFFFFF', fontSize: 13, fontWeight: 700,
+                  cursor: (isSaving || duplicateEmailEmployee || duplicateIdEmployee || duplicateUsernameEmployee) ? 'not-allowed' : 'pointer',
+                  boxShadow: '0 4px 14px rgba(30, 90, 219, 0.35)',
+                  opacity: (isSaving || duplicateEmailEmployee || duplicateIdEmployee || duplicateUsernameEmployee) ? 0.6 : 1
+                }}
+              >
+                {isSaving ? 'Validating & Saving...' : 'Save Employee'}
+              </button>
             </div>
 
           </div>

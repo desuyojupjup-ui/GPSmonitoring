@@ -60,8 +60,12 @@ export const showToast = (title, text = '', icon = 'success') => {
     title: title,
     text: text,
     showConfirmButton: false,
-    timer: 2400,
+    timer: icon === 'error' || icon === 'warning' ? 6000 : 4500,
     timerProgressBar: true,
+    didOpen: (toastEl) => {
+      toastEl.addEventListener('mouseenter', Swal.stopTimer);
+      toastEl.addEventListener('mouseleave', Swal.resumeTimer);
+    },
     customClass: {
       popup: 'premium-toast-popup',
       title: 'premium-toast-title',

@@ -65,7 +65,11 @@ export function describeEvent(eventType, extra = {}) {
     GPS_SPEED_ANOMALY: `Unrealistic movement speed detected (${extra.speed ? Math.round(extra.speed) + ' km/h' : 'exceeds threshold'}).`,
     GPS_JUMP: `Sudden location change of ${extra.distanceM ? Math.round(extra.distanceM) + 'm' : '>500m'} in ${extra.elapsedSec ? extra.elapsedSec + 's' : 'short time'}.`,
     LOCATION_FROZEN: 'Location has not changed during an extended period of active duty.',
-    GPS_DISABLED: 'GPS was disabled during an active attendance session.',
+    GPS_DISABLED: 'Location services were unavailable during an active monitoring period.',
+    LOCATION_TRACKING_DISABLED: extra.reason
+      ? `Location tracking unavailable during active monitoring period (${extra.reason}).`
+      : 'Location tracking is currently unavailable during active monitoring period.',
+    TRAVEL_TIME_EXCEEDED: `Travel time exceeded from ${extra.origin || 'previous destination'} to ${extra.destination || 'next destination'} (${extra.elapsedMinutes ? extra.elapsedMinutes + 'm elapsed' : 'allowed travel window exceeded'}).`,
     LOCATION_UPDATE_INTERRUPTED: 'Location updates stopped unexpectedly during active shift.',
     UNUSUAL_GPS_ACCURACY: `GPS accuracy is unusually low (${extra.accuracy ? Math.round(extra.accuracy * 10) / 10 + 'm' : 'poor signal'}).`,
     UNAUTHORIZED_LOCATION: `You are outside the assigned geofence (${extra.distance ? Math.round(extra.distance) + 'm away' : 'location mismatch'}).`,

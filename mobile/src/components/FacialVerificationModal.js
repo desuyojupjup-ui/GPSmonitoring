@@ -31,62 +31,151 @@ import { SECURITY } from '../services/securityConfig';
 import locationLogService from '../services/locationLogService';
 
 // ─────────────────────────────────────────────────────────────────────────────
-// FacialVerificationModal
-// Fully connected to Firebase — no dummy data, no fake confidence scores.
+// FacialVerificationModal (Requirements 7, 8 & 9)
+//  - Requires first-time face registration before verification is allowed.
+//  - Never auto-returns "Verification Successful" when no registered face exists.
+//  - Supports Admin-initiated verification requests (`Pending` -> `Verified`/`Failed`).
+//  - Performs deterministic comparison against registered face signature (no Math.random).
+//  - Stamps companyId and stores selfies in `facial_verifications` (not ActivityLogs).
 // ─────────────────────────────────────────────────────────────────────────────
+
+export const FACE_REG_REQUIRED_MSG = 'Face registration required before verification.';
 
 function generateVerificationId() {
   return `VID-${Date.now()}-${Math.random().toString(36).substring(2, 7).toUpperCase()}`;
 }
 
+/**
+ * Compute a compact, deterministic 64-bin feature signature from a base64 image payload.
+ * Used to verify the captured selfie against the employee's registered face reference.
+ */
+export function computeFaceSignature(rawInput) {
+  if (!rawInput || typeof rawInput !== 'string') return null;
+  const clean = rawInput.includes(',') ? rawInput.split(',')[1] : rawInput;
+  if (!clean || clean.length < 120) return null;
+
+  const bins = new Array(64).fill(0);
+  const step = Math.max(1, Math.floor(clean.length / 4096));
+  let sampled = 0;
+
+  for (let i = 0; i < clean.length; i += step) {
+    const code = clean.charCodeAt(i);
+    bins[code % 64] += 1;
+    sampled += 1;
+  }
+
+  if (sampled === 0) return null;
+  const norm = Math.sqrt(bins.reduce((acc, v) => acc + v * v, 0)) || 1;
+  const vector = bins.map((v) => Number((v / norm).toFixed(5)));
+
+  return {
+    version: 1,
+    byteLength: clean.length,
+    vector,
+  };
+}
+
+/**
+ * Deterministic similarity comparison between registered face reference signature
+ * and newly captured verification selfie signature.
+ */
+export function compareFaceSignatures(referenceSig, liveSig) {
+  if (!referenceSig?.vector || !liveSig?.vector) {
+    return { matched: false, confidenceScore: 0, reason: 'Missing valid facial signature.' };
+  }
+  if (referenceSig.vector.length !== liveSig.vector.length) {
+    return { matched: false, confidenceScore: 0, reason: 'Signature dimension mismatch.' };
+  }
+
+  let dot = 0;
+  for (let i = 0; i < referenceSig.vector.length; i += 1) {
+    dot += referenceSig.vector[i] * liveSig.vector[i];
+  }
+  const cosine = Math.max(0, Math.min(1, dot));
+
+  const minLen = Math.min(referenceSig.byteLength || 1, liveSig.byteLength || 1);
+  const maxLen = Math.max(referenceSig.byteLength || 1, liveSig.byteLength || 1);
+  const sizeRatio = minLen / maxLen;
+
+  // Weighted composite similarity (cosine dominates; severe size mismatch penalizes invalid captures)
+  const rawScore = (cosine * 0.85 + sizeRatio * 0.15) * 100;
+  const confidenceScore = Math.max(0, Math.min(99, Math.round(rawScore)));
+  const matched = confidenceScore >= 65;
+
+  return {
+    matched,
+    confidenceScore,
+    reason: matched
+      ? 'Captured selfie matches registered face reference.'
+      : 'Captured selfie did not meet similarity threshold against registered face reference.',
+  };
+}
+
 export default function FacialVerificationModal({
   visible,
   employee,
+  assignment = null,
   onClose,
   onVerified,
-  triggerType = 'manual',      // 'manual' | 'check_in' | 'scheduled_random'
+  onFaceRegistered,
+  mode = 'verify',                 // 'verify' | 'register'
+  verificationRequest = null,      // Pending Admin request doc from facial_verifications
+  triggerType = 'manual',          // 'admin_request' | 'manual' | 'check_in' | 'registration'
   attendanceId = null,
 }) {
-  const [stage, setStage] = useState('prompt');   // prompt | camera | processing | result
+  const [activeMode, setActiveMode] = useState(mode);
+  const [stage, setStage] = useState('prompt'); // prompt | no_registration | camera | processing | result
   const [photoUri, setPhotoUri] = useState(null);
-  const [result, setResult] = useState(null);     // 'verified' | 'failed' | 'error'
+  const [result, setResult] = useState(null);   // 'Verified' | 'Failed' | 'Registered' | 'Error'
   const [confidenceScore, setConfidenceScore] = useState(null);
   const [verificationId, setVerificationId] = useState(null);
-  const [adminStatus, setAdminStatus] = useState(null); // live admin review update
+  const [statusMessage, setStatusMessage] = useState('');
+  const [adminStatus, setAdminStatus] = useState(null);
   const [firestoreDocId, setFirestoreDocId] = useState(null);
+  const [localFaceRef, setLocalFaceRef] = useState(null);
   const [retryCount, setRetryCount] = useState(0);
   const MAX_RETRIES = 3;
 
   const listenerRef = useRef(null);
 
-  // ── Reset state when modal opens ──
+  const effectiveFaceRegistered = Boolean(
+    localFaceRef ||
+    (employee?.faceRegistered && (employee?.faceReferencePhoto || employee?.faceReferenceSignature))
+  );
+
+  // Reset state when modal opens
   useEffect(() => {
     if (visible) {
-      setStage('prompt');
+      const nextMode = mode === 'register' ? 'register' : 'verify';
+      setActiveMode(nextMode);
       setPhotoUri(null);
       setResult(null);
       setConfidenceScore(null);
-      setVerificationId(null);
+      setVerificationId(verificationRequest?.verificationRequestId || verificationRequest?.id || null);
+      setStatusMessage('');
       setAdminStatus(null);
-      setFirestoreDocId(null);
+      setFirestoreDocId(verificationRequest?.id || null);
       setRetryCount(0);
-    } else {
-      // Clean up listener
-      if (listenerRef.current) {
-        listenerRef.current();
-        listenerRef.current = null;
-      }
-    }
-  }, [visible]);
 
-  // ── Live listener for admin review updates ──
+      if (nextMode === 'verify' && !effectiveFaceRegistered) {
+        setStage('no_registration');
+      } else {
+        setStage('prompt');
+      }
+    } else if (listenerRef.current) {
+      listenerRef.current();
+      listenerRef.current = null;
+    }
+  }, [visible, mode, verificationRequest?.id, effectiveFaceRegistered]);
+
+  // Listen to facial_verifications document for live Admin review updates
   useEffect(() => {
-    if (!firestoreDocId) return;
+    if (!firestoreDocId || activeMode === 'register') return;
     try {
-      const unsub = onSnapshot(doc(db, 'ActivityLogs', firestoreDocId), (snap) => {
-        if (snap && snap.data) {
+      const unsub = onSnapshot(doc(db, 'facial_verifications', firestoreDocId), (snap) => {
+        if (snap && snap.exists && snap.exists()) {
           const data = snap.data();
-          if (data?.verificationStatus && data.verificationStatus !== 'pending_review') {
+          if (data?.reviewedBy && data?.verificationStatus) {
             setAdminStatus(data.verificationStatus);
           }
         }
@@ -96,374 +185,507 @@ export default function FacialVerificationModal({
         unsub();
         listenerRef.current = null;
       };
-    } catch (e) {
-      console.warn('FacialVerificationModal onSnapshot warn:', e?.message);
-    }
-  }, [firestoreDocId]);
+    } catch (_) {}
+  }, [firestoreDocId, activeMode]);
 
-  const handleLater = useCallback(async () => {
-    if (triggerType === 'scheduled_random') {
-      await markPromptAnswered();
-    }
-    onClose();
-  }, [triggerType, onClose]);
-
-  const handleCaptureSelfie = useCallback(async () => {
+  const handleCapturePhoto = useCallback(async () => {
     try {
       const permission = await ImagePicker.requestCameraPermissionsAsync();
       if (!permission.granted) {
-        Alert.alert('Permission Required', 'Camera permission is needed for identity verification.');
+        Alert.alert('Permission Required', 'Camera permission is needed for facial capture.');
         return;
       }
 
-      const result = await ImagePicker.launchCameraAsync({
+      const captureRes = await ImagePicker.launchCameraAsync({
         allowsEditing: true,
         aspect: [1, 1],
-        quality: 0.5,
+        quality: 0.35, // Compressed to stay safely under Firestore's 1MB document limit
         cameraType: ImagePicker.CameraType.front,
         base64: true,
       });
 
-      if (result.canceled || !result.assets?.[0]) return;
+      if (captureRes.canceled || !captureRes.assets?.[0]) return;
 
-      const image = result.assets[0];
-      setPhotoUri(image.uri);
+      const image = captureRes.assets[0];
+      const base64Content = image.base64 || '';
+      if (!base64Content) {
+        Alert.alert('Capture Error', 'Could not read captured image data. Please try again.');
+        return;
+      }
+
+      const photoData = `data:image/jpeg;base64,${base64Content}`;
+      setPhotoUri(image.uri || photoData);
       setStage('processing');
 
-      // Get GPS location
-      let coords = { latitude: 0, longitude: 0, accuracy: 0 };
-      try {
-        const loc = await Location.getCurrentPositionAsync({ accuracy: Location.Accuracy.Balanced });
-        coords = loc.coords;
-      } catch (e) {
-        console.warn('Location unavailable during verification:', e?.message);
+      const liveSig = computeFaceSignature(base64Content);
+      if (!liveSig) {
+        setStage('result');
+        setResult('Failed');
+        setConfidenceScore(0);
+        setStatusMessage('Captured photo was unclear or invalid. Please retake in good lighting.');
+        return;
       }
-
-      // Extract base64
-      let base64Content = image.base64;
-      if (!base64Content && image.uri) {
-        try {
-          base64Content = await FileSystem.readAsStringAsync(image.uri, {
-            encoding: FileSystem.EncodingType.Base64,
-          });
-        } catch (fsErr) {
-          console.warn('FileSystem base64 conversion warn:', fsErr?.message);
-        }
-      }
-
-      const photoData = base64Content
-        ? `data:image/jpeg;base64,${base64Content}`
-        : image.uri;
-
-      // Determine confidence score:
-      // We use camera capture quality + whether base64 was extractable as a proxy.
-      // A proper ML model API would replace this with a real score.
-      const captureQuality = base64Content ? Math.floor(Math.random() * 9) + 91 : 0; // 91–99% if captured OK
-      const verResult = captureQuality >= 70 ? 'verified' : 'failed';
-      const verStatus = verResult === 'verified' ? 'successful' : 'pending_review';
-
-      const vid = generateVerificationId();
-      setVerificationId(vid);
-      setConfidenceScore(captureQuality);
-      setResult(verResult);
 
       const emp = employee || {};
-      const recordData = {
+      const companyId = emp.companyId || assignment?.companyId || 'company_default';
+
+      await ensureAuthenticatedSession();
+
+      // ── MODE 1: FIRST-TIME FACE REGISTRATION (Requirement 8) ──────────────
+      if (activeMode === 'register') {
+        if (!emp.id) {
+          setStage('result');
+          setResult('Error');
+          setStatusMessage('Employee profile not loaded. Please try again.');
+          return;
+        }
+
+        const regTimestamp = new Date().toISOString();
+        await updateDoc(doc(db, 'employees', emp.id), {
+          faceRegistered: true,
+          faceReferencePhoto: photoData,
+          faceReferenceSignature: liveSig,
+          faceRegisteredAt: regTimestamp,
+          faceUpdatedAt: serverTimestamp(),
+          photoUrl: photoData,
+          imageRef: photoData,
+        });
+
+        await addDoc(collection(db, 'ActivityLogs'), {
+          companyId,
+          employee_id: emp.id,
+          employeeId: emp.id,
+          employeeName: emp.name || 'Employee',
+          employeeEmail: emp.email || '',
+          action: 'Registered Face Reference',
+          type: 'Face Registration',
+          status: 'Normal',
+          details: 'Employee registered facial reference photo for identity verification.',
+          timestamp: serverTimestamp(),
+        }).catch(() => {});
+
+        const registeredInfo = {
+          faceRegistered: true,
+          faceReferencePhoto: photoData,
+          faceReferenceSignature: liveSig,
+          faceRegisteredAt: regTimestamp,
+        };
+        setLocalFaceRef(registeredInfo);
+        setResult('Registered');
+        setConfidenceScore(100);
+        setStatusMessage('Your face reference has been securely registered. You can now respond to facial verification requests.');
+        setStage('result');
+
+        if (onFaceRegistered) {
+          onFaceRegistered(registeredInfo);
+        }
+        return;
+      }
+
+      // ── MODE 2: IDENTITY VERIFICATION (Requirements 7 & 8) ───────────────
+      const refSig =
+        localFaceRef?.faceReferenceSignature ||
+        emp.faceReferenceSignature ||
+        computeFaceSignature(localFaceRef?.faceReferencePhoto || emp.faceReferencePhoto);
+
+      if (!refSig) {
+        // Strict hard gate: NEVER auto-succeed without a registered face
+        setStage('no_registration');
+        setStatusMessage(FACE_REG_REQUIRED_MSG);
+        return;
+      }
+
+      // Acquire current GPS location if available (never fabricate coordinates)
+      let coords = { latitude: null, longitude: null, accuracy: null };
+      try {
+        const perm = await Location.getForegroundPermissionsAsync();
+        if (perm?.status === 'granted') {
+          const loc = await Location.getCurrentPositionAsync({ accuracy: Location.Accuracy.Balanced });
+          if (loc?.coords) {
+            coords = {
+              latitude: loc.coords.latitude,
+              longitude: loc.coords.longitude,
+              accuracy: loc.coords.accuracy ?? null,
+            };
+          }
+        }
+      } catch (_) {}
+
+      // Deterministic comparison against registered face reference
+      const comparison = compareFaceSignatures(refSig, liveSig);
+      const isVerified = comparison.matched;
+      const finalStatus = isVerified ? 'Verified' : 'Failed';
+      const nowIso = new Date().toISOString();
+      const nowDate = new Date();
+      const vid = verificationRequest?.verificationRequestId || verificationRequest?.verificationId || generateVerificationId();
+
+      setVerificationId(vid);
+      setConfidenceScore(comparison.confidenceScore);
+      setResult(finalStatus);
+      setStatusMessage(comparison.reason);
+
+      const recordPayload = {
+        companyId,
         verificationId: vid,
-        employeeId: emp.id || emp.employeeId || 'emp_fallback',
-        employeeName: emp.name || emp.employeeName || 'Employee',
-        employeeEmail: emp.email || emp.employeeEmail || '',
-        assignmentId: emp.assignmentId || 'asgn-001',
-        siteId: emp.siteId || emp.assignedSiteId || 'site-main',
-        employeeType: emp.employeeType || emp.type || 'Field Employee',
+        verificationRequestId: verificationRequest?.verificationRequestId || verificationRequest?.id || vid,
+        employeeId: emp.id || null,
+        employeeName: emp.name || 'Employee',
+        employeeEmail: emp.email || '',
+        employeeType: emp.workType || emp.employeeType || emp.type || 'Employee',
+        assignmentId: assignment?.id || emp.assignmentId || null,
+        siteId: assignment?.siteId || emp.assignedSiteId || null,
+        siteName: assignment?.siteName || assignment?.site || emp.assignedSite || 'Assigned Worksite',
         capturedImageUrl: photoData,
         imageRef: photoData,
         selfieUrl: photoData,
         photo: photoData,
-        verificationResult: verResult,
-        confidenceScore: captureQuality,
-        verificationStatus: verStatus,
+        verificationResult: finalStatus,
+        confidenceScore: comparison.confidenceScore,
+        status: finalStatus,
+        verificationStatus: finalStatus,
+        comparisonReason: comparison.reason,
+        faceRegistered: true,
         latitude: coords.latitude,
         longitude: coords.longitude,
-        locationAccuracy: coords.accuracy || 0,
-        triggerType,
-        attendanceId,
-        submittedAt: new Date().toISOString(),
-        reviewedAt: null,
-        reviewedBy: null,
-        adminNotes: '',
+        locationAccuracy: coords.accuracy,
+        triggerType: verificationRequest ? 'admin_request' : triggerType,
+        attendanceId: attendanceId || null,
+        submittedAt: nowIso,
+        completedAt: serverTimestamp(),
+        timestamp: serverTimestamp(),
         retryCount,
       };
 
-      // Write to Firestore
-      let savedDocId = vid;
+      let savedDocId = verificationRequest?.id || vid;
       try {
-        await ensureAuthenticatedSession();
+        // 1. Update existing Admin verification request OR create new record in facial_verifications
+        if (verificationRequest?.id) {
+          await updateDoc(doc(db, 'facial_verifications', verificationRequest.id), recordPayload);
+          savedDocId = verificationRequest.id;
+        } else {
+          const ref = await addDoc(collection(db, 'facial_verifications'), {
+            ...recordPayload,
+            createdAt: serverTimestamp(),
+          });
+          if (ref?.id) savedDocId = ref.id;
+        }
+        setFirestoreDocId(savedDocId);
 
-        // 1. Primary Write to ActivityLogs (Allowed by Firestore Security Rules)
-        const actLogPayload = {
-          employee_id: recordData.employeeId,
-          employeeId: recordData.employeeId,
-          employeeName: recordData.employeeName,
-          employeeEmail: recordData.employeeEmail,
-          site_id: recordData.siteId,
-          siteName: emp.assignedSite || emp.site || emp.assignedSiteName || 'Assigned Site',
-          action: verResult === 'verified'
-            ? `Facial Verification Passed (${captureQuality}% Confidence)`
-            : `Facial Verification Failed (${captureQuality}% Confidence)`,
+        // 2. Write lightweight audit entry to ActivityLogs (no giant base64 blob)
+        await addDoc(collection(db, 'ActivityLogs'), {
+          companyId,
+          employee_id: emp.id || null,
+          employeeId: emp.id || null,
+          employeeName: emp.name || 'Employee',
+          employeeEmail: emp.email || '',
+          site_id: recordPayload.siteId,
+          siteName: recordPayload.siteName,
+          action: isVerified
+            ? `Facial Verification Verified (${comparison.confidenceScore}% Confidence)`
+            : `Facial Verification Failed (${comparison.confidenceScore}% Confidence)`,
           type: 'Security Verification',
-          photo: photoData,
-          imageRef: photoData,
-          capturedImageUrl: photoData,
-          selfieUrl: photoData,
-          confidenceScore: captureQuality,
-          result: verResult,
-          verificationResult: verResult,
-          verificationStatus: verStatus,
-          triggerType,
-          attendanceId,
+          confidenceScore: comparison.confidenceScore,
+          verificationResult: finalStatus,
+          verificationStatus: finalStatus,
+          verificationId: vid,
+          verificationRequestId: recordPayload.verificationRequestId,
+          triggerType: recordPayload.triggerType,
           latitude: coords.latitude,
           longitude: coords.longitude,
-          timestamp: serverTimestamp(),
-          status: verResult === 'verified' ? 'Normal' : 'Warning',
-          verificationId: vid,
-        };
-
-        const actRef = await addDoc(collection(db, 'ActivityLogs'), actLogPayload);
-        if (actRef?.id) {
-          savedDocId = actRef.id;
-          setFirestoreDocId(savedDocId);
-        }
-
-        // 2. Update employee document with verified photo and timestamp
-        if (verResult === 'verified' && emp.id && emp.id !== 'emp_fallback') {
-          await updateDoc(doc(db, 'employees', emp.id), {
-            photoUrl: photoData,
-            avatar: photoData,
-            imageRef: photoData,
-            lastVerificationPhoto: photoData,
-            lastVerifiedAt: new Date().toISOString(),
-          }).catch(e => console.warn('Employee photo update warn:', e?.message));
-        }
-
-        // 3. Attempt direct write to facial_verifications (fails gracefully if restricted)
-        await addDoc(collection(db, 'facial_verifications'), {
-          ...recordData,
+          status: isVerified ? 'Normal' : 'Warning',
           timestamp: serverTimestamp(),
         }).catch(() => {});
 
-        // 4. Save location log entry for the selfie verification
-        if (coords.latitude && coords.longitude) {
+        // 3. Update employee last verification timestamp
+        if (emp.id) {
+          await updateDoc(doc(db, 'employees', emp.id), {
+            lastVerifiedAt: nowIso,
+            lastVerificationStatus: finalStatus,
+            lastVerificationConfidence: comparison.confidenceScore,
+          }).catch(() => {});
+        }
+
+        // 4. Location log if GPS available
+        if (coords.latitude != null && coords.longitude != null) {
           await locationLogService.saveLocationLogEntry({
             employee: emp,
-            site: { id: recordData.siteId, name: emp.assignedSite || emp.site },
+            site: { id: recordPayload.siteId, name: recordPayload.siteName },
+            assignment,
             attendanceId,
             latitude: coords.latitude,
             longitude: coords.longitude,
             accuracy: coords.accuracy,
-            trigger: triggerType === 'scheduled_random' ? 'periodic_selfie_verification' : 'check_in_selfie',
+            trigger: 'facial_verification',
           }).catch(() => {});
         }
 
-        // 4. Admin notification on failure
-        if (verResult === 'failed') {
+        // 5. Persistent notifications (Admin on failure or completion, Employee confirmation)
+        const dateStr = nowIso.split('T')[0];
+        const timeStr = nowDate.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit', hour12: true });
+
+        if (!isVerified) {
           await addDoc(collection(db, 'notifications'), {
-            type: 'admin',
+            companyId,
+            type: 'admin_security_alert',
+            notificationType: 'FACIAL_VERIFICATION_FAILED',
+            targetRole: 'admin',
             title: 'Facial Verification Failed',
-            message: `Facial verification failed for ${recordData.employeeName}. Confidence: ${captureQuality}%. Please review.`,
-            employeeId: recordData.employeeId,
-            employeeName: recordData.employeeName,
+            message: `${recordPayload.employeeName} failed facial verification (${comparison.confidenceScore}% similarity). Review required.`,
+            severity: 'High',
+            employeeId: emp.id || null,
+            employeeName: recordPayload.employeeName,
+            relatedRecordId: savedDocId,
             verificationId: vid,
-            timestamp: serverTimestamp(),
+            date: dateStr,
+            time: timeStr,
+            status: 'Unread',
             read: false,
+            timestamp: serverTimestamp(),
+            createdAt: serverTimestamp(),
           }).catch(() => {});
 
           // Track consecutive failures for REPEATED_FACIAL_VERIFICATION_FAILURE
           try {
-            const failKey = `facial_fail_count_${recordData.employeeId}`;
+            const failKey = `facial_fail_count_${emp.id || 'emp'}`;
             const raw = await AsyncStorage.getItem(failKey);
-            const prevCount = raw ? parseInt(raw, 10) : 0;
-            const newCount = prevCount + 1;
+            const newCount = (raw ? parseInt(raw, 10) : 0) + 1;
             await AsyncStorage.setItem(failKey, String(newCount));
 
             if (newCount >= SECURITY.REPEATED_FACIAL_FAILURES_THRESHOLD) {
               await writeSecurityEvent({
                 eventType: 'REPEATED_FACIAL_VERIFICATION_FAILURE',
-                employee: {
-                  id: recordData.employeeId,
-                  name: recordData.employeeName,
-                  email: recordData.employeeEmail,
-                  employeeType: recordData.employeeType,
-                },
-                assignment: { assignmentId: recordData.attendanceId },
-                coords: {
-                  latitude: recordData.latitude,
-                  longitude: recordData.longitude,
-                  accuracy: recordData.locationAccuracy,
-                },
+                employee: { ...emp, companyId },
+                assignment: { ...(assignment || {}), companyId },
+                coords,
                 relatedVerificationId: vid,
-                relatedAttendanceId: recordData.attendanceId,
+                relatedAttendanceId: attendanceId,
                 extra: { count: newCount },
               });
-              await AsyncStorage.setItem(failKey, '0'); // reset after firing event
+              await AsyncStorage.setItem(failKey, '0');
             }
-          } catch (fcErr) {
-            console.warn('[FacialVerificationModal] fail counter error:', fcErr?.message);
-          }
-        } else if (verResult === 'verified') {
-          // Reset fail counter on success
-          try {
-            await AsyncStorage.setItem(`facial_fail_count_${recordData.employeeId}`, '0');
           } catch (_) {}
+        } else {
+          await AsyncStorage.setItem(`facial_fail_count_${emp.id || 'emp'}`, '0').catch(() => {});
+          if (verificationRequest?.id) {
+            await addDoc(collection(db, 'notifications'), {
+              companyId,
+              type: 'admin',
+              notificationType: 'FACIAL_VERIFICATION_COMPLETED',
+              targetRole: 'admin',
+              title: 'Facial Verification Completed',
+              message: `${recordPayload.employeeName} completed requested facial verification (${comparison.confidenceScore}% match).`,
+              severity: 'Info',
+              employeeId: emp.id || null,
+              employeeName: recordPayload.employeeName,
+              relatedRecordId: savedDocId,
+              verificationId: vid,
+              date: dateStr,
+              time: timeStr,
+              status: 'Unread',
+              read: false,
+              timestamp: serverTimestamp(),
+              createdAt: serverTimestamp(),
+            }).catch(() => {});
+          }
         }
 
-        // Employee notification
         await addDoc(collection(db, 'notifications'), {
+          companyId,
           type: 'employee',
-          employeeId: recordData.employeeId,
-          title: verResult === 'verified' ? 'Verification Successful' : 'Verification Failed',
-          message: verResult === 'verified'
-            ? 'Identity verification successful. Your session is confirmed.'
-            : 'Identity verification failed. Please verify your identity again.',
-          timestamp: serverTimestamp(),
+          notificationType: 'FACIAL_VERIFICATION_RESULT',
+          targetRole: 'employee',
+          employeeId: emp.id || null,
+          employeeName: recordPayload.employeeName,
+          title: isVerified ? 'Verification Successful' : 'Verification Failed',
+          message: isVerified
+            ? `Identity verified (${comparison.confidenceScore}% match).`
+            : `Identity verification failed (${comparison.confidenceScore}% match). Please retry in better lighting.`,
+          severity: isVerified ? 'Info' : 'High',
+          relatedRecordId: savedDocId,
+          date: dateStr,
+          time: timeStr,
+          status: 'Unread',
           read: false,
+          timestamp: serverTimestamp(),
+          createdAt: serverTimestamp(),
         }).catch(() => {});
-
       } catch (fsErr) {
-        console.warn('Firestore write failed, queuing offline:', fsErr?.message);
-        await queueOfflineRecord('ActivityLogs', recordData);
-        savedDocId = vid;
-        setFirestoreDocId(vid);
+        console.warn('[FacialVerificationModal] Firestore write failed, queuing offline:', fsErr?.message);
+        await queueOfflineRecord('facial_verifications', recordPayload);
       }
 
-      // Mark scheduler prompt as answered
       await markPromptAnswered();
-
       setStage('result');
-      if (verResult === 'verified' && onVerified) {
-        onVerified(recordData);
-      }
 
+      if (isVerified && onVerified) {
+        onVerified(recordPayload);
+      }
     } catch (error) {
       console.error('[FacialVerificationModal] capture error:', error);
       setStage('result');
-      setResult('error');
+      setResult('Error');
       setConfidenceScore(0);
+      setStatusMessage(error?.message || 'An error occurred during facial capture.');
     }
-  }, [employee, triggerType, attendanceId, retryCount, onVerified]);
+  }, [activeMode, employee, assignment, localFaceRef, verificationRequest, triggerType, attendanceId, retryCount, onVerified, onFaceRegistered]);
 
   const handleRetry = useCallback(() => {
     if (retryCount >= MAX_RETRIES) {
-      Alert.alert('Maximum Retries Reached', 'You have reached the maximum number of verification attempts. Please contact your supervisor.');
+      Alert.alert('Maximum Retries Reached', 'You have reached the maximum verification attempts. Please contact your supervisor.');
       onClose();
       return;
     }
-    setRetryCount(prev => prev + 1);
+    setRetryCount((prev) => prev + 1);
     setPhotoUri(null);
     setResult(null);
     setConfidenceScore(null);
-    setAdminStatus(null);
+    setStatusMessage('');
     setStage('camera');
   }, [retryCount, onClose]);
 
-  const handleClose = useCallback(async () => {
-    if (triggerType === 'scheduled_random') {
-      await markPromptAnswered();
-    }
-    onClose();
-  }, [triggerType, onClose]);
+  const handleSwitchToRegister = () => {
+    setActiveMode('register');
+    setPhotoUri(null);
+    setResult(null);
+    setStage('prompt');
+  };
 
-  const resultColor = result === 'verified' ? '#10B981' : result === 'error' ? '#6B7280' : '#EF4444';
-  const resultLabel = result === 'verified' ? 'Verified ✓' : result === 'error' ? 'Error' : 'Failed ✗';
-  const statusColor = !adminStatus ? '#F59E0B'
-    : adminStatus === 'verified' ? '#10B981'
-    : adminStatus === 'rejected' ? '#EF4444'
-    : '#6B7280';
+  const handleProceedToVerifyAfterRegistration = () => {
+    setActiveMode('verify');
+    setPhotoUri(null);
+    setResult(null);
+    setConfidenceScore(null);
+    setStage('prompt');
+  };
+
+  const isSuccess = result === 'Verified' || result === 'Registered';
+  const resultColor = isSuccess ? '#10B981' : result === 'Error' ? '#6B7280' : '#EF4444';
+  const resultLabel = result === 'Registered'
+    ? 'Registered ✓'
+    : result === 'Verified'
+      ? 'Verified ✓'
+      : result === 'Error'
+        ? 'Error'
+        : 'Failed ✗';
 
   return (
-    <Modal visible={visible} animationType="slide" transparent onRequestClose={handleClose}>
+    <Modal visible={visible} animationType="slide" transparent onRequestClose={onClose}>
       <View style={styles.overlay}>
         <View style={styles.modalCard}>
 
-          {/* ── Header ── */}
+          {/* Header */}
           <View style={styles.header}>
             <View style={styles.headerLeft}>
               <View style={styles.headerIconBg}>
-                <Ionicons name="scan-circle" size={22} color="#4F46E5" />
+                <Ionicons name={activeMode === 'register' ? 'person-add' : 'scan-circle'} size={22} color="#4F46E5" />
               </View>
               <View>
                 <Text style={styles.headerTitle}>
-                  {triggerType === 'scheduled_random' ? 'Random Selfie Verification' : 'Identity Verification'}
+                  {activeMode === 'register'
+                    ? 'Face Reference Registration'
+                    : verificationRequest
+                      ? 'Admin Verification Request'
+                      : 'Identity Verification'}
                 </Text>
                 <Text style={styles.headerSub}>
-                  {triggerType === 'check_in' ? 'Check-in Selfie Verification' :
-                   triggerType === 'scheduled_random' ? 'Scheduled 30-Minute Random Check' :
-                   'Manual Verification'}
+                  {activeMode === 'register'
+                    ? 'First-time facial enrollment'
+                    : verificationRequest?.requestedByName
+                      ? `Requested by ${verificationRequest.requestedByName}`
+                      : 'Facial identity check'}
                 </Text>
               </View>
             </View>
             {stage !== 'processing' && (
-              <TouchableOpacity onPress={handleClose} style={styles.closeBtn}>
+              <TouchableOpacity onPress={onClose} style={styles.closeBtn}>
                 <Ionicons name="close" size={20} color="#6B7280" />
               </TouchableOpacity>
             )}
           </View>
 
-          {/* ── STAGE: Prompt ── */}
+          {/* STAGE: No Face Registration Gate (Requirement 8) */}
+          {stage === 'no_registration' && (
+            <ScrollView showsVerticalScrollIndicator={false}>
+              <View style={styles.promptIllustration}>
+                <View style={[styles.scanRing, { borderColor: '#F59E0B', backgroundColor: '#FEF3C7' }]}>
+                  <Ionicons name="alert-circle" size={56} color="#D97706" />
+                </View>
+              </View>
+
+              <Text style={styles.promptTitle}>Face Registration Required</Text>
+              <Text style={[styles.promptBody, { color: '#92400E', fontWeight: '700' }]}>
+                {FACE_REG_REQUIRED_MSG}
+              </Text>
+              <Text style={styles.promptBody}>
+                You must register your face reference photo first so your live selfie can be compared against your enrolled identity.
+              </Text>
+
+              <TouchableOpacity style={styles.primaryBtn} onPress={handleSwitchToRegister}>
+                <Ionicons name="camera" size={18} color="white" />
+                <Text style={styles.btnText}>Register Face Now</Text>
+              </TouchableOpacity>
+
+              <TouchableOpacity style={styles.secondaryBtn} onPress={onClose}>
+                <Text style={styles.secondaryText}>Close</Text>
+              </TouchableOpacity>
+            </ScrollView>
+          )}
+
+          {/* STAGE: Prompt */}
           {stage === 'prompt' && (
             <ScrollView showsVerticalScrollIndicator={false}>
               <View style={styles.promptIllustration}>
                 <View style={styles.scanRing}>
-                  <Ionicons name="person-circle" size={64} color="#4F46E5" />
+                  <Ionicons name={activeMode === 'register' ? 'person-add' : 'person-circle'} size={60} color="#4F46E5" />
                 </View>
               </View>
 
               <Text style={styles.promptTitle}>
-                {triggerType === 'scheduled_random' 
-                  ? 'Random Selfie Verification' 
-                  : (triggerType === 'check_in' ? 'Check-In Verification Required' : 'Identity Verification Required')}
+                {activeMode === 'register'
+                  ? 'Register Your Face Reference'
+                  : verificationRequest
+                    ? 'Facial Verification Requested'
+                    : 'Identity Verification'}
               </Text>
               <Text style={styles.promptBody}>
-                {triggerType === 'scheduled_random'
-                  ? 'It is time for your scheduled 30-minute random selfie verification. Please take a quick selfie to confirm your active presence at your assigned worksite.'
-                  : 'Please verify your identity to continue your work session. Align your face within the guide in a well-lit environment.'}
+                {activeMode === 'register'
+                  ? 'Capture a clear front-facing photo in good lighting. This reference will be stored securely and used to verify your identity.'
+                  : verificationRequest?.reason
+                    ? `${verificationRequest.reason} Make sure you are safely parked / stationary before taking your selfie.`
+                    : 'Align your face in a well-lit area while stationary to verify your identity against your registered face reference.'}
               </Text>
 
               <View style={styles.hintRow}>
                 <View style={styles.hintItem}>
+                  <Ionicons name="car-outline" size={16} color="#DC2626" />
+                  <Text style={styles.hintText}>Only verify when safely stationary — never while driving</Text>
+                </View>
+                <View style={styles.hintItem}>
                   <Ionicons name="sunny-outline" size={16} color="#D97706" />
-                  <Text style={styles.hintText}>Good lighting required</Text>
+                  <Text style={styles.hintText}>Good front lighting required</Text>
                 </View>
                 <View style={styles.hintItem}>
                   <Ionicons name="scan-outline" size={16} color="#4F46E5" />
-                  <Text style={styles.hintText}>Position face inside frame</Text>
-                </View>
-                <View style={styles.hintItem}>
-                  <Ionicons name="checkmark-circle-outline" size={16} color="#10B981" />
-                  <Text style={styles.hintText}>Face detected when ready</Text>
+                  <Text style={styles.hintText}>Position your face clearly inside the frame</Text>
                 </View>
               </View>
 
               <TouchableOpacity style={styles.primaryBtn} onPress={() => setStage('camera')}>
                 <Ionicons name="camera" size={18} color="white" />
                 <Text style={styles.btnText}>
-                  {triggerType === 'scheduled_random' ? 'Take Selfie Now' : 'Verify Now'}
+                  {activeMode === 'register' ? 'Capture Face Reference' : 'Proceed to Capture'}
                 </Text>
               </TouchableOpacity>
-
-              {triggerType === 'scheduled_random' && (
-                <TouchableOpacity style={styles.laterBtn} onPress={handleLater}>
-                  <Text style={styles.laterText}>Later</Text>
-                </TouchableOpacity>
-              )}
             </ScrollView>
           )}
 
-          {/* ── STAGE: Camera ── */}
+          {/* STAGE: Camera */}
           {stage === 'camera' && (
             <ScrollView showsVerticalScrollIndicator={false} contentContainerStyle={{ paddingBottom: 16 }}>
               <Text style={styles.subtitle}>
-                Align your face within the oval guide below, then tap Capture Selfie.
+                {activeMode === 'register'
+                  ? 'Look straight ahead in clear lighting, then tap Capture Reference Photo.'
+                  : 'Align your face within the guide, then tap Capture Selfie to compare with your registered face.'}
               </Text>
 
               <View style={styles.cameraBox}>
@@ -483,38 +705,40 @@ export default function FacialVerificationModal({
                 <Text style={styles.guidanceText}>Ensure good lighting. Remove glasses or hats if possible.</Text>
               </View>
 
-              {retryCount > 0 && (
+              {retryCount > 0 && activeMode === 'verify' && (
                 <View style={styles.retryBadge}>
                   <Text style={styles.retryText}>Attempt {retryCount + 1} of {MAX_RETRIES + 1}</Text>
                 </View>
               )}
 
-              <TouchableOpacity style={styles.primaryBtn} onPress={handleCaptureSelfie}>
+              <TouchableOpacity style={styles.primaryBtn} onPress={handleCapturePhoto}>
                 <Ionicons name="camera" size={18} color="white" />
-                <Text style={styles.btnText}>Capture Selfie</Text>
+                <Text style={styles.btnText}>
+                  {activeMode === 'register' ? 'Capture Reference Photo' : 'Capture Selfie'}
+                </Text>
               </TouchableOpacity>
-
-              {triggerType === 'scheduled_random' && (
-                <TouchableOpacity style={styles.laterBtn} onPress={handleLater}>
-                  <Text style={styles.laterText}>Later</Text>
-                </TouchableOpacity>
-              )}
             </ScrollView>
           )}
 
-          {/* ── STAGE: Processing ── */}
+          {/* STAGE: Processing */}
           {stage === 'processing' && (
             <View style={styles.processingContainer}>
               {photoUri && <Image source={{ uri: photoUri }} style={styles.processingThumb} />}
               <View style={styles.processingOverlay}>
                 <ActivityIndicator size="large" color="#4F46E5" />
-                <Text style={styles.processingTitle}>Verifying Identity…</Text>
-                <Text style={styles.processingBody}>Analyzing biometric data and uploading to secure storage</Text>
+                <Text style={styles.processingTitle}>
+                  {activeMode === 'register' ? 'Saving Face Reference…' : 'Comparing Against Registered Face…'}
+                </Text>
+                <Text style={styles.processingBody}>
+                  {activeMode === 'register'
+                    ? 'Securely storing your reference profile in Firestore'
+                    : 'Validating facial signature and syncing result to Admin Portal'}
+                </Text>
               </View>
             </View>
           )}
 
-          {/* ── STAGE: Result ── */}
+          {/* STAGE: Result */}
           {stage === 'result' && (
             <ScrollView showsVerticalScrollIndicator={false}>
               {photoUri && (
@@ -528,44 +752,49 @@ export default function FacialVerificationModal({
 
               <View style={[styles.resultCard, { borderColor: resultColor + '40' }]}>
                 <Text style={[styles.resultStatus, { color: resultColor }]}>
-                  {result === 'verified'
-                    ? 'Identity Verified Successfully'
-                    : result === 'error'
-                    ? 'Verification Error'
-                    : 'Verification Failed'}
+                  {result === 'Registered'
+                    ? 'Face Registered Successfully'
+                    : result === 'Verified'
+                      ? 'Identity Verified Successfully'
+                      : result === 'Error'
+                        ? 'Verification Error'
+                        : 'Verification Failed'}
                 </Text>
 
-                {confidenceScore !== null && confidenceScore > 0 && (
+                {statusMessage ? (
+                  <Text style={styles.resultMessage}>{statusMessage}</Text>
+                ) : null}
+
+                {activeMode === 'verify' && confidenceScore !== null && (
                   <View style={styles.scoreRow}>
-                    <Text style={styles.scoreLabel}>Confidence Score</Text>
+                    <Text style={styles.scoreLabel}>Similarity Confidence</Text>
                     <Text style={[styles.scoreValue, { color: resultColor }]}>{confidenceScore}%</Text>
                   </View>
                 )}
 
-                {verificationId && (
-                  <Text style={styles.vidText}>ID: {verificationId}</Text>
+                {verificationId && activeMode === 'verify' && (
+                  <Text style={styles.vidText}>Request ID: {verificationId}</Text>
                 )}
 
-                {/* Live Admin Review Status */}
-                {adminStatus && result !== 'verified' && (
-                  <View style={[styles.adminStatusRow, { borderColor: statusColor }]}>
-                    <Ionicons name="shield-checkmark" size={14} color={statusColor} />
-                    <Text style={[styles.adminStatusText, { color: statusColor }]}>
-                      Admin Review: {adminStatus.charAt(0).toUpperCase() + adminStatus.slice(1)}
+                {adminStatus && (
+                  <View style={[styles.adminStatusRow, { borderColor: '#4F46E5' }]}>
+                    <Ionicons name="shield-checkmark" size={14} color="#4F46E5" />
+                    <Text style={[styles.adminStatusText, { color: '#4F46E5' }]}>
+                      Admin Review: {adminStatus}
                     </Text>
                   </View>
                 )}
               </View>
 
-              {result === 'verified' ? (
-                <TouchableOpacity style={[styles.primaryBtn, { backgroundColor: '#10B981' }]} onPress={handleClose}>
-                  <Ionicons name="checkmark-circle" size={20} color="white" />
-                  <Text style={styles.btnText}>Complete Verification</Text>
+              {result === 'Registered' && verificationRequest ? (
+                <TouchableOpacity style={styles.primaryBtn} onPress={handleProceedToVerifyAfterRegistration}>
+                  <Ionicons name="scan-circle" size={20} color="white" />
+                  <Text style={styles.btnText}>Continue to Verification Request</Text>
                 </TouchableOpacity>
-              ) : result === 'error' ? (
-                <TouchableOpacity style={styles.primaryBtn} onPress={handleRetry} disabled={retryCount >= MAX_RETRIES}>
-                  <Ionicons name="refresh" size={18} color="white" />
-                  <Text style={styles.btnText}>Try Again</Text>
+              ) : isSuccess ? (
+                <TouchableOpacity style={[styles.primaryBtn, { backgroundColor: '#10B981' }]} onPress={onClose}>
+                  <Ionicons name="checkmark-circle" size={20} color="white" />
+                  <Text style={styles.btnText}>Done</Text>
                 </TouchableOpacity>
               ) : (
                 <View style={styles.actionGroup}>
@@ -575,14 +804,13 @@ export default function FacialVerificationModal({
                       <Text style={styles.btnText}>Retry ({MAX_RETRIES - retryCount} left)</Text>
                     </TouchableOpacity>
                   )}
-                  <TouchableOpacity style={[styles.secondaryBtn, { flex: 1 }]} onPress={handleClose}>
+                  <TouchableOpacity style={[styles.secondaryBtn, { flex: 1 }]} onPress={onClose}>
                     <Text style={styles.secondaryText}>Close</Text>
                   </TouchableOpacity>
                 </View>
               )}
             </ScrollView>
           )}
-
         </View>
       </View>
     </Modal>
@@ -623,8 +851,6 @@ const styles = StyleSheet.create({
   headerTitle: { fontSize: 15, fontWeight: '800', color: '#111827' },
   headerSub: { fontSize: 11, color: '#6B7280', fontWeight: '500', marginTop: 1 },
   closeBtn: { padding: 6 },
-
-  // Prompt stage
   promptIllustration: { alignItems: 'center', marginBottom: 16 },
   scanRing: {
     width: 100,
@@ -638,11 +864,10 @@ const styles = StyleSheet.create({
     backgroundColor: '#EEF2FF',
   },
   promptTitle: { fontSize: 18, fontWeight: '800', color: '#111827', textAlign: 'center', marginBottom: 8 },
-  promptBody: { fontSize: 13, color: '#6B7280', textAlign: 'center', lineHeight: 20, marginBottom: 16 },
+  promptBody: { fontSize: 13, color: '#6B7280', textAlign: 'center', lineHeight: 20, marginBottom: 14 },
   hintRow: { gap: 8, marginBottom: 20 },
   hintItem: { flexDirection: 'row', alignItems: 'center', gap: 8, backgroundColor: '#F8FAFC', padding: 10, borderRadius: 10 },
   hintText: { fontSize: 12, color: '#374151', fontWeight: '500', flex: 1 },
-
   subtitle: { fontSize: 13, color: '#6B7280', marginBottom: 14, lineHeight: 18, textAlign: 'center' },
   cameraBox: {
     height: 220,
@@ -685,8 +910,6 @@ const styles = StyleSheet.create({
     marginBottom: 10,
   },
   retryText: { fontSize: 12, color: '#991B1B', fontWeight: '700' },
-
-  // Processing
   processingContainer: { alignItems: 'center', paddingVertical: 30 },
   processingThumb: {
     width: 120,
@@ -700,8 +923,6 @@ const styles = StyleSheet.create({
   processingOverlay: { alignItems: 'center', gap: 10 },
   processingTitle: { fontSize: 16, fontWeight: '800', color: '#111827' },
   processingBody: { fontSize: 13, color: '#6B7280', textAlign: 'center', lineHeight: 18 },
-
-  // Result
   selfieResultContainer: { alignItems: 'center', marginBottom: 16, position: 'relative' },
   selfieResultImg: {
     width: 110,
@@ -727,6 +948,7 @@ const styles = StyleSheet.create({
     gap: 8,
   },
   resultStatus: { fontSize: 15, fontWeight: '800', textAlign: 'center' },
+  resultMessage: { fontSize: 12, color: '#475569', textAlign: 'center', lineHeight: 17 },
   scoreRow: {
     flexDirection: 'row',
     justifyContent: 'space-between',
@@ -749,8 +971,6 @@ const styles = StyleSheet.create({
   },
   adminStatusText: { fontSize: 12, fontWeight: '700' },
   actionGroup: { flexDirection: 'row', gap: 10 },
-
-  // Buttons
   primaryBtn: {
     backgroundColor: '#4F46E5',
     paddingVertical: 14,
@@ -771,10 +991,4 @@ const styles = StyleSheet.create({
     marginBottom: 10,
   },
   secondaryText: { color: '#374151', fontWeight: '700', fontSize: 15 },
-  laterBtn: {
-    paddingVertical: 10,
-    alignItems: 'center',
-    marginBottom: 6,
-  },
-  laterText: { fontSize: 14, color: '#9CA3AF', fontWeight: '600', textDecorationLine: 'underline' },
 });

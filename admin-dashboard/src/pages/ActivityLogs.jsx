@@ -8,8 +8,9 @@ import {
   ResponsiveContainer, PieChart, Pie, Cell, Tooltip as RechartsTooltip, 
   BarChart, Bar, XAxis, YAxis, CartesianGrid 
 } from 'recharts';
-import { db, collection, onSnapshot, query, orderBy, limit, deleteDoc, doc, recordSystemActivityLog, clearActivityLogsLedger } from '../firebase';
+import { db, collection, onSnapshot, query, limit, deleteDoc, doc, recordSystemActivityLog, clearActivityLogsLedger } from '../firebase';
 import { showToast, showConfirmDelete } from '../utils/toast';
+import { useCompany } from '../utils/companyContext';
 
 const STATUS_STYLE = {
   'Success': { background: '#ECFDF5', color: '#065F46', border: '#A7F3D0', dot: '#10B981' },
@@ -31,6 +32,7 @@ const MODULE_OPTIONS = [
 ];
 
 export default function ActivityLogs() {
+  const { matchesCompany, stampCompany } = useCompany();
   const [activityDocs, setActivityDocs] = useState([]);
   const [trackingDocs, setTrackingDocs] = useState([]);
   const [loading, setLoading] = useState(true);
@@ -57,16 +59,14 @@ export default function ActivityLogs() {
     details: '',
   });
 
-  // 1. Subscribe to both ActivityLogs and tracking_logs
+  // 1. Subscribe to both ActivityLogs and tracking_logs from Cloud Firestore
   useEffect(() => {
     setLoading(true);
-
     let unsubActivity = () => {};
     let unsubTracking = () => {};
 
     try {
-      // Subscribe to ActivityLogs (system, settings, roles, security)
-      const qAct = query(collection(db, 'ActivityLogs'), limit(150));
+      const qAct = query(collection(db, 'ActivityLogs'), limit(200));
       unsubActivity = onSnapshot(qAct, (snap) => {
         const items = snap.docs.map(d => ({ id: d.id, _collection: 'ActivityLogs', ...d.data() }));
         setActivityDocs(items);
@@ -77,8 +77,7 @@ export default function ActivityLogs() {
     }
 
     try {
-      // Subscribe to tracking_logs (live telemetry check-ins)
-      const qTrack = query(collection(db, 'tracking_logs'), limit(150));
+      const qTrack = query(collection(db, 'tracking_logs'), limit(200));
       unsubTracking = onSnapshot(qTrack, (snap) => {
         const items = snap.docs.map(d => ({ id: d.id, _collection: 'tracking_logs', ...d.data() }));
         setTrackingDocs(items);
@@ -88,63 +87,36 @@ export default function ActivityLogs() {
       setLoading(false);
     }
 
-    // Storage and custom event listeners for instant reactivity
-    const handleLogEvent = () => {
-      try {
-        const raw = localStorage.getItem('subai_store_ActivityLogs');
-        if (raw) {
-          const parsed = JSON.parse(raw);
-          if (Array.isArray(parsed)) {
-            setActivityDocs(parsed.map(i => ({ _collection: 'ActivityLogs', ...i })));
-          }
-        }
-      } catch (e) {}
-    };
-
-    window.addEventListener('subai_activity_logged', handleLogEvent);
-    window.addEventListener('subai_admin_profile_updated', handleLogEvent);
-    window.addEventListener('subai_logs_cleared', () => {
+    const handleCleared = () => {
       setActivityDocs([]);
       setTrackingDocs([]);
       setSelectedIds([]);
-    });
+    };
+    window.addEventListener('subai_logs_cleared', handleCleared);
 
     return () => {
       unsubActivity();
       unsubTracking();
-      window.removeEventListener('subai_activity_logged', handleLogEvent);
-      window.removeEventListener('subai_admin_profile_updated', handleLogEvent);
+      window.removeEventListener('subai_logs_cleared', handleCleared);
     };
   }, []);
 
-  // 2. Normalize and consolidate dataset
+  // 2. Normalize and consolidate Firestore dataset (company-isolated, no localStorage DB)
   const combinedLogs = useMemo(() => {
-    // Read local storage for any extra pending records
-    let localActLogs = [];
-    try {
-      const raw = localStorage.getItem('subai_store_ActivityLogs');
-      if (raw) localActLogs = JSON.parse(raw) || [];
-    } catch (e) {}
-
-    // Read local tracking store
-    let localTrackLogs = [];
-    try {
-      const raw = localStorage.getItem('subai_store_tracking_logs');
-      if (raw) localTrackLogs = JSON.parse(raw) || [];
-    } catch (e) {}
-
-    const seedLogs = [];
-
     const map = new Map();
 
     const normalize = (item, sourceCol) => {
-      if (!item) return null;
-      const id = String(item.id || item._id || item.timestamp || Math.random());
-      
-      const rawTime = item.timestamp || item.time || item.createdAt || new Date().toISOString();
-      let dateObj = new Date(rawTime);
-      if (isNaN(dateObj.getTime())) {
-        dateObj = new Date();
+      if (!item || !matchesCompany(item)) return null;
+      const id = String(item.id || item._id || '');
+      if (!id) return null;
+
+      const rawTime = item.timestamp || item.time || item.createdAt;
+      let dateObj = new Date();
+      if (rawTime?.toDate) dateObj = rawTime.toDate();
+      else if (typeof rawTime?.seconds === 'number') dateObj = new Date(rawTime.seconds * 1000);
+      else if (rawTime) {
+        const parsed = new Date(rawTime);
+        if (!isNaN(parsed.getTime())) dateObj = parsed;
       }
 
       return {
@@ -158,29 +130,12 @@ export default function ActivityLogs() {
         dateDisplay: dateObj.toLocaleDateString([], { month: 'short', day: 'numeric', year: 'numeric' }),
         fullDate: dateObj,
         details: item.details || item.detail || item.action || 'Logged operation executed successfully.',
-        ip: item.ip || item.ipAddress || '192.168.1.104',
-        channel: item.channel || (sourceCol === 'tracking_logs' ? 'Mobile Telemetry (WebSocket)' : 'Admin Console (HTTPS)'),
+        ip: item.ip || item.ipAddress || '—',
+        channel: item.channel || (sourceCol === 'tracking_logs' ? 'Mobile Telemetry' : 'Admin Console'),
         _collection: item._collection || sourceCol || 'ActivityLogs'
       };
     };
 
-    // Insert seeds first
-    seedLogs.forEach(s => {
-      const norm = normalize(s, 'ActivityLogs');
-      if (norm) map.set(norm.id, norm);
-    });
-
-    // Insert local items
-    localTrackLogs.forEach(t => {
-      const norm = normalize(t, 'tracking_logs');
-      if (norm) map.set(norm.id, norm);
-    });
-    localActLogs.forEach(a => {
-      const norm = normalize(a, 'ActivityLogs');
-      if (norm) map.set(norm.id, norm);
-    });
-
-    // Insert Firestore live items
     trackingDocs.forEach(t => {
       const norm = normalize(t, 'tracking_logs');
       if (norm) map.set(norm.id, norm);
@@ -191,7 +146,7 @@ export default function ActivityLogs() {
     });
 
     return Array.from(map.values()).sort((a, b) => b.fullDate.getTime() - a.fullDate.getTime());
-  }, [activityDocs, trackingDocs]);
+  }, [activityDocs, trackingDocs, matchesCompany]);
 
   // 3. Multi-dimensional filtering
   const filtered = useMemo(() => {
@@ -327,29 +282,11 @@ export default function ActivityLogs() {
     }
   };
 
-  // 7. Manual Refresh
-  const handleRefresh = async () => {
+  // 7. Manual Refresh (live Firestore listener stays active automatically)
+  const handleRefresh = () => {
     setIsRefreshing(true);
-    try {
-      const res = await fetch('/api/sync');
-      if (res.ok) {
-        const json = await res.json();
-        const store = json.data || json.store || json;
-        if (store) {
-          if (Array.isArray(store.ActivityLogs)) {
-            setActivityDocs(store.ActivityLogs.map(i => ({ _collection: 'ActivityLogs', ...i })));
-          }
-          if (Array.isArray(store.tracking_logs)) {
-            setTrackingDocs(store.tracking_logs.map(i => ({ _collection: 'tracking_logs', ...i })));
-          }
-        }
-      }
-      showToast('Ledger Refreshed', 'Stream synchronized with Firestore and telemetry engine.', 'info');
-    } catch (e) {
-      showToast('Refreshed', 'Activity logs reloaded.', 'info');
-    } finally {
-      setTimeout(() => setIsRefreshing(false), 500);
-    }
+    showToast('Ledger Synced', 'Live Firestore stream is active.', 'info');
+    setTimeout(() => setIsRefreshing(false), 400);
   };
 
   // 8. Add New Manual Audit Entry
@@ -363,20 +300,19 @@ export default function ActivityLogs() {
       const currentAdmin = JSON.parse(localStorage.getItem('subai_admin_user') || '{}');
       const adminName = currentAdmin.name || currentAdmin.displayName || 'System Admin';
 
-      const entry = await recordSystemActivityLog({
+      await recordSystemActivityLog(stampCompany({
         action: newLogForm.action.trim(),
         module: newLogForm.module,
         status: newLogForm.status,
         user: adminName,
         details: newLogForm.details.trim() || newLogForm.action.trim()
-      });
+      }));
 
-      setActivityDocs(prev => [entry, ...prev]);
       setShowAddModal(false);
       setNewLogForm({ action: '', module: 'Settings', status: 'Success', details: '' });
-      showToast('Entry Recorded', 'New administrative event logged into audit ledger.', 'success');
+      showToast('Entry Recorded', 'New administrative event logged into Firestore audit ledger.', 'success');
     } catch (err) {
-      showToast('Error', 'Could not record audit log.', 'error');
+      showToast('Error', err.message || 'Could not record audit log.', 'error');
     }
   };
 

@@ -7,6 +7,7 @@ import {
 } from 'lucide-react';
 import { db, collection, onSnapshot, query, doc, updateDoc, deleteDoc, addDoc } from '../firebase';
 import { showToast, showConfirmDelete } from '../utils/toast';
+import { useCompany } from '../utils/companyContext';
 import { startAnomalyNotificationSync } from '../services/anomalyNotificationSync';
 
 const notifMillis = (n) => {
@@ -23,16 +24,19 @@ const sortNotifs = (list) => [...list].sort((a, b) => notifMillis(b) - notifMill
 const TABS = ['All Notifications', 'Unread', 'AI Anomaly Alerts', 'Geofence Alerts', 'Mobile Routes', 'System & Security'];
 
 export default function NotificationsPage() {
+  const { activeCompanyId, matchesCompany, stampCompany } = useCompany();
   const navigate = useNavigate();
   const location = useLocation();
   const [activeTab, setActiveTab] = useState('All Notifications');
-  const [notifs, setNotifs] = useState([]);
+  const [rawNotifs, setRawNotifs] = useState([]);
   const [loading, setLoading] = useState(true);
   const [isRefreshing, setIsRefreshing] = useState(false);
   const [search, setSearch] = useState('');
   const [selectedIds, setSelectedIds] = useState([]);
   const [selectedNotif, setSelectedNotif] = useState(null);
   const [showBroadcastModal, setShowBroadcastModal] = useState(false);
+
+  const notifs = useMemo(() => sortNotifs(rawNotifs.filter(matchesCompany)), [rawNotifs, matchesCompany]);
 
   useEffect(() => {
     const params = new URLSearchParams(location.search);
@@ -64,65 +68,29 @@ export default function NotificationsPage() {
     message: ''
   });
 
-  // Load notifications from local storage fallback
-  const loadStoredNotifications = () => {
-    try {
-      const raw = localStorage.getItem('subai_store_notifications');
-      if (raw !== null) {
-        const parsed = JSON.parse(raw);
-        if (Array.isArray(parsed)) return parsed;
-      }
-    } catch (e) {}
-    return [];
-  };
-
-  // 1. Live Firestore subscription with localStorage and seed fallback
+  // 1. Live Firestore subscription (single source of truth)
   useEffect(() => {
     setLoading(true);
     let unsub = () => {};
-
     try {
       unsub = onSnapshot(query(collection(db, 'notifications')), (snap) => {
-        if (!snap.empty) {
-          const live = sortNotifs(snap.docs.map(d => ({ id: d.id, ...d.data() })));
-          setNotifs(live);
-          localStorage.setItem('subai_store_notifications', JSON.stringify(live));
-        } else {
-          const raw = localStorage.getItem('subai_store_notifications');
-          if (raw === '[]') {
-            setNotifs([]);
-          } else {
-            const initial = sortNotifs(loadStoredNotifications());
-            setNotifs(initial);
-          }
-        }
+        const live = snap.docs.map(d => ({ id: d.id, ...d.data() }));
+        setRawNotifs(live);
         setLoading(false);
-      }, () => {
-        setNotifs(sortNotifs(loadStoredNotifications()));
+      }, (err) => {
+        console.warn('NotificationsPage Firestore listener error:', err);
         setLoading(false);
       });
     } catch {
-      setNotifs(sortNotifs(loadStoredNotifications()));
       setLoading(false);
     }
 
-    const stopAnomalySync = startAnomalyNotificationSync();
-
-    const handleSyncEvent = () => {
-      setNotifs(sortNotifs(loadStoredNotifications()));
-    };
-
-    window.addEventListener('subai_notifications_updated', handleSyncEvent);
-    window.addEventListener('storage', (e) => {
-      if (e.key === 'subai_store_notifications') handleSyncEvent();
-    });
-
+    const stopAnomalySync = startAnomalyNotificationSync(null, activeCompanyId);
     return () => {
       unsub();
       stopAnomalySync();
-      window.removeEventListener('subai_notifications_updated', handleSyncEvent);
     };
-  }, []);
+  }, [activeCompanyId]);
 
   // 2. Filtered list based on active tab and search
   const filtered = useMemo(() => {
@@ -161,95 +129,49 @@ export default function NotificationsPage() {
   const startIndex = (safePage - 1) * pageSize;
   const currentPageItems = filtered.slice(startIndex, startIndex + pageSize);
 
-  // 3. Status Action Handlers
+  // 3. Status Action Handlers (Cloud Firestore single source of truth)
   const markRead = async (id) => {
-    const updated = notifs.map(n => String(n.id) === String(id) ? { ...n, status: 'Read', read: true } : n);
-    setNotifs(updated);
-    localStorage.setItem('subai_store_notifications', JSON.stringify(updated));
-
-    try {
-      await fetch('/api/sync', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ path: 'notifications', items: updated, fullReplace: true })
-      });
-    } catch (e) {}
-
     try {
       await updateDoc(doc(db, 'notifications', String(id)), { status: 'Read', read: true });
-    } catch (e) {}
-
-    window.dispatchEvent(new CustomEvent('subai_notifications_updated'));
-    showToast('Notification Read', 'Alert marked as read.', 'info');
+      showToast('Notification Read', 'Alert marked as read.', 'info');
+    } catch (e) {
+      showToast('Update Failed', e.message || 'Could not mark notification as read.', 'error');
+    }
   };
 
   const markUnread = async (id) => {
-    const updated = notifs.map(n => String(n.id) === String(id) ? { ...n, status: 'Unread', read: false } : n);
-    setNotifs(updated);
-    localStorage.setItem('subai_store_notifications', JSON.stringify(updated));
-
-    try {
-      await fetch('/api/sync', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ path: 'notifications', items: updated, fullReplace: true })
-      });
-    } catch (e) {}
-
     try {
       await updateDoc(doc(db, 'notifications', String(id)), { status: 'Unread', read: false });
-    } catch (e) {}
-
-    window.dispatchEvent(new CustomEvent('subai_notifications_updated'));
-    showToast('Notification Unread', 'Alert marked as unread.', 'info');
+      showToast('Notification Unread', 'Alert marked as unread.', 'info');
+    } catch (e) {
+      showToast('Update Failed', e.message || 'Could not mark notification as unread.', 'error');
+    }
   };
 
   const markAllRead = async () => {
-    const updated = notifs.map(n => ({ ...n, status: 'Read', read: true }));
-    setNotifs(updated);
-    localStorage.setItem('subai_store_notifications', JSON.stringify(updated));
-
+    const unread = notifs.filter(n => n.status === 'Unread' || n.read === false);
+    if (unread.length === 0) return;
     try {
-      await fetch('/api/sync', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ path: 'notifications', items: updated, fullReplace: true })
-      });
-    } catch (e) {}
-
-    try {
-      await Promise.all(notifs.filter(n => n.status === 'Unread' || n.read === false).map(n =>
+      await Promise.all(unread.map(n =>
         updateDoc(doc(db, 'notifications', String(n.id)), { status: 'Read', read: true }).catch(() => {})
       ));
-    } catch (e) {}
-
-    window.dispatchEvent(new CustomEvent('subai_notifications_updated'));
-    setSelectedIds([]);
-    showToast('All Marked Read', 'All notifications updated to read state.', 'success');
+      setSelectedIds([]);
+      showToast('All Marked Read', 'All notifications updated to read state in Firestore.', 'success');
+    } catch (e) {
+      showToast('Update Failed', e.message || 'Could not update notifications.', 'error');
+    }
   };
 
   const deleteNotif = async (id) => {
     const confirmed = await showConfirmDelete('Delete Notification?', 'Are you sure you want to remove this notification alert?');
     if (confirmed) {
-      const updated = notifs.filter(n => String(n.id) !== String(id));
-      setNotifs(updated);
-      localStorage.setItem('subai_store_notifications', JSON.stringify(updated));
-
-      try {
-        await fetch('/api/sync', {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ path: 'notifications', items: updated, fullReplace: true, action: 'delete', id: String(id) })
-        });
-      } catch (e) {}
-
       try {
         await deleteDoc(doc(db, 'notifications', String(id)));
-      } catch (e) {}
-
-      window.dispatchEvent(new CustomEvent('subai_notifications_updated'));
-      setSelectedIds(prev => prev.filter(i => String(i) !== String(id)));
-      showToast('Notification Removed', 'Notification deleted successfully.', 'success');
+        setSelectedIds(prev => prev.filter(i => String(i) !== String(id)));
+        showToast('Notification Removed', 'Notification deleted successfully.', 'success');
+      } catch (e) {
+        showToast('Delete Failed', e.message || 'Could not delete notification.', 'error');
+      }
     }
   };
 
@@ -275,141 +197,81 @@ export default function NotificationsPage() {
       `Permanently remove ${selectedIds.length} selected notification(s)?`
     );
     if (confirmed) {
-      const idSet = new Set(selectedIds.map(String));
-      const updated = notifs.filter(n => !idSet.has(String(n.id)));
-      setNotifs(updated);
-      localStorage.setItem('subai_store_notifications', JSON.stringify(updated));
-
-      try {
-        await fetch('/api/sync', {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ path: 'notifications', items: updated, fullReplace: true, action: 'delete', ids: selectedIds.map(String) })
-        });
-      } catch (e) {}
-
       try {
         await Promise.all(selectedIds.map(id => deleteDoc(doc(db, 'notifications', String(id))).catch(() => {})));
-      } catch (e) {}
-
-      window.dispatchEvent(new CustomEvent('subai_notifications_updated'));
-      setSelectedIds([]);
-      showToast('Bulk Delete', `Deleted ${selectedIds.length} notifications.`, 'success');
+        setSelectedIds([]);
+        showToast('Bulk Delete', `Deleted ${selectedIds.length} notifications.`, 'success');
+      } catch (e) {
+        showToast('Bulk Delete Failed', e.message || 'Error deleting notifications.', 'error');
+      }
     }
   };
 
   const handleBulkMarkRead = async () => {
     if (selectedIds.length === 0) return;
-    const idSet = new Set(selectedIds.map(String));
-    const updated = notifs.map(n => idSet.has(String(n.id)) ? { ...n, status: 'Read', read: true } : n);
-    setNotifs(updated);
-    localStorage.setItem('subai_store_notifications', JSON.stringify(updated));
-
-    try {
-      await fetch('/api/sync', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ path: 'notifications', items: updated, fullReplace: true })
-      });
-    } catch (e) {}
-
     try {
       await Promise.all(selectedIds.map(id => updateDoc(doc(db, 'notifications', String(id)), { status: 'Read', read: true }).catch(() => {})));
-    } catch (e) {}
-
-    window.dispatchEvent(new CustomEvent('subai_notifications_updated'));
-    setSelectedIds([]);
-    showToast('Bulk Read', `Marked ${selectedIds.length} notifications as read.`, 'info');
+      setSelectedIds([]);
+      showToast('Bulk Read', `Marked ${selectedIds.length} notifications as read.`, 'info');
+    } catch (e) {
+      showToast('Update Failed', e.message || 'Could not mark selected notifications read.', 'error');
+    }
   };
 
   const handleClearAll = async () => {
     const confirmed = await showConfirmDelete(
       'Clear All Notifications?',
-      'Warning: This will remove all notifications from the dispatch center. Proceed?'
+      'Warning: This will remove all notifications in your active company scope from Firestore. Proceed?'
     );
     if (confirmed) {
-      const toDelete = [...notifs];
-      setNotifs([]);
-      localStorage.setItem('subai_store_notifications', JSON.stringify([]));
-
       try {
-        await fetch('/api/sync', {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ path: 'notifications', items: [], fullReplace: true, action: 'clear_notifications' })
-        });
-      } catch (e) {}
-
-      try {
-        await Promise.all(toDelete.map(n => deleteDoc(doc(db, 'notifications', String(n.id))).catch(() => {})));
-      } catch (e) {}
-
-      window.dispatchEvent(new CustomEvent('subai_notifications_updated'));
-      setSelectedIds([]);
-      showToast('Notifications Cleared', 'All notification records have been removed.', 'success');
+        await Promise.all(notifs.map(n => deleteDoc(doc(db, 'notifications', String(n.id))).catch(() => {})));
+        setSelectedIds([]);
+        showToast('Notifications Cleared', 'All notification records have been removed.', 'success');
+      } catch (e) {
+        showToast('Clear Failed', e.message || 'Could not clear notifications.', 'error');
+      }
     }
   };
 
   // 5. Manual Refresh
-  const handleRefresh = async () => {
+  const handleRefresh = () => {
     setIsRefreshing(true);
-    try {
-      const res = await fetch('/api/sync');
-      if (res.ok) {
-        const json = await res.json();
-        const store = json.data || json.store || json;
-        if (store && Array.isArray(store.notifications)) {
-          setNotifs(store.notifications);
-          localStorage.setItem('subai_store_notifications', JSON.stringify(store.notifications));
-        }
-      }
-      showToast('Notifications Refreshed', 'Telemetry signal synced with dispatch queue.', 'info');
-    } catch (e) {
-      showToast('Refreshed', 'Notification feed updated.', 'info');
-    } finally {
-      setTimeout(() => setIsRefreshing(false), 400);
-    }
+    showToast('Notifications Synced', 'Live Firestore notification stream is active.', 'info');
+    setTimeout(() => setIsRefreshing(false), 400);
   };
 
-  // 6. Broadcast Alert Creation
+  // 6. Broadcast Alert Creation (persisted directly to Firestore with companyId)
   const handleCreateBroadcast = async (e) => {
     e.preventDefault();
     if (!broadcastForm.title.trim() || !broadcastForm.message.trim()) {
       return showToast('Validation Error', 'Title and message are required.', 'error');
     }
 
-    const newAlert = {
-      id: 'notif_' + Date.now(),
+    const newAlert = stampCompany({
       title: broadcastForm.title.trim(),
       message: broadcastForm.message.trim(),
       sender: broadcastForm.sender.trim() || 'Command Center Ops',
       sub: 'Broadcast',
       type: broadcastForm.type,
+      severity: broadcastForm.type === 'Alert' ? 'High' : 'Info',
       workType: broadcastForm.workType === 'All Staff' ? '' : broadcastForm.workType,
       date: new Date().toLocaleDateString([], { month: 'short', day: 'numeric', year: 'numeric' }),
       time: new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }),
       status: 'Unread',
       read: false,
-      timestamp: new Date().toISOString()
-    };
-
-    const updated = [newAlert, ...notifs];
-    setNotifs(updated);
-    localStorage.setItem('subai_store_notifications', JSON.stringify(updated));
+      timestamp: new Date().toISOString(),
+      createdAt: Date.now(),
+    });
 
     try {
       await addDoc(collection(db, 'notifications'), newAlert);
-      await fetch('/api/sync', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ path: 'notifications', data: newAlert })
-      });
-    } catch (e) {}
-
-    window.dispatchEvent(new CustomEvent('subai_notifications_updated'));
-    setShowBroadcastModal(false);
-    setBroadcastForm({ title: '', sender: 'Command Center Ops', type: 'System', workType: 'All Staff', message: '' });
-    showToast('Alert Broadcasted', 'New notification dispatched to staff and topbar.', 'success');
+      setShowBroadcastModal(false);
+      setBroadcastForm({ title: '', sender: 'Command Center Ops', type: 'System', workType: 'All Staff', message: '' });
+      showToast('Alert Broadcasted', 'New notification saved to Firestore and dispatched.', 'success');
+    } catch (err) {
+      showToast('Broadcast Failed', err.message || 'Could not save broadcast notification.', 'error');
+    }
   };
 
   // 7. Contextual Route Navigation

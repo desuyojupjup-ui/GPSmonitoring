@@ -22,6 +22,7 @@ import {
   getDocs, 
   doc,
   updateDoc,
+  setDoc,
   signInWithEmailAndPassword, 
   saveUserSession,
   ensureAuthenticatedSession 
@@ -193,20 +194,46 @@ export default function LoginScreen({ navigation, route, onLogin: propOnLogin })
       await clearStaleCache();
       const targetEmail = empData.email || cleanEmail;
       const targetName = empData.name || cleanEmail.split('@')[0];
+      const companyId = empData.companyId || 'company_default';
+
+      // Attempt signing into the employee's own Firebase Auth account if provisioned
+      // so Firestore Security Rules bind directly to the employee's UID and companyId
+      if (targetEmail && !targetEmail.includes('admin@')) {
+        try {
+          const ownCred = await signInWithEmailAndPassword(auth, targetEmail, cleanPassword);
+          if (ownCred?.user?.uid) {
+            await setDoc(doc(db, 'user_profiles', ownCred.user.uid), {
+              uid: ownCred.user.uid,
+              role: 'Employee',
+              companyId,
+              employeeId: empData.id,
+              email: targetEmail.toLowerCase(),
+              name: targetName,
+              status: 'Active',
+              updatedAt: Date.now(),
+            }, { merge: true }).catch(() => {});
+          }
+        } catch (_) {
+          // Employee Auth record not provisioned individually — gateway session remains active
+        }
+      }
+
       const sessionPayload = {
         ...empData,
+        companyId,
         email: targetEmail,
         name: targetName,
-        uid: empData.id || ('emp_' + Date.now()),
+        uid: empData.id,
         status: 'Online',
         isOnline: true
       };
 
-      if (empData.id && empData.id !== 'emp_fallback') {
+      if (empData.id) {
         try {
           await updateDoc(doc(db, 'employees', empData.id), {
             status: 'Online',
             isOnline: true,
+            companyId,
             lastLogin: new Date().toISOString(),
             lastActive: Date.now()
           });

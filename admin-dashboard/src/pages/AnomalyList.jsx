@@ -3,6 +3,7 @@ import { useLocation } from 'react-router-dom';
 import { db, collection, onSnapshot, query, orderBy, limit, updateDoc, doc, deleteDoc, addDoc, serverTimestamp } from '../firebase';
 import { Search, ShieldAlert, AlertTriangle, CheckCircle, ArrowUpRight, Filter, Eye, Trash2, Activity, TrendingUp, Zap, BrainCircuit, ShieldX, Gauge, Sliders, CheckSquare } from 'lucide-react';
 import { showToast, showConfirmDelete } from '../utils/toast';
+import { useCompany, DEFAULT_COMPANY_ID } from '../utils/companyContext';
 import { ResponsiveContainer, PieChart, Pie, Cell, BarChart, Bar, XAxis, YAxis, Tooltip, CartesianGrid, ComposedChart, Line } from 'recharts';
 
 const getTsMillis = (ts) => {
@@ -115,11 +116,14 @@ const CustomComboTooltip = ({ active, payload }) => {
 
 export default function AnomalyList() {
   const location = useLocation();
-  const [anomalies, setAnomalies] = useState([]);
+  const { matchesCompany } = useCompany();
+  const [rawAnomalies, setRawAnomalies] = useState([]);
   const [loading, setLoading] = useState(true);
   const [searchTerm, setSearchTerm] = useState('');
   const [severityFilter, setSeverityFilter] = useState('All');
   const [selectedAnomaly, setSelectedAnomaly] = useState(null);
+
+  const anomalies = React.useMemo(() => rawAnomalies.filter(matchesCompany), [rawAnomalies, matchesCompany]);
 
   // Auto-select anomaly if passed from dashboard modal
   useEffect(() => {
@@ -205,7 +209,7 @@ export default function AnomalyList() {
 
       const list = Array.from(mergedMap.values());
       list.sort((a, b) => getTsMillis(b.timestamp || b.createdAt) - getTsMillis(a.timestamp || a.createdAt));
-      setAnomalies(list);
+      setRawAnomalies(list);
       setLoading(false);
     };
 
@@ -257,6 +261,7 @@ export default function AnomalyList() {
       // If escalated to fraud, also create a record in fraud_reports collection
       if (newStatus === 'Escalated to Fraud' && targetItem) {
         await addDoc(collection(db, 'fraud_reports'), {
+          companyId: targetItem.companyId || DEFAULT_COMPANY_ID,
           employeeId: targetItem.employeeId || null,
           employeeName: targetItem.employeeName || 'Field Employee',
           employeeEmail: targetItem.employeeEmail || null,
@@ -279,7 +284,7 @@ export default function AnomalyList() {
       console.warn('Firestore update fallback:', e);
       showToast('error', 'Update Failed', e?.message || 'Could not update status');
     }
-    setAnomalies(prev => prev.map(a => a.id === id ? { ...a, status: newStatus } : a));
+    setRawAnomalies(prev => prev.map(a => a.id === id ? { ...a, status: newStatus } : a));
     if (selectedAnomaly && selectedAnomaly.id === id) {
       setSelectedAnomaly(prev => ({ ...prev, status: newStatus }));
     }
@@ -357,36 +362,16 @@ export default function AnomalyList() {
 
         const docIdsArray = Array.from(allTargetDocIds);
 
-        // Delete from all collections that may store anomalies or associated notifications
         await Promise.all(docIdsArray.map(async docId => {
-          deleteDoc(doc(db, 'ai_analysis', docId)).catch(() => {});
-          deleteDoc(doc(db, 'ActivityLogs', docId)).catch(() => {});
-          deleteDoc(doc(db, 'notifications', `anomaly_${docId}`)).catch(() => {});
-          deleteDoc(doc(db, 'notifications', docId)).catch(() => {});
-          deleteDoc(doc(db, 'security_events', docId)).catch(() => {});
-          deleteDoc(doc(db, 'fraud_reports', docId)).catch(() => {});
-
-          // Clean local store
-          ['ai_analysis', 'ActivityLogs', 'notifications', 'security_events', 'fraud_reports'].forEach(k => {
-            try {
-              const store = JSON.parse(localStorage.getItem('subai_store_' + k) || '[]');
-              const filtered = store.filter(x => x && x.id !== docId && x.anomalyId !== docId);
-              localStorage.setItem('subai_store_' + k, JSON.stringify(filtered));
-            } catch (_) {}
-          });
+          await deleteDoc(doc(db, 'ai_analysis', docId)).catch(() => {});
+          await deleteDoc(doc(db, 'ActivityLogs', docId)).catch(() => {});
+          await deleteDoc(doc(db, 'notifications', `anomaly_${docId}`)).catch(() => {});
+          await deleteDoc(doc(db, 'notifications', docId)).catch(() => {});
+          await deleteDoc(doc(db, 'security_events', docId)).catch(() => {});
+          await deleteDoc(doc(db, 'fraud_reports', docId)).catch(() => {});
         }));
 
-        // Notify sync server
-        fetch('/api/sync', {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ action: 'delete', ids: docIdsArray })
-        }).catch(() => {});
-
-        window.dispatchEvent(new CustomEvent('subai_notifications_updated'));
-
-        // Optimistic UI update
-        setAnomalies(prev => prev.filter(a => !idsToDelete.includes(a.id) && !allTargetDocIds.has(a.id)));
+        setRawAnomalies(prev => prev.filter(a => !idsToDelete.includes(a.id) && !allTargetDocIds.has(a.id)));
         if (selectedAnomaly && (idsToDelete.includes(selectedAnomaly.id) || allTargetDocIds.has(selectedAnomaly.id))) {
           setSelectedAnomaly(null);
         }
@@ -424,37 +409,17 @@ export default function AnomalyList() {
           deletedIdsRef.current.add(item.anomalyId);
         }
 
-        try {
-          localStorage.setItem('subai_deleted_anomaly_ids', JSON.stringify(Array.from(deletedIdsRef.current)));
-        } catch (_) {}
-
         const docIdsArray = Array.from(allTargetDocIds);
         await Promise.all(docIdsArray.map(async docId => {
-          deleteDoc(doc(db, 'ai_analysis', docId)).catch(() => {});
-          deleteDoc(doc(db, 'ActivityLogs', docId)).catch(() => {});
-          deleteDoc(doc(db, 'notifications', `anomaly_${docId}`)).catch(() => {});
-          deleteDoc(doc(db, 'notifications', docId)).catch(() => {});
-          deleteDoc(doc(db, 'security_events', docId)).catch(() => {});
-          deleteDoc(doc(db, 'fraud_reports', docId)).catch(() => {});
-
-          ['ai_analysis', 'ActivityLogs', 'notifications', 'security_events', 'fraud_reports'].forEach(k => {
-            try {
-              const store = JSON.parse(localStorage.getItem('subai_store_' + k) || '[]');
-              const filtered = store.filter(x => x && x.id !== docId && x.anomalyId !== docId);
-              localStorage.setItem('subai_store_' + k, JSON.stringify(filtered));
-            } catch (_) {}
-          });
+          await deleteDoc(doc(db, 'ai_analysis', docId)).catch(() => {});
+          await deleteDoc(doc(db, 'ActivityLogs', docId)).catch(() => {});
+          await deleteDoc(doc(db, 'notifications', `anomaly_${docId}`)).catch(() => {});
+          await deleteDoc(doc(db, 'notifications', docId)).catch(() => {});
+          await deleteDoc(doc(db, 'security_events', docId)).catch(() => {});
+          await deleteDoc(doc(db, 'fraud_reports', docId)).catch(() => {});
         }));
 
-        fetch('/api/sync', {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ action: 'delete', ids: docIdsArray })
-        }).catch(() => {});
-
-        window.dispatchEvent(new CustomEvent('subai_notifications_updated'));
-
-        setAnomalies(prev => prev.filter(a => !allTargetDocIds.has(a.id)));
+        setRawAnomalies(prev => prev.filter(a => !allTargetDocIds.has(a.id)));
         if (selectedAnomaly && allTargetDocIds.has(selectedAnomaly.id)) {
           setSelectedAnomaly(null);
         }

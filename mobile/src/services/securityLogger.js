@@ -36,7 +36,9 @@ export function getAnomalyHumanType(eventType) {
     FAKE_GPS_DETECTED: 'Mock GPS Fake Location',
     VPN_DETECTED: 'VPN Proxy Tunnel',
     DEVICE_INTEGRITY_VIOLATION: 'Device Integrity Breach',
-    GPS_DISABLED: 'GPS Telemetry Disabled',
+    GPS_DISABLED: 'Location Tracking Disabled',
+    LOCATION_TRACKING_DISABLED: 'Location Tracking Disabled',
+    TRAVEL_TIME_EXCEEDED: 'Travel Time Exceeded',
     LOCATION_UPDATE_INTERRUPTED: 'Telemetry Interrupted',
     UNUSUAL_GPS_ACCURACY: 'GPS Accuracy Degradation',
     MULTIPLE_SECURITY_SIGNALS: 'Multiple Anomaly Signals',
@@ -56,7 +58,9 @@ export function getAnomalyConfidence(eventType) {
     GPS_JUMP: '93%',
     VPN_DETECTED: '92%',
     LOCATION_FROZEN: '91%',
-    GPS_DISABLED: '90%',
+    GPS_DISABLED: '95%',
+    LOCATION_TRACKING_DISABLED: '100%',
+    TRAVEL_TIME_EXCEEDED: '95%',
   };
   return map[eventType] || '90%';
 }
@@ -106,17 +110,20 @@ export async function writeSecurityEvent(params) {
   // 1. Shift Schedule Enforcement: Only alert anomaly if the employee has an active scheduled shift
   // (Prevents unnecessary data storage & false alerts when employee has no scheduled shift)
   let hasSchedule = hasActiveShiftSchedule(assignment, employee);
-  if (!hasSchedule && employee?.id && employee.id !== 'emp_fallback') {
+  let resolvedCompanyId = employee?.companyId || assignment?.companyId || null;
+  if ((!hasSchedule || !resolvedCompanyId) && employee?.id) {
     try {
       const snap = await getDoc(doc(db, 'employees', employee.id)).catch(() => null);
       if (snap && snap.exists()) {
         const d = snap.data();
-        hasSchedule = hasActiveShiftSchedule(assignment, { ...employee, ...d });
+        if (!resolvedCompanyId && d.companyId) resolvedCompanyId = d.companyId;
+        if (!hasSchedule) hasSchedule = hasActiveShiftSchedule(assignment, { ...employee, ...d });
       }
     } catch (_) {}
   }
+  const companyId = resolvedCompanyId || 'company_default';
 
-  if (!hasSchedule) {
+  if (!hasSchedule && eventType !== 'OVERTIME_SHIFT_EXCEEDED' && eventType !== 'EARLY_CHECKOUT') {
     console.log(`[securityLogger] Suppressed ${eventType} anomaly: Employee ${employee.name || employee.id || ''} has no active shift schedule today.`);
     return null;
   }
@@ -143,25 +150,40 @@ export async function writeSecurityEvent(params) {
     console.warn('[securityLogger] ensureAuthenticatedSession warning:', authErr?.message);
   }
 
-  const now = new Date().toISOString();
+  const nowDate = new Date();
+  const now = nowDate.toISOString();
+  const dateStr = now.split('T')[0];
+  const timeStr = nowDate.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit', hour12: true });
   const rawSeverity = getSeverityForEventType(eventType);
   const severity = rawSeverity === 'Critical' ? 'High' : (rawSeverity || 'Medium');
   const description = customDescription || describeEvent(eventType, extra);
   const humanType = getAnomalyHumanType(eventType);
   const confidence = getAnomalyConfidence(eventType);
-  const locationStr = assignment.siteName || assignment.name || (coords.latitude ? `${coords.latitude.toFixed(4)}, ${coords.longitude.toFixed(4)}` : 'Field Site');
+  const locationStr = assignment.siteName || assignment.name || (coords.latitude ? `${coords.latitude.toFixed(4)}, ${coords.longitude.toFixed(4)}` : 'Unavailable');
+
+  // Factual operational events (e.g. Location Tracking Disabled, Travel Time Exceeded)
+  // are NOT fraud accusations and must NOT be written to fraud_reports.
+  const isOperationalNonFraud = (
+    eventType === 'LOCATION_TRACKING_DISABLED' ||
+    eventType === 'GPS_DISABLED' ||
+    eventType === 'TRAVEL_TIME_EXCEEDED' ||
+    eventType === 'OVERTIME_SHIFT_EXCEEDED' ||
+    eventType === 'EARLY_CHECKOUT'
+  );
 
   const anomalyDoc = {
+    companyId,
     employeeId: employee.id || null,
-    employeeName: employee.name || 'Field Employee',
+    employeeName: employee.name || 'Employee',
     employeeEmail: employee.email || null,
-    employeeType: employee.employeeType || employee.type || 'Field Employee',
+    employeeType: employee.workType || employee.employeeType || employee.type || 'Employee',
 
     type: humanType,
     eventType: eventType,
     severity: severity,
     confidence: confidence,
     status: 'Active',
+    isFraudAccusation: !isOperationalNonFraud,
     description: description,
     location: locationStr,
 
@@ -174,6 +196,17 @@ export async function writeSecurityEvent(params) {
     latitude: coords.latitude ?? null,
     longitude: coords.longitude ?? null,
     locationAccuracy: coords.accuracy ?? null,
+
+    ...(extra && typeof extra === 'object' ? {
+      reason: extra.reason || null,
+      lastKnownLocation: extra.lastKnownLocation || null,
+      origin: extra.origin || null,
+      destination: extra.destination || null,
+      expectedArrival: extra.expectedArrival || null,
+      actualCurrentTime: extra.actualCurrentTime || null,
+      elapsedMinutes: extra.elapsedMinutes ?? null,
+      allowedWindowMinutes: extra.allowedWindowMinutes ?? null,
+    } : {}),
 
     previousLatitude: prevCoords?.latitude ?? null,
     previousLongitude: prevCoords?.longitude ?? null,
@@ -203,13 +236,16 @@ export async function writeSecurityEvent(params) {
   // 1. PRIMARY: Write directly to ai_analysis (Direct connection to Admin AI Anomaly Center)
   const anomalyId = await safeAdd(C.AI_ANALYSIS || 'ai_analysis', anomalyDoc);
 
-  // 2. AUDIT: Write to ActivityLogs (Whitelisted and displayed in Admin Activity Logs)
+  // 2. AUDIT: Write to ActivityLogs (Displayed in Admin Activity Logs)
   await safeAdd('ActivityLogs', {
-    type: 'Security Anomaly',
-    title: `AI Anomaly: ${humanType}`,
-    description: `${humanType} flagged for ${employee.name || 'Field Employee'}. ${description}`,
+    companyId,
+    type: isOperationalNonFraud ? 'Location Monitoring' : 'Security Anomaly',
+    action: humanType,
+    title: isOperationalNonFraud ? humanType : `AI Anomaly: ${humanType}`,
+    description: `${humanType} recorded for ${employee.name || 'Employee'}. ${description}`,
     employeeId: employee.id || null,
-    employeeName: employee.name || 'Field Employee',
+    employee_id: employee.id || null,
+    employeeName: employee.name || 'Employee',
     employeeEmail: employee.email || null,
     severity: severity,
     anomalyId: anomalyId || null,
@@ -217,47 +253,60 @@ export async function writeSecurityEvent(params) {
     longitude: coords.longitude ?? null,
     location: locationStr,
     source: 'mobile_apk',
+    status: severity === 'High' ? 'Warning' : 'Info',
     timestamp: serverTimestamp(),
     createdAt: serverTimestamp(),
   });
 
-  // 3. LEGACY & CROSS-REFERENCE: Write to fraud_reports
-  await safeAdd(C.FRAUD_REPORTS, {
-    employeeId: employee.id || null,
-    employeeName: employee.name || 'Field Employee',
-    employeeEmail: employee.email || null,
-    violationType: humanType,
-    eventType: eventType,
-    severity: severity,
-    status: 'pending_review',
-    description: description,
-    latitude: coords.latitude ?? null,
-    longitude: coords.longitude ?? null,
-    deviceId: deviceInfo.deviceId || null,
-    deviceModel: deviceInfo.model || null,
-    ipAddress: deviceInfo.ipAddress || null,
-    assignmentId: assignment.id || null,
-    siteId: assignment.siteId || null,
-    relatedAnomalyId: anomalyId,
-    resolved: false,
-    timestamp: serverTimestamp(),
-    createdAt: serverTimestamp(),
-  });
+  // 3. Fraud Reports ONLY for genuine anti-spoofing / security violations (NEVER for GPS disabled or operational events)
+  if (!isOperationalNonFraud) {
+    await safeAdd(C.FRAUD_REPORTS, {
+      companyId,
+      employeeId: employee.id || null,
+      employeeName: employee.name || 'Employee',
+      employeeEmail: employee.email || null,
+      violationType: humanType,
+      eventType: eventType,
+      severity: severity,
+      status: 'pending_review',
+      description: description,
+      latitude: coords.latitude ?? null,
+      longitude: coords.longitude ?? null,
+      deviceId: deviceInfo.deviceId || null,
+      deviceModel: deviceInfo.model || null,
+      ipAddress: deviceInfo.ipAddress || null,
+      assignmentId: assignment.id || null,
+      siteId: assignment.siteId || null,
+      relatedAnomalyId: anomalyId,
+      resolved: false,
+      timestamp: serverTimestamp(),
+      createdAt: serverTimestamp(),
+    });
 
-  // 4. Non-blocking best-effort attempts to security_events and notifications
-  try {
-    await safeAdd(C.SECURITY_EVENTS, { ...anomalyDoc, relatedAnomalyId: anomalyId });
-  } catch (_) {}
+    try {
+      await safeAdd(C.SECURITY_EVENTS, { ...anomalyDoc, relatedAnomalyId: anomalyId });
+    } catch (_) {}
+  }
 
+  // 4. Persistent Admin Notification (with full metadata + companyId)
   try {
-    await writeAdminNotification({ eventType, eventId: anomalyId, employee, severity, description });
+    await writeAdminNotification({
+      eventType,
+      eventId: anomalyId,
+      employee,
+      companyId,
+      severity,
+      description,
+      dateStr,
+      timeStr,
+    });
   } catch (_) {}
 
   return anomalyId;
 }
 
 // ── Admin notification ─────────────────────────────────────────────────────
-async function writeAdminNotification({ eventType, eventId, employee, severity, description }) {
+async function writeAdminNotification({ eventType, eventId, employee, companyId, severity, description, dateStr, timeStr }) {
   const typeLabels = {
     FAKE_GPS_DETECTED: 'Fake GPS Detected',
     VPN_DETECTED: 'VPN Usage Detected',
@@ -265,38 +314,58 @@ async function writeAdminNotification({ eventType, eventId, employee, severity, 
     GPS_SPEED_ANOMALY: 'GPS Speed Anomaly',
     GPS_JUMP: 'Suspicious Location Jump',
     LOCATION_FROZEN: 'Location Frozen',
-    GPS_DISABLED: 'GPS Disabled During Shift',
+    GPS_DISABLED: 'Location Tracking Disabled',
+    LOCATION_TRACKING_DISABLED: 'Location Tracking Disabled',
+    TRAVEL_TIME_EXCEEDED: 'Travel Time Exceeded',
     UNAUTHORIZED_LOCATION: 'Unauthorized Location',
+    OVERTIME_SHIFT_EXCEEDED: 'Late Checkout / Shift Exceeded',
+    EARLY_CHECKOUT: 'Early Checkout Detected',
     REPEATED_FACIAL_VERIFICATION_FAILURE: 'Repeated Facial Verification Failure',
     MULTIPLE_SECURITY_SIGNALS: 'Multiple Security Signals Detected',
     SUSPICIOUS_MOVEMENT: 'Suspicious Movement',
   };
   const label = typeLabels[eventType] || eventType.replace(/_/g, ' ');
+  const nowDate = new Date();
 
   return safeAdd(C.NOTIFICATIONS, {
+    companyId: companyId || employee?.companyId || 'company_default',
     type: 'admin_security_alert',
+    notificationType: eventType,
     targetRole: 'admin',
     title: label,
-    message: `${label} for ${employee.name || 'an employee'}. ${description}`,
+    message: `${label} — ${employee.name || 'Employee'}: ${description}`,
     employeeId: employee.id || null,
     employeeName: employee.name || null,
-    severity,
-    relatedSecurityEventId: eventId,
+    severity: severity || 'Medium',
+    relatedRecordId: eventId || null,
+    relatedSecurityEventId: eventId || null,
+    anomalyId: eventId || null,
     eventType,
+    date: dateStr || nowDate.toISOString().split('T')[0],
+    time: timeStr || nowDate.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit', hour12: true }),
+    status: 'Unread',
     read: false,
     createdAt: serverTimestamp(),
   });
 }
 
 // ── Employee notification ──────────────────────────────────────────────────
-export function writeEmployeeNotification({ employee, title, message }) {
+export function writeEmployeeNotification({ employee, companyId, title, message, relatedRecordId = null, severity = 'Info' }) {
+  const nowDate = new Date();
   return safeAdd(C.NOTIFICATIONS, {
+    companyId: companyId || employee?.companyId || 'company_default',
     type: 'employee',
+    notificationType: 'employee_alert',
     targetRole: 'employee',
     employeeId: employee?.id || null,
     employeeName: employee?.name || null,
     title,
     message,
+    severity,
+    relatedRecordId,
+    date: nowDate.toISOString().split('T')[0],
+    time: nowDate.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit', hour12: true }),
+    status: 'Unread',
     read: false,
     createdAt: serverTimestamp(),
   });

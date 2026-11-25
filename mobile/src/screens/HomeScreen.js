@@ -40,7 +40,7 @@ import { runPreAttendanceChecks } from '../services/securityService';
 import { writeSecurityEvent } from '../services/securityLogger';
 import { getDeviceId } from '../services/deviceInfo';
 import { getPendingSyncCount, syncOfflineRecords, clearOfflineQueue } from '../services/offlineSyncService';
-import { isAssignmentDatePassed, isAssignmentActiveToday, resolveShift, getShiftScheduleDetails, isAssignmentForEmployee, deduplicateAssignments, isMobileFieldWithoutSite, checkEarlyCheckout, checkLateCheckout, checkLateCheckIn, isScheduledShiftEnded, isAttendanceRecordFlagged, calculateMonthlyAttendanceMetrics, hasActiveShiftSchedule, hasActiveSiteAssignment } from '../utils/assignmentUtils';
+import { isAssignmentDatePassed, isAssignmentActiveToday, resolveShift, getShiftScheduleDetails, getShiftEndInfo, isAssignmentForEmployee, deduplicateAssignments, isMobileFieldWithoutSite, checkEarlyCheckout, checkLateCheckout, checkLateCheckIn, isScheduledShiftEnded, isAttendanceRecordFlagged, calculateMonthlyAttendanceMetrics, hasActiveShiftSchedule, hasActiveSiteAssignment } from '../utils/assignmentUtils';
 import {
   startSession as schedulerStart,
   stopSession as schedulerStop,
@@ -48,9 +48,11 @@ import {
   restoreSession,
   updateLastKnownLocation,
   isSchedulerActive,
+  isEmployeeDriving,
 } from '../services/verificationScheduler';
 import presenceService from '../services/presenceService';
-import locationLogService from '../services/locationLogService';
+import locationLogService, { LOCATION_UNAVAILABLE_MESSAGE } from '../services/locationLogService';
+import travelMonitorService from '../services/travelMonitorService';
 import { fetchCurrentWeather } from '../services/weatherService';
 
 
@@ -103,38 +105,17 @@ function resolveSiteDetails(siteObj, targetSiteName, selectedAsg, emp = null) {
   if (lat !== null && lat !== undefined) lat = Number(lat);
   if (lng !== null && lng !== undefined) lng = Number(lng);
 
-  const nameStr = (targetSiteName || siteObj?.name || selectedAsg?.siteName || selectedAsg?.site || 'Office').trim();
-
-  const knownLocations = {
-    'office': { lat: 10.3273, lng: 123.9064, address: 'Cebu IT Park, Lahug, Cebu City, 6000 Cebu, Philippines' },
-    'cebu office': { lat: 10.3273, lng: 123.9064, address: 'Cebu IT Park, Lahug, Cebu City, 6000 Cebu, Philippines' },
-    'head office': { lat: 10.3273, lng: 123.9064, address: 'Cebu IT Park, Lahug, Cebu City, 6000 Cebu, Philippines' },
-    'main office': { lat: 10.3273, lng: 123.9064, address: 'Cebu IT Park, Lahug, Cebu City, 6000 Cebu, Philippines' },
-    'sm seaside': { lat: 10.2818, lng: 123.8808, address: 'South Road Properties, Cebu City, 6000 Cebu, Philippines' },
-    'sm seaside city cebu': { lat: 10.2818, lng: 123.8808, address: 'South Road Properties, Cebu City, 6000 Cebu, Philippines' },
-    'ayala center cebu': { lat: 10.3173, lng: 123.9058, address: 'Cebu Business Park, Cebu City, 6000 Cebu, Philippines' },
-    'cebu business park': { lat: 10.3173, lng: 123.9058, address: 'Cebu Business Park, Cebu City, 6000 Cebu, Philippines' },
-  };
-
-  const nameLower = nameStr.toLowerCase();
-  const matchedKnown = knownLocations[nameLower] || null;
-
+  const nameStr = (targetSiteName || siteObj?.name || selectedAsg?.siteName || selectedAsg?.site || 'Assigned Worksite').trim();
   const isInvalid = lat === null || lng === null || isNaN(lat) || isNaN(lng) || (lat === 0 && lng === 0);
-
   if (isInvalid) {
-    if (matchedKnown) {
-      lat = matchedKnown.lat;
-      lng = matchedKnown.lng;
-    } else {
-      lat = null;
-      lng = null;
-    }
+    lat = null;
+    lng = null;
   }
 
   const rawAddress = siteObj?.address || siteObj?.location || selectedAsg?.siteAddress || selectedAsg?.address || emp?.siteAddress;
-  const address = (rawAddress && rawAddress !== 'GPS Live Monitoring Active' && rawAddress !== 'Cebu City, Central Visayas, 6000, Philippines')
+  const address = (rawAddress && rawAddress !== 'GPS Live Monitoring Active')
     ? rawAddress
-    : (matchedKnown ? matchedKnown.address : 'Registered Worksite Address');
+    : 'Registered Worksite Address';
 
   const parseRad = (v) => {
     if (v === null || v === undefined) return 0;
@@ -142,14 +123,14 @@ function resolveSiteDetails(siteObj, targetSiteName, selectedAsg, emp = null) {
     return Number.isFinite(n) && n > 0 ? n : 0;
   };
   const resolvedRadius = Math.max(
-    parseRad(siteObj?.radius),
     parseRad(selectedAsg?.geofenceRadius || selectedAsg?.radius),
+    parseRad(siteObj?.radius),
     parseRad(emp?.geofenceRadius)
   ) || 100;
 
   return {
     ...siteObj,
-    id: siteObj?.id || selectedAsg?.siteId || 'site-resolved',
+    id: siteObj?.id || selectedAsg?.siteId || null,
     name: nameStr,
     address,
     lat,
@@ -175,7 +156,12 @@ export default function HomeScreen({ navigation, route, user: propUser }) {
 
   // Modals State
   const [showFacialModal, setShowFacialModal] = useState(false);
+  const [facialModalMode, setFacialModalMode] = useState('verify'); // 'verify' | 'register'
   const [facialTriggerType, setFacialTriggerType] = useState('manual');
+  const [pendingVerificationReq, setPendingVerificationReq] = useState(null);
+  const [deferredWhileDriving, setDeferredWhileDriving] = useState(false);
+  const [monitoringStatus, setMonitoringStatus] = useState(() => locationLogService.getMonitoringStatus());
+  const [travelStatus, setTravelStatus] = useState(() => travelMonitorService.getSnapshot());
   const [showDelayModal, setShowDelayModal] = useState(false);
   const [securityModal, setSecurityModal] = useState({ visible: false, failedCheck: 'vpn', reason: '' });
   const [activeAnomaly, setActiveAnomaly] = useState(null);
@@ -185,6 +171,7 @@ export default function HomeScreen({ navigation, route, user: propUser }) {
   const [unresolvedAnomalyCount, setUnresolvedAnomalyCount] = useState(0);
   const [weather, setWeather] = useState(null);
   const currentAttendanceIdRef = useRef(null);
+  const handledVerificationReqIdsRef = useRef(new Set());
 
   const hasSetOnline = useRef(false);
   const employeeRef = useRef(null);          // stable ref so assignment effect doesn't re-subscribe
@@ -228,15 +215,108 @@ export default function HomeScreen({ navigation, route, user: propUser }) {
     return () => clearInterval(interval);
   }, []);
 
-  // ── Restore scheduler on mount (handles app re-open during active session) ──
+  // ── Subscribe to Location Monitoring Status (Req 10 & 11) and Travel Monitor (Req 14) ──
   useEffect(() => {
-    restoreSession(({ triggerType }) => {
-      setFacialTriggerType(triggerType || 'scheduled_random');
-      setShowFacialModal(true);
+    const unsubMon = locationLogService.subscribeStatus((st) => {
+      setMonitoringStatus(st);
     });
-    onPromptReady(({ triggerType }) => {
-      setFacialTriggerType(triggerType || 'scheduled_random');
-      setShowFacialModal(true);
+    const unsubTravel = travelMonitorService.subscribe((ts) => {
+      setTravelStatus(ts);
+    });
+    return () => {
+      unsubMon();
+      unsubTravel();
+    };
+  }, []);
+
+  // ── Real-Time Admin Facial Verification Request Listener (Req 7, 8 & 9) ──
+  useEffect(() => {
+    if (!employee?.id && !currentEmail) return;
+    const empCompanyId = employee?.companyId || 'company_default';
+
+    const unsubReq = onSnapshot(collection(db, 'facial_verifications'), (snap) => {
+      const nowMs = Date.now();
+      const pendingList = [];
+
+      snap.docs.forEach((docSnap) => {
+        const d = { id: docSnap.id, ...docSnap.data() };
+        if ((d.companyId || 'company_default') !== empCompanyId) return;
+
+        const st = String(d.status || d.verificationStatus || '').trim().toLowerCase();
+        if (st !== 'pending') return;
+
+        // Match target employee by ID or email
+        const idMatch = employee?.id && String(d.employeeId || '') === String(employee.id);
+        const emailMatch = currentEmail && String(d.employeeEmail || '').trim().toLowerCase() === currentEmail;
+        if (!idMatch && !emailMatch) return;
+
+        // Auto-expire overdue requests
+        if (d.expiresAt) {
+          const expMs = new Date(d.expiresAt).getTime();
+          if (Number.isFinite(expMs) && nowMs > expMs) {
+            updateDoc(doc(db, 'facial_verifications', d.id), {
+              status: 'Expired',
+              verificationStatus: 'Expired',
+              verificationResult: 'Expired',
+              expiredAt: new Date().toISOString(),
+            }).catch(() => {});
+            return;
+          }
+        }
+
+        pendingList.push(d);
+      });
+
+      if (pendingList.length === 0) {
+        setPendingVerificationReq(null);
+        setDeferredWhileDriving(false);
+        return;
+      }
+
+      pendingList.sort((a, b) => {
+        const ta = new Date(a.requestedAt || a.submittedAt || 0).getTime() || 0;
+        const tb = new Date(b.requestedAt || b.submittedAt || 0).getTime() || 0;
+        return tb - ta;
+      });
+      const latestReq = pendingList[0];
+      setPendingVerificationReq(latestReq);
+
+      // Driving safety check (Requirement 9): never pop up a blocking verification modal while driving
+      const speedMs = locationLogService.getCurrentSpeedMs();
+      if (isEmployeeDriving(speedMs)) {
+        setDeferredWhileDriving(true);
+        return;
+      }
+
+      setDeferredWhileDriving(false);
+      if (!handledVerificationReqIdsRef.current.has(latestReq.id)) {
+        handledVerificationReqIdsRef.current.add(latestReq.id);
+        setFacialModalMode('verify');
+        setFacialTriggerType('admin_request');
+        setShowFacialModal(true);
+      }
+    }, (err) => console.warn('[HomeScreen] facial_verifications listener warn:', err?.message));
+
+    return () => unsubReq();
+  }, [employee?.id, employee?.companyId, currentEmail]);
+
+  // ── Restore scheduler metadata on mount (no automatic 30-min popup timer) ──
+  useEffect(() => {
+    restoreSession(({ triggerType, verificationRequest }) => {
+      if (!isEmployeeDriving(locationLogService.getCurrentSpeedMs())) {
+        setFacialModalMode('verify');
+        setFacialTriggerType(triggerType || 'admin_request');
+        if (verificationRequest) setPendingVerificationReq(verificationRequest);
+        setShowFacialModal(true);
+      }
+    });
+    onPromptReady(({ triggerType, verificationRequest }) => {
+      if (!isEmployeeDriving(locationLogService.getCurrentSpeedMs())) {
+        setFacialModalMode('verify');
+        setFacialTriggerType(triggerType || 'admin_request');
+        if (verificationRequest) setPendingVerificationReq(verificationRequest);
+        setShowFacialModal(true);
+      }
     });
   }, []);
 
@@ -476,18 +556,22 @@ export default function HomeScreen({ navigation, route, user: propUser }) {
 
       if (!empData) {
         empData = {
-          id: auth.currentUser?.uid || 'emp_fallback',
+          id: auth.currentUser?.uid || null,
           name: propUser?.name || route?.params?.user?.name || formattedEmailName || 'Employee',
-          email: currentEmail || 'employee@subai.com',
+          email: currentEmail || '',
+          companyId: propUser?.companyId || 'company_default',
           status: 'Online'
         };
       }
 
       const empKey = JSON.stringify({
         id: empData.id,
+        companyId: empData.companyId || 'company_default',
         name: empData.name,
         email: empData.email,
         status: empData.status,
+        workType: empData.workType,
+        employeeType: empData.employeeType,
         assignedSite: empData.assignedSite,
         assignedSites: empData.assignedSites,
         geofenceRadius: empData.geofenceRadius,
@@ -497,6 +581,8 @@ export default function HomeScreen({ navigation, route, user: propUser }) {
         shiftEnd: empData.shiftEnd,
         workDays: empData.workDays,
         scheduleDays: empData.scheduleDays,
+        faceRegistered: Boolean(empData.faceRegistered),
+        faceRegisteredAt: empData.faceRegisteredAt || null,
       });
       if (empKey !== lastEmpKeyRef.current) {
         lastEmpKeyRef.current = empKey;
@@ -594,9 +680,23 @@ export default function HomeScreen({ navigation, route, user: propUser }) {
       return 0;
     };
 
-    const cleanDocs = asgDocs.filter(a => a && a.id !== 'asg1' && !isAssignmentDatePassed(a) && isAssignmentActiveToday(a));
+    const empCompanyId = emp?.companyId || 'company_default';
+    const companySites = (sitesRef.current || []).filter(s => (s.companyId || 'company_default') === empCompanyId);
+
+    const cleanDocs = asgDocs.filter(a =>
+      a &&
+      a.id !== 'asg1' &&
+      (a.companyId || 'company_default') === empCompanyId &&
+      !isAssignmentDatePassed(a) &&
+      isAssignmentActiveToday(a)
+    );
     const empAsg = cleanDocs.length > 0 ? cleanDocs.filter(a => isAssignmentForEmployee(a, emp, emailToUse, currentUserName)) : [];
     empAsg.sort((a, b) => getTs(b) - getTs(a));
+
+    // Persist latest Firestore assignments to AsyncStorage as offline read cache only
+    if (emp?.id && empAsg.length > 0) {
+      AsyncStorage.setItem(`@subai_offline_assignments_${emp.id}`, JSON.stringify(empAsg)).catch(() => {});
+    }
 
     const gatheredSites = [];
     const seenSiteNames = new Set();
@@ -611,8 +711,8 @@ export default function HomeScreen({ navigation, route, user: propUser }) {
       seenSiteNames.add(key);
 
       let matchedSiteDoc = null;
-      if (sitesRef.current && sitesRef.current.length > 0) {
-        matchedSiteDoc = sitesRef.current.find(s => {
+      if (companySites.length > 0) {
+        matchedSiteDoc = companySites.find(s => {
           const sName = (s.name || s.id || '').trim().toLowerCase();
           return sName === key || sName.includes(key) || key.includes(sName);
         });
@@ -627,14 +727,21 @@ export default function HomeScreen({ navigation, route, user: propUser }) {
 
       const cardAsg = {
         ...(asgDoc || {}),
+        originalId: asgDoc?.id || null,
         id: asgDoc?.id ? `${asgDoc.id}_${key.replace(/\s+/g, '_')}` : `site_asg_${key.replace(/\s+/g, '_')}`,
+        companyId: asgDoc?.companyId || empCompanyId,
+        assignmentVersion: asgDoc?.assignmentVersion || asgDoc?.updatedAt || null,
         site: cleanName,
         siteName: cleanName,
         siteAddress: resolvedSite?.address || asgDoc?.siteAddress || asgDoc?.address || '',
         address: resolvedSite?.address || asgDoc?.siteAddress || asgDoc?.address || '',
         latitude: resolvedSite?.latitude,
         longitude: resolvedSite?.longitude,
-        geofenceRadius: resolvedSite?.radius || 100,
+        geofenceRadius: Number(asgDoc?.geofenceRadius) || resolvedSite?.radius || 100,
+        locationSyncInterval: Number(asgDoc?.locationSyncInterval) || 30,
+        estimatedTravelTimeMinutes: Number(asgDoc?.estimatedTravelTimeMinutes) || 30,
+        travelGracePeriodMinutes: Number(asgDoc?.travelGracePeriodMinutes) || 10,
+        destinationSchedule: Array.isArray(asgDoc?.destinationSchedule) ? asgDoc.destinationSchedule : [],
         shift: composedShift,
         shiftSchedule: schedDetails.shiftSchedule,
         workingHours: schedDetails.workingHours,
@@ -653,7 +760,7 @@ export default function HomeScreen({ navigation, route, user: propUser }) {
         id: cardAsg.id,
         siteName: cleanName,
         address: resolvedSite?.address || 'Registered Worksite Address',
-        radius: resolvedSite?.radius || 100,
+        radius: cardAsg.geofenceRadius,
         latitude: resolvedSite?.latitude,
         longitude: resolvedSite?.longitude,
         shift: composedShift,
@@ -667,6 +774,8 @@ export default function HomeScreen({ navigation, route, user: propUser }) {
         date: asgDate,
         priority: priority,
         status: status,
+        estimatedTravelTimeMinutes: cardAsg.estimatedTravelTimeMinutes,
+        travelGracePeriodMinutes: cardAsg.travelGracePeriodMinutes,
         assignment: cardAsg,
         site: resolvedSite,
       });
@@ -680,8 +789,21 @@ export default function HomeScreen({ navigation, route, user: propUser }) {
       )
     );
 
-    // For Fixed Site Employees, their assigned site comes directly from their employee profile
-    if (isFixedEmp && emp) {
+    // 1. Authoritative Priority (Req 15): Process live Firestore Assignment docs FIRST
+    //    for BOTH Mobile Field and Fixed Site employees so Admin edits immediately sync!
+    if (empAsg.length > 0) {
+      const latestAsg = empAsg[0];
+      if (Array.isArray(latestAsg.assignedSites) && latestAsg.assignedSites.length > 0) {
+        latestAsg.assignedSites.forEach(s => addSiteItem(s, latestAsg));
+      } else if (latestAsg.site && latestAsg.site.includes(',')) {
+        latestAsg.site.split(',').forEach(s => addSiteItem(s, latestAsg));
+      } else if (latestAsg.site || latestAsg.siteName) {
+        addSiteItem(latestAsg.site || latestAsg.siteName, latestAsg);
+      }
+    }
+
+    // 2. Fallback for Fixed Site Employees without an explicit Assignment doc today: use profile site
+    if (gatheredSites.length === 0 && isFixedEmp && emp) {
       if (Array.isArray(emp.assignedSites) && emp.assignedSites.length > 0) {
         emp.assignedSites.forEach(s => addSiteItem(s, null, true));
       } else if (emp.assignedSite && emp.assignedSite.includes(',')) {
@@ -694,51 +816,11 @@ export default function HomeScreen({ navigation, route, user: propUser }) {
       }
     }
 
-    // 1. Process matching assignment docs from database (Field Employees, or fallback if Fixed Employee had none)
-    if (gatheredSites.length === 0 && empAsg.length > 0) {
-      for (const asg of empAsg) {
-        if (Array.isArray(asg.assignedSites) && asg.assignedSites.length > 0) {
-          asg.assignedSites.forEach(s => addSiteItem(s, asg));
-        } else if (asg.site && asg.site.includes(',')) {
-          asg.site.split(',').forEach(s => addSiteItem(s, asg));
-        } else if (asg.site || asg.siteName) {
-          addSiteItem(asg.site || asg.siteName, asg);
-        }
-      }
-    }
-
-    // 2. Loose fallback if empAsg was empty
-    if (gatheredSites.length === 0 && !isFixedEmp && cleanDocs.length > 0) {
-      const looseMatch = cleanDocs.find(a => {
-        const asgSite = (a.site || a.siteName || '').trim().toLowerCase();
-        const empSite = (emp?.assignedSite || emp?.site || '').trim().toLowerCase();
-        if (asgSite && empSite && (asgSite === empSite || asgSite.includes(empSite) || empSite.includes(asgSite))) return true;
-
-        const aName = (a.employeeName || a.empName || a.assignedTo || '').toLowerCase();
-        const eName = (emp?.name || currentUserName || '').toLowerCase();
-        if (aName && eName && (aName.includes(eName) || eName.includes(aName))) return true;
-
-        const aEmail = (a.employeeEmail || a.empEmail || a.email || '').toLowerCase();
-        if (aEmail && emailToUse && (aEmail === emailToUse || aEmail.startsWith(emailToUse.split('@')[0]))) return true;
-
-        return false;
-      });
-
-      if (looseMatch) {
-        if (Array.isArray(looseMatch.assignedSites) && looseMatch.assignedSites.length > 0) {
-          looseMatch.assignedSites.forEach(s => addSiteItem(s, looseMatch));
-        } else if (looseMatch.site && looseMatch.site.includes(',')) {
-          looseMatch.site.split(',').forEach(s => addSiteItem(s, looseMatch));
-        } else if (looseMatch.site || looseMatch.siteName) {
-          addSiteItem(looseMatch.site || looseMatch.siteName, looseMatch);
-        }
-      }
-    }
-
-    // 3. Fallback: ONLY if employee has NO explicit assignment records in the database,
-    // check employee profile assignedSites or assignedSite.
-    // Must check all asgDocs (including completed/missed) so expired or missed shifts do not resurrect profile sites!
-    const hasEmployeeAssignmentsInDb = asgDocs.some(a => isAssignmentForEmployee(a, emp, emailToUse, currentUserName));
+    // 3. Fallback: ONLY if employee has NO explicit assignment records in Firestore at all, check profile site
+    const hasEmployeeAssignmentsInDb = asgDocs.some(a =>
+      (a.companyId || 'company_default') === empCompanyId &&
+      isAssignmentForEmployee(a, emp, emailToUse, currentUserName)
+    );
 
     if (gatheredSites.length === 0 && emp && !hasEmployeeAssignmentsInDb) {
       if (Array.isArray(emp.assignedSites) && emp.assignedSites.length > 0) {
@@ -763,7 +845,7 @@ export default function HomeScreen({ navigation, route, user: propUser }) {
     setSite(primary ? primary.site : null);
 
     if (locationLogService.isPeriodicLoggingActive() && primary?.site) {
-      locationLogService.updateActiveSite(primary.site, primary.assignment);
+      locationLogService.updateActiveSite(primary.site, primary.assignment, gatheredSites);
     }
 
     const hasSched = hasActiveShiftSchedule(primary?.assignment, emp);
@@ -791,16 +873,61 @@ export default function HomeScreen({ navigation, route, user: propUser }) {
       const today = new Date();
       today.setHours(0, 0, 0, 0);
 
-      const todayRecord = all.find(data => {
-        const rawDate = data.date || data.timeIn || data.timestamp || data.createdAt;
-        if (!rawDate) return false;
-        const recDate = parseDate(rawDate);
-        if (!recDate) return false;
-        recDate.setHours(0, 0, 0, 0);
-        return recDate.getTime() === today.getTime();
-      });
+      const todaysRecords = all
+        .filter(data => {
+          const rawDate = data.date || data.timeIn || data.timestamp || data.createdAt;
+          if (!rawDate) return false;
+          const recDate = parseDate(rawDate);
+          if (!recDate) return false;
+          recDate.setHours(0, 0, 0, 0);
+          return recDate.getTime() === today.getTime();
+        })
+        .sort((a, b) => {
+          const ta = parseDate(a.timeIn || a.createdAt || a.timestamp)?.getTime() || 0;
+          const tb = parseDate(b.timeIn || b.createdAt || b.timestamp)?.getTime() || 0;
+          return tb - ta;
+        });
 
-      const attKey = JSON.stringify({ count: all.length, todayId: todayRecord?.id, timeIn: todayRecord?.timeIn, timeOut: todayRecord?.timeOut, status: todayRecord?.status });
+      let todayRecord = todaysRecords[0] || null;
+
+      // Requirement 15 (Assignment Edit Sync):
+      // Do NOT stay stuck on "Shift Completed" if the admin edited the active assignment
+      // or created a newer active assignment after a prior completed checkout today.
+      const activeAsg = assignmentRef.current;
+      if (todayRecord && activeAsg) {
+        const recCompleted = Boolean(
+          todayRecord.timeOut ||
+          todayRecord.checkOut ||
+          todayRecord.check_out ||
+          todayRecord.status === 'Completed' ||
+          todayRecord.status === 'Late Checkout'
+        );
+        if (recCompleted) {
+          const asgUpdatedMs = Number(activeAsg.assignmentVersion || activeAsg.updatedAt || 0) || 0;
+          const recCheckOutMs = parseDate(todayRecord.actualCheckOut || todayRecord.timeOut || todayRecord.createdAt)?.getTime() || 0;
+          const asgOrigId = activeAsg.originalId || activeAsg.id || '';
+          const recAsgId = todayRecord.assignmentId || '';
+          const differentAssignment = Boolean(asgOrigId && recAsgId && asgOrigId !== recAsgId);
+          const editedAfterCheckout = Boolean(asgUpdatedMs > 0 && recCheckOutMs > 0 && asgUpdatedMs > recCheckOutMs);
+          const versionAdvanced = Boolean(
+            activeAsg.assignmentVersion &&
+            todayRecord.assignmentVersion &&
+            Number(activeAsg.assignmentVersion) > Number(todayRecord.assignmentVersion)
+          );
+          if (differentAssignment || editedAfterCheckout || versionAdvanced) {
+            todayRecord = null;
+          }
+        }
+      }
+
+      const attKey = JSON.stringify({
+        count: all.length,
+        todayId: todayRecord?.id || null,
+        timeIn: todayRecord?.timeIn || null,
+        timeOut: todayRecord?.timeOut || null,
+        status: todayRecord?.status || null,
+        asgVer: activeAsg?.assignmentVersion || activeAsg?.updatedAt || null,
+      });
       if (attKey !== lastAttKeyRef.current) {
         lastAttKeyRef.current = attKey;
         setAllAttendance(all);
@@ -808,7 +935,7 @@ export default function HomeScreen({ navigation, route, user: propUser }) {
 
         const isCurrentlyCheckedIn = Boolean(
           todayRecord && (todayRecord.timeIn || todayRecord.checkIn || todayRecord.check_in) &&
-          !(todayRecord.timeOut || todayRecord.checkOut || todayRecord.check_out || todayRecord.status === 'Completed')
+          !(todayRecord.timeOut || todayRecord.checkOut || todayRecord.check_out || todayRecord.status === 'Completed' || todayRecord.status === 'Late Checkout')
         );
 
         if (isCurrentlyCheckedIn) {
@@ -826,6 +953,7 @@ export default function HomeScreen({ navigation, route, user: propUser }) {
               employee: currentEmp,
               site: siteRef.current || site,
               assignment: assignmentRef.current || assignment,
+              assignedSitesList,
               attendanceId: todayRecord.id,
             });
           }
@@ -850,6 +978,9 @@ export default function HomeScreen({ navigation, route, user: propUser }) {
 
     const matchesMe = (r) => {
       const emp = employeeRef.current || employee;
+      const empCompanyId = emp?.companyId || 'company_default';
+      if ((r.companyId || 'company_default') !== empCompanyId) return false;
+
       const eid = (emp?.id || '').toLowerCase();
       const ename = (emp?.name || '').toLowerCase();
       const email = (currentEmail || emp?.email || '').toLowerCase();
@@ -886,7 +1017,7 @@ export default function HomeScreen({ navigation, route, user: propUser }) {
       unsub1();
       unsub2();
     };
-  }, [currentEmail, employee]);
+  }, [currentEmail, employee, assignment?.originalId, assignment?.assignmentVersion, assignment?.updatedAt]);
 
   const requestCheckIn = () => {
     if (!employee) {
@@ -934,27 +1065,8 @@ export default function HomeScreen({ navigation, route, user: propUser }) {
       return;
     }
 
-    const hasSched = hasActiveShiftSchedule(assignment, employee);
-    if (!hasSched) {
-      Alert.alert(
-        'Check-Out Blocked',
-        'You cannot record check-out because you do not have an active scheduled shift for today.'
-      );
-      return;
-    }
-
-    const empWt = (employee?.workType || employee?.employeeType || employee?.type || '').toString().toLowerCase();
-    const isFixedEmp = !empWt.includes('mobile') && !empWt.includes('field');
-    const shiftEndCheck = isScheduledShiftEnded(resolveShift(assignment, employee));
-    if (isFixedEmp && shiftEndCheck.ended) {
-      Alert.alert(
-        'Shift Already Ended',
-        `Your scheduled shift (${resolveShift(assignment, employee)}) ended at ${shiftEndCheck.shiftEndStr}. Check-out is locked after shift hours.`,
-        [{ text: 'OK' }]
-      );
-      return;
-    }
-
+    // Requirement 10: NEVER disable Clock Out when scheduled shift ends.
+    // Employees who are currently checked in must always be able to clock out (recording Late Checkout if past shift end).
     setConfirmModal({
       visible: true,
       actionType: 'check_out',
@@ -1090,18 +1202,25 @@ export default function HomeScreen({ navigation, route, user: propUser }) {
         longitude: lng,
       };
 
+      const companyId = employee?.companyId || assignment?.companyId || 'company_default';
+      const shiftEndInfo = getShiftEndInfo(shiftToUse);
+
       const newAtt = {
+        companyId,
         employee_id: employee.id,
         employeeId: employee.id,
         employeeUid: employee.uid || employee.id,
         employeeName: employee.name,
         email: employee.email || currentEmail,
-        site_id: activeSite?.id || site?.id || 'Unknown',
+        assignmentId: assignment?.originalId || assignment?.id || null,
+        assignmentVersion: assignment?.assignmentVersion || assignment?.updatedAt || null,
+        site_id: activeSite?.id || site?.id || null,
         siteName: resolvedSiteName,
         assignedSite: site?.name || assignment?.site || 'Unassigned Site',
         actualLocation: activeAddressToSave,
         locationAddress: activeAddressToSave,
         shift: shiftToUse,
+        scheduledEnd: shiftEndInfo?.raw && shiftEndInfo.raw !== 'Flexible' ? shiftEndInfo.raw : null,
         date: serverTimestamp(),
         timeIn: serverTimestamp(),
         timeOut: null,
@@ -1126,7 +1245,7 @@ export default function HomeScreen({ navigation, route, user: propUser }) {
 
       // Safely run secondary background logging and sync without risking false error alerts
       try {
-        if (employee.id && employee.id !== 'emp_fallback') {
+        if (employee.id) {
           const hasAsg = Boolean((siteToUse || site || assignment) && (assignedSitesList.length > 0 || site || siteToUse));
           const hasSched = hasActiveShiftSchedule(assignment, employee);
           const targetStatus = (hasAsg && hasSched) ? 'On Duty' : 'Online';
@@ -1145,10 +1264,11 @@ export default function HomeScreen({ navigation, route, user: propUser }) {
 
       try {
         await addDoc(collection(db, 'ActivityLogs'), {
+          companyId,
           employee_id: employee.id,
           employeeName: employee.name,
-          site_id: siteToUse?.id || site?.id || 'Unknown',
-          siteName: resolvedSiteName || siteToUse?.name || site?.name || assignment?.site || 'Unassigned Site',
+          site_id: siteToUse?.id || site?.id || null,
+          siteName: resolvedSiteName || siteToUse?.name || site?.name || assignment?.site || 'Assigned Worksite',
           action: 'Check In',
           type: 'Attendance',
           timestamp: serverTimestamp(),
@@ -1159,11 +1279,12 @@ export default function HomeScreen({ navigation, route, user: propUser }) {
       }
 
       try {
-        // 1. Start periodic 5-minute location recording while checked in (sets activeSession first)
+        // 1. Start shift location monitoring & travel monitor (auto-stops when monitoring window ends)
         locationLogService.startPeriodicLogging({
           employee,
           site: siteToUse,
           assignment,
+          assignedSitesList,
           attendanceId: attId,
         });
 
@@ -1181,20 +1302,12 @@ export default function HomeScreen({ navigation, route, user: propUser }) {
       }
 
       try {
-        // Start verification scheduler for this session
+        // Initialize session metadata (no automatic 30-min popup timer — Req 7 & 9)
         await schedulerStart({
           employee,
           assignment,
           attendanceId: attId,
         });
-        onPromptReady(({ triggerType }) => {
-          setFacialTriggerType(triggerType || 'scheduled_random');
-          setShowFacialModal(true);
-        });
-
-        // Trigger immediate check-in verification
-        setFacialTriggerType('check_in');
-        setShowFacialModal(true);
       } catch (err) {
         console.warn('Check-in scheduler warning:', err);
       }
@@ -1210,38 +1323,33 @@ export default function HomeScreen({ navigation, route, user: propUser }) {
       return;
     }
 
-    const hasSched = hasActiveShiftSchedule(assignment, employee);
-    if (!hasSched) {
-      Alert.alert(
-        'Check-Out Blocked',
-        'You cannot record check-out because you do not have an active scheduled shift for today.'
-      );
-      return;
-    }
-
-    const empWt = (employee?.workType || employee?.employeeType || employee?.type || '').toString().toLowerCase();
-    const isFixedEmp = !empWt.includes('mobile') && !empWt.includes('field');
-    const shiftEndCheck = isScheduledShiftEnded(resolveShift(assignment, employee));
-    if (isFixedEmp && shiftEndCheck.ended) {
-      Alert.alert(
-        'Shift Already Ended',
-        `Your scheduled shift (${resolveShift(assignment, employee)}) ended at ${shiftEndCheck.shiftEndStr}. Check-out is locked after shift hours.`,
-        [{ text: 'OK' }]
-      );
-      return;
-    }
-
+    // Requirement 10: Always allow Clock Out for an active check-in, even past scheduled shift end.
     setChecking(true);
     try {
       const now = new Date();
+      const companyId = employee?.companyId || assignment?.companyId || 'company_default';
       const scheduledShift = resolveShift(assignment, employee);
-      const hasScheduledShift = scheduledShift && scheduledShift !== 'Unassigned' && scheduledShift !== 'No Shift Scheduled';
-      const earlyInfo = (hasScheduledShift && scheduledShift !== 'Flexible')
-        ? checkEarlyCheckout(scheduledShift, now, 15)
+      const effectiveShift = (scheduledShift && scheduledShift !== 'Unassigned' && scheduledShift !== 'No Shift Scheduled')
+        ? scheduledShift
+        : (attendance?.shift && attendance.shift !== 'Unassigned' && attendance.shift !== 'Flexible' ? attendance.shift : null);
+
+      const earlyInfo = (effectiveShift && effectiveShift !== 'Flexible')
+        ? checkEarlyCheckout(effectiveShift, now, 15)
         : { isEarly: false, minutesEarly: 0, shiftEndStr: 'Flexible' };
-      const lateOutInfo = (hasScheduledShift && scheduledShift !== 'Flexible' && !earlyInfo.isEarly)
-        ? checkLateCheckout(scheduledShift, now, 15)
-        : { isLateOut: false, minutesLateOut: 0, shiftEndStr: 'Flexible' };
+
+      // Strict Requirement 10 Late Checkout detection: any clock-out past Scheduled End
+      const endCheck = (effectiveShift && effectiveShift !== 'Flexible')
+        ? isScheduledShiftEnded(effectiveShift, now)
+        : { ended: false, shiftEndStr: attendance?.scheduledEnd || 'Flexible', shiftEndDt: null };
+      const isAfterShiftEnd = Boolean(!earlyInfo.isEarly && endCheck.ended && endCheck.shiftEndDt);
+      const minutesLateOut = isAfterShiftEnd
+        ? Math.max(1, Math.round((now.getTime() - endCheck.shiftEndDt.getTime()) / 60000))
+        : 0;
+      const lateOutInfo = {
+        isLateOut: isAfterShiftEnd,
+        minutesLateOut,
+        shiftEndStr: endCheck.shiftEndStr || attendance?.scheduledEnd || 'Flexible',
+      };
 
       let curCoords = { latitude: attendance.latitude || null, longitude: attendance.longitude || null };
       try {
@@ -1251,9 +1359,14 @@ export default function HomeScreen({ navigation, route, user: propUser }) {
         }
       } catch (_) {}
 
+      const finalAttendanceStatus = lateOutInfo.isLateOut ? 'Late Checkout' : 'Completed';
+
       const checkoutPayload = {
+        companyId,
         timeOut: serverTimestamp(),
-        status: 'Completed',
+        actualCheckOut: now.toISOString(),
+        scheduledEnd: lateOutInfo.shiftEndStr !== 'Flexible' ? lateOutInfo.shiftEndStr : (attendance?.scheduledEnd || null),
+        status: finalAttendanceStatus,
         ...(earlyInfo.isEarly ? {
           earlyCheckOut: true,
           earlyDeparture: true,
@@ -1265,38 +1378,37 @@ export default function HomeScreen({ navigation, route, user: propUser }) {
           lateCheckOut: true,
           overtimeCheckOut: true,
           minutesLateOut: lateOutInfo.minutesLateOut,
-          anomalyFlag: 'Late Check-Out',
-          departureNote: `Late Check-Out: Checked out ${lateOutInfo.minutesLateOut}m after scheduled shift end (${lateOutInfo.shiftEndStr})`,
+          anomalyFlag: 'Late Checkout',
+          departureNote: `Late Checkout: Scheduled End ${lateOutInfo.shiftEndStr}, Actual Clock Out ${now.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit', hour12: true })} (+${lateOutInfo.minutesLateOut}m)`,
         } : {})
       };
 
       await updateDoc(doc(db, 'Attendance', attendance.id), checkoutPayload);
-      // Dual-write checkout to lowercase collection
       await updateDoc(doc(db, 'attendance', attendance.id), checkoutPayload).catch(() => {});
 
       if (earlyInfo.isEarly) {
         Alert.alert(
-          'Early Check-Out Warning',
-          `You checked out ${earlyInfo.minutesEarly} min before your scheduled shift end (${earlyInfo.shiftEndStr}). This early departure has been flagged as an anomaly for review.`
+          'Early Check-Out Recorded',
+          `You checked out ${earlyInfo.minutesEarly} min before your scheduled shift end (${earlyInfo.shiftEndStr}).`
         );
       } else if (lateOutInfo.isLateOut) {
         Alert.alert(
-          'Late Check-Out Warning',
-          `You checked out ${lateOutInfo.minutesLateOut} min past your scheduled shift end (${lateOutInfo.shiftEndStr}). This unscheduled overtime has been flagged as an anomaly for review.`
+          'Late Checkout Recorded',
+          `Scheduled End: ${lateOutInfo.shiftEndStr}\nActual Clock Out: ${now.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit', hour12: true })}\nStatus: Late Checkout (+${lateOutInfo.minutesLateOut}m)`
         );
       } else {
         Alert.alert('Check Out Successful', 'Have a great day!');
       }
 
       try {
-        if (employee.id && employee.id !== 'emp_fallback') {
+        if (employee.id) {
           const empWorkType = (employee?.workType || employee?.employeeType || employee?.type || '').toString().toLowerCase();
           const isFixed = !empWorkType.includes('mobile') && !empWorkType.includes('field');
           const finalStatus = isFixed ? 'Online' : 'Completed';
 
           await updateDoc(doc(db, 'employees', employee.id), {
             status: finalStatus,
-            attendanceStatus: isFixed ? 'Online' : 'Completed',
+            attendanceStatus: finalAttendanceStatus,
             lastCheckOut: Date.now(),
             lastActive: Date.now(),
             isOnline: true
@@ -1312,10 +1424,11 @@ export default function HomeScreen({ navigation, route, user: propUser }) {
         let anomalyDocId = null;
         const asgForSecurity = {
           ...(assignment || {}),
-          id: assignment?.id || null,
+          companyId,
+          id: assignment?.originalId || assignment?.id || null,
           siteId: site?.id || null,
           siteName: attendance.siteName || site?.name || assignment?.site || 'Scheduled Post',
-          shift: scheduledShift,
+          shift: effectiveShift || scheduledShift,
         };
         if (earlyInfo.isEarly) {
           const departureDesc = `You checked out early at ${now.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit', hour12: true })} before scheduled shift end (${earlyInfo.shiftEndStr}; ${earlyInfo.minutesEarly}m early departure).`;
@@ -1323,6 +1436,7 @@ export default function HomeScreen({ navigation, route, user: propUser }) {
             eventType: 'EARLY_CHECKOUT',
             employee: {
               ...employee,
+              companyId,
               id: employee.id,
               name: employee.name,
               email: employee.email || currentEmail,
@@ -1334,12 +1448,13 @@ export default function HomeScreen({ navigation, route, user: propUser }) {
             customDescription: departureDesc,
             extra: { details: `${earlyInfo.minutesEarly}m before ${earlyInfo.shiftEndStr}` },
           }).catch(() => null);
-        } else if (lateOutInfo.isLateOut) {
-          const overtimeDesc = `You checked out late at ${now.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit', hour12: true })} past scheduled shift end (${lateOutInfo.shiftEndStr}; ${lateOutInfo.minutesLateOut}m beyond shift hours).`;
+        } else if (lateOutInfo.isLateOut && lateOutInfo.minutesLateOut >= 15) {
+          const overtimeDesc = `Late Checkout recorded at ${now.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit', hour12: true })} (Scheduled End: ${lateOutInfo.shiftEndStr}; +${lateOutInfo.minutesLateOut}m).`;
           anomalyDocId = await writeSecurityEvent({
             eventType: 'OVERTIME_SHIFT_EXCEEDED',
             employee: {
               ...employee,
+              companyId,
               id: employee.id,
               name: employee.name,
               email: employee.email || currentEmail,
@@ -1354,20 +1469,21 @@ export default function HomeScreen({ navigation, route, user: propUser }) {
         }
 
         await addDoc(collection(db, 'ActivityLogs'), {
+          companyId,
           employee_id: employee.id,
           employeeName: employee.name,
-          site_id: site?.id || 'Unknown',
-          siteName: attendance.siteName || site?.name || assignment?.site || 'Unassigned Site',
+          site_id: site?.id || null,
+          siteName: attendance.siteName || site?.name || assignment?.site || 'Assigned Worksite',
           action: earlyInfo.isEarly
             ? 'Check Out (Early Departure)'
-            : (lateOutInfo.isLateOut ? 'Check Out (Late / Overtime)' : 'Check Out'),
+            : (lateOutInfo.isLateOut ? 'Check Out (Late Checkout)' : 'Check Out'),
           type: 'Attendance',
           anomalyId: anomalyDocId || null,
           timestamp: serverTimestamp(),
           status: (earlyInfo.isEarly || lateOutInfo.isLateOut) ? 'Warning' : 'Normal',
           details: earlyInfo.isEarly
             ? `Early departure: ${earlyInfo.minutesEarly}m before ${earlyInfo.shiftEndStr}`
-            : (lateOutInfo.isLateOut ? `Late check-out: ${lateOutInfo.minutesLateOut}m after ${lateOutInfo.shiftEndStr}` : 'Shift Completed')
+            : (lateOutInfo.isLateOut ? `Late Checkout: +${lateOutInfo.minutesLateOut}m after ${lateOutInfo.shiftEndStr}` : 'Shift Completed')
         }).catch(() => {});
       } catch (err) {
         console.warn('Check-out activity/anomaly log warning:', err);
@@ -1442,7 +1558,13 @@ export default function HomeScreen({ navigation, route, user: propUser }) {
     attendance?.timeIn || attendance?.checkIn || attendance?.check_in
   );
   const isCheckedOut = Boolean(
-    isCheckedIn && (attendance?.timeOut || attendance?.checkOut || attendance?.check_out || attendance?.status === 'Completed')
+    isCheckedIn && (
+      attendance?.timeOut ||
+      attendance?.checkOut ||
+      attendance?.check_out ||
+      attendance?.status === 'Completed' ||
+      attendance?.status === 'Late Checkout'
+    )
   );
 
   const hasSchedule = hasActiveShiftSchedule(assignment, employee);
@@ -1505,7 +1627,14 @@ export default function HomeScreen({ navigation, route, user: propUser }) {
             resizeMode="contain"
           />
           <View style={styles.actionNavGroup}>
-            <TouchableOpacity style={styles.notifBtn} onPress={() => setShowFacialModal(true)}>
+            <TouchableOpacity
+              style={styles.notifBtn}
+              onPress={() => {
+                setFacialModalMode(employee?.faceRegistered ? 'verify' : 'register');
+                setFacialTriggerType('manual');
+                setShowFacialModal(true);
+              }}
+            >
               <Image
                 source={require('../../assets/identify.png')}
                 style={styles.identifyIcon}
@@ -1525,7 +1654,7 @@ export default function HomeScreen({ navigation, route, user: propUser }) {
                 </View>
               )}
             </TouchableOpacity>
-            <TouchableOpacity style={styles.notifBtn} onPress={() => navigation.navigate('Notifications')}>
+            <TouchableOpacity style={styles.notifBtn} onPress={() => navigation.navigate('Notifications', { employee, user: propUser })}>
               <Ionicons name="notifications-outline" size={22} color="white" />
             </TouchableOpacity>
           </View>
@@ -1629,6 +1758,165 @@ export default function HomeScreen({ navigation, route, user: propUser }) {
         showsVerticalScrollIndicator={false}
         contentContainerStyle={styles.scrollBody}
       >
+        {/* Requirement 11: Location Disabled Warning Banner */}
+        {isCheckedIn && !isCheckedOut && monitoringStatus?.locationUnavailable && (
+          <View style={{
+            flexDirection: 'row',
+            alignItems: 'center',
+            backgroundColor: '#FFFBEB',
+            borderWidth: 1,
+            borderColor: '#FCD34D',
+            borderRadius: 14,
+            padding: 12,
+            marginBottom: 12,
+            gap: 10
+          }}>
+            <Ionicons name="location-outline" size={22} color="#B45309" />
+            <View style={{ flex: 1 }}>
+              <Text style={{ fontSize: 13, fontWeight: '700', color: '#92400E' }}>Location Tracking Unavailable</Text>
+              <Text style={{ fontSize: 11.5, color: '#B45309', marginTop: 2, lineHeight: 16 }}>
+                {monitoringStatus.message || LOCATION_UNAVAILABLE_MESSAGE}
+              </Text>
+            </View>
+          </View>
+        )}
+
+        {/* Requirement 10: Monitoring Window Ended Notice (Clock Out Remains Active) */}
+        {isCheckedIn && !isCheckedOut && (monitoringStatus?.monitoringEnded || isShiftEndedNow) && (
+          <View style={{
+            flexDirection: 'row',
+            alignItems: 'center',
+            backgroundColor: '#EFF6FF',
+            borderWidth: 1,
+            borderColor: '#BFDBFE',
+            borderRadius: 14,
+            padding: 12,
+            marginBottom: 12,
+            gap: 10
+          }}>
+            <Ionicons name="time-outline" size={20} color="#1D4ED8" />
+            <View style={{ flex: 1 }}>
+              <Text style={{ fontSize: 12.5, fontWeight: '700', color: '#1E3A8A' }}>Monitoring Period Ended</Text>
+              <Text style={{ fontSize: 11, color: '#1E40AF', marginTop: 2 }}>
+                Location tracking stopped after scheduled end ({shiftEndStatus.shiftEndStr}). Tap Check Out below to record your Late Checkout.
+              </Text>
+            </View>
+          </View>
+        )}
+
+        {/* Requirement 7 & 9: Pending Admin Verification Request Banner (safe when driving) */}
+        {pendingVerificationReq && (
+          <TouchableOpacity
+            style={{
+              flexDirection: 'row',
+              alignItems: 'center',
+              backgroundColor: deferredWhileDriving ? '#FEF3C7' : '#EEF2FF',
+              borderWidth: 1,
+              borderColor: deferredWhileDriving ? '#F59E0B' : '#818CF8',
+              borderRadius: 14,
+              padding: 12,
+              marginBottom: 12,
+              gap: 10
+            }}
+            onPress={() => {
+              if (isEmployeeDriving(locationLogService.getCurrentSpeedMs())) {
+                Alert.alert(
+                  'Safety First',
+                  'Please pull over and come to a complete stop before completing facial verification.'
+                );
+                return;
+              }
+              setFacialModalMode('verify');
+              setFacialTriggerType('admin_request');
+              setShowFacialModal(true);
+            }}
+            activeOpacity={0.85}
+          >
+            <Ionicons name={deferredWhileDriving ? 'car-outline' : 'scan-circle'} size={22} color={deferredWhileDriving ? '#B45309' : '#4F46E5'} />
+            <View style={{ flex: 1 }}>
+              <Text style={{ fontSize: 13, fontWeight: '700', color: deferredWhileDriving ? '#92400E' : '#312E81' }}>
+                {deferredWhileDriving ? 'Verification Requested — Pull Over Safely' : 'Admin Requested Facial Verification'}
+              </Text>
+              <Text style={{ fontSize: 11, color: deferredWhileDriving ? '#B45309' : '#4338CA', marginTop: 2 }}>
+                {deferredWhileDriving
+                  ? 'Deferred while driving. Tap once safely parked to complete verification.'
+                  : 'Tap here to complete your requested selfie verification.'}
+              </Text>
+            </View>
+            <Ionicons name="chevron-forward" size={18} color={deferredWhileDriving ? '#B45309' : '#4F46E5'} />
+          </TouchableOpacity>
+        )}
+
+        {/* Requirement 8: First-Time Face Registration Banner */}
+        {employee?.id && !employee?.faceRegistered && (
+          <TouchableOpacity
+            style={{
+              flexDirection: 'row',
+              alignItems: 'center',
+              backgroundColor: '#F5F3FF',
+              borderWidth: 1,
+              borderColor: '#C4B5FD',
+              borderRadius: 14,
+              padding: 12,
+              marginBottom: 12,
+              gap: 10
+            }}
+            onPress={() => {
+              setFacialModalMode('register');
+              setFacialTriggerType('registration');
+              setShowFacialModal(true);
+            }}
+            activeOpacity={0.85}
+          >
+            <Ionicons name="person-add-outline" size={20} color="#6D28D9" />
+            <View style={{ flex: 1 }}>
+              <Text style={{ fontSize: 12.5, fontWeight: '700', color: '#4C1D95' }}>Face Registration Required</Text>
+              <Text style={{ fontSize: 11, color: '#6D28D9', marginTop: 2 }}>
+                Register your face reference now so you can verify your identity when requested.
+              </Text>
+            </View>
+            <View style={{ backgroundColor: '#6D28D9', paddingHorizontal: 10, paddingVertical: 5, borderRadius: 8 }}>
+              <Text style={{ fontSize: 11, fontWeight: '700', color: '#FFFFFF' }}>Register</Text>
+            </View>
+          </TouchableOpacity>
+        )}
+
+        {/* Requirement 14: Live Off-Site Travel Time Status Card */}
+        {travelStatus?.active && (travelStatus.travelStatus === 'In Transit' || travelStatus.travelStatus === 'Exceeded') && (
+          <View style={{
+            backgroundColor: travelStatus.travelStatus === 'Exceeded' ? '#FEF2F2' : '#EEF2FF',
+            borderWidth: 1,
+            borderColor: travelStatus.travelStatus === 'Exceeded' ? '#FCA5A5' : '#C7D2FE',
+            borderRadius: 14,
+            padding: 12,
+            marginBottom: 12,
+          }}>
+            <View style={{ flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', marginBottom: 4 }}>
+              <View style={{ flexDirection: 'row', alignItems: 'center', gap: 6 }}>
+                <Ionicons
+                  name="navigate-circle-outline"
+                  size={18}
+                  color={travelStatus.travelStatus === 'Exceeded' ? '#DC2626' : '#4F46E5'}
+                />
+                <Text style={{ fontSize: 12.5, fontWeight: '700', color: travelStatus.travelStatus === 'Exceeded' ? '#991B1B' : '#312E81' }}>
+                  {travelStatus.travelStatus === 'Exceeded' ? 'Travel Time Exceeded' : 'In Transit to Destination'}
+                </Text>
+              </View>
+              <Text style={{ fontSize: 11, fontWeight: '700', color: travelStatus.travelStatus === 'Exceeded' ? '#DC2626' : '#4338CA' }}>
+                {travelStatus.elapsedMinutes}m / {travelStatus.allowedWindowMinutes}m
+              </Text>
+            </View>
+            <Text style={{ fontSize: 11.5, color: '#334155' }}>
+              {travelStatus.previousDestination || 'Origin'} → <Text style={{ fontWeight: '700' }}>{travelStatus.nextDestination}</Text>
+            </Text>
+            {travelStatus.expectedArrivalTime && (
+              <Text style={{ fontSize: 10.5, color: '#64748B', marginTop: 2 }}>
+                ETA: {formatTimeDisplay(travelStatus.expectedArrivalTime)} (+{travelStatus.allowedGracePeriod}m grace)
+              </Text>
+            )}
+          </View>
+        )}
+
         {/* Dynamic Status & Check-In Card */}
         <View style={styles.statusCard}>
           <View style={styles.statusRow}>
@@ -1741,7 +2029,25 @@ export default function HomeScreen({ navigation, route, user: propUser }) {
 
           {/* Attendance Action Buttons */}
           <View style={styles.actionRow}>
-            {(!assignment || assignedSitesList.length === 0 || !hasSchedule) ? (
+            {(isCheckedIn && !isCheckedOut) ? (
+              <TouchableOpacity
+                style={[
+                  styles.checkOutBtn,
+                  checking && { opacity: 0.6, backgroundColor: '#94A3B8' }
+                ]}
+                onPress={requestCheckOut}
+                disabled={checking}
+              >
+                {checking ? <ActivityIndicator color="#fff" /> : (
+                  <>
+                    <Ionicons name="log-out-outline" size={20} color="white" />
+                    <Text style={styles.btnText}>
+                      {isShiftEndedNow ? 'Check Out (Late)' : 'Check Out'}
+                    </Text>
+                  </>
+                )}
+              </TouchableOpacity>
+            ) : (!assignment || assignedSitesList.length === 0 || !hasSchedule) ? (
               <TouchableOpacity
                 style={[styles.checkInBtn, { opacity: 0.6, backgroundColor: '#94A3B8' }]}
                 onPress={() => {
@@ -1759,13 +2065,13 @@ export default function HomeScreen({ navigation, route, user: propUser }) {
                   </>
                 )}
               </TouchableOpacity>
-            ) : ((!isCheckedIn && isShiftEndedNow) || (isFixed && !isCheckedOut && isShiftEndedNow)) ? (
+            ) : (!isCheckedIn && isShiftEndedNow) ? (
               <TouchableOpacity
                 style={[styles.checkInBtn, { opacity: 0.6, backgroundColor: '#94A3B8' }]}
                 onPress={() => {
                   Alert.alert(
                     'Shift Already Ended',
-                    `Your scheduled shift (${resolveShift(assignment, employee)}) ended at ${shiftEndStatus.shiftEndStr}. Check-in and check-out are locked.`
+                    `Your scheduled shift (${resolveShift(assignment, employee)}) ended at ${shiftEndStatus.shiftEndStr}. Check-in is closed for today.`
                   );
                 }}
                 disabled={checking}
@@ -1800,17 +2106,14 @@ export default function HomeScreen({ navigation, route, user: propUser }) {
               <TouchableOpacity
                 style={[
                   styles.checkOutBtn, 
-                  (isCheckedOut || checking) && { opacity: 0.6, backgroundColor: '#94A3B8' }
+                  { opacity: 0.6, backgroundColor: '#94A3B8' }
                 ]}
-                onPress={requestCheckOut}
-                disabled={isCheckedOut || checking}
+                disabled={true}
               >
-                {checking ? <ActivityIndicator color="#fff" /> : (
-                  <>
-                    <Ionicons name="log-out-outline" size={20} color="white" />
-                    <Text style={styles.btnText}>{isCheckedOut ? 'Shift Completed' : 'Check Out'}</Text>
-                  </>
-                )}
+                <Ionicons name="checkmark-circle-outline" size={20} color="white" />
+                <Text style={styles.btnText}>
+                  {attendance?.status === 'Late Checkout' ? 'Late Checkout Recorded' : 'Shift Completed'}
+                </Text>
               </TouchableOpacity>
             )}
           </View>
@@ -2077,11 +2380,19 @@ export default function HomeScreen({ navigation, route, user: propUser }) {
         visible={showFacialModal}
         onClose={() => setShowFacialModal(false)}
         employee={employee}
+        assignment={assignment}
+        mode={facialModalMode}
+        verificationRequest={facialModalMode === 'verify' ? pendingVerificationReq : null}
         triggerType={facialTriggerType}
         attendanceId={currentAttendanceIdRef.current}
+        onFaceRegistered={(info) => {
+          setEmployee(prev => prev ? { ...prev, ...info } : prev);
+        }}
         onVerified={(record) => {
-          if (facialTriggerType === 'check_in') {
-            Alert.alert('Identity Verified', `Check-in verification passed! (${record.confidenceScore}% confidence)`);
+          setPendingVerificationReq(null);
+          setDeferredWhileDriving(false);
+          if (facialTriggerType === 'admin_request') {
+            Alert.alert('Identity Verified', `Verification request completed (${record.confidenceScore}% similarity).`);
           }
         }}
       />

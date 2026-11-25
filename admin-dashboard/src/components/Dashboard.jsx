@@ -14,6 +14,7 @@ import { db, collection, onSnapshot, query, limit, doc, updateDoc, addDoc, serve
 import { showToast } from '../utils/toast';
 import MapTracking from './MapTracking';
 import { resolveAssignmentStatus } from '../pages/Assignments';
+import { useCompany, DEFAULT_COMPANY_ID } from '../utils/companyContext';
 import { isEmployeeOnline, resolveEmployeeStatus, resolveEmployeeWorkType, isEmployeeOnSite, isEmployeeActiveOnShift } from '../utils/statusUtils';
 export { isEmployeeOnline, resolveEmployeeStatus, resolveEmployeeWorkType, isEmployeeOnSite, isEmployeeActiveOnShift };
 
@@ -479,6 +480,7 @@ function DashboardDrilldownModal({
 
       if (newStatus === 'Escalated to Fraud' && targetItem) {
         await addDoc(collection(db, 'fraud_reports'), {
+          companyId: targetItem.companyId || DEFAULT_COMPANY_ID,
           employeeId: targetItem.employeeId || null,
           employeeName: targetItem.employeeName || 'Field Employee',
           employeeEmail: targetItem.employeeEmail || null,
@@ -1767,13 +1769,21 @@ function DashboardDrilldownModal({
 
 export default function Dashboard() {
   const navigate = useNavigate();
-  const [employees, setEmployees] = useState([]);
-  const [sites, setSites] = useState([]);
-  const [recentLogs, setRecentLogs] = useState([]);
-  const [assignments, setAssignments] = useState([]);
-  const [attendance, setAttendance] = useState([]);
-  const [anomalies, setAnomalies] = useState([]);
+  const { matchesCompany } = useCompany();
+  const [rawEmployees, setRawEmployees] = useState([]);
+  const [rawSites, setRawSites] = useState([]);
+  const [rawRecentLogs, setRawRecentLogs] = useState([]);
+  const [rawAssignments, setRawAssignments] = useState([]);
+  const [rawAttendance, setRawAttendance] = useState([]);
+  const [rawAnomalies, setRawAnomalies] = useState([]);
   const [fullscreen, setFullscreen] = useState(false);
+
+  const employees = useMemo(() => rawEmployees.filter(matchesCompany), [rawEmployees, matchesCompany]);
+  const sites = useMemo(() => rawSites.filter(matchesCompany), [rawSites, matchesCompany]);
+  const recentLogs = useMemo(() => rawRecentLogs.filter(matchesCompany), [rawRecentLogs, matchesCompany]);
+  const assignments = useMemo(() => rawAssignments.filter(matchesCompany), [rawAssignments, matchesCompany]);
+  const attendance = useMemo(() => rawAttendance.filter(matchesCompany), [rawAttendance, matchesCompany]);
+  const anomalies = useMemo(() => rawAnomalies.filter(matchesCompany), [rawAnomalies, matchesCompany]);
 
   // Drilldown modal state
   const [drilldownType, setDrilldownType] = useState(null);
@@ -1789,24 +1799,24 @@ export default function Dashboard() {
   useEffect(() => {
     try {
       const unsubEmp = onSnapshot(query(collection(db, 'employees')), (snap) => {
-        setEmployees(snap.docs.map(d => ({ id: d.id, ...d.data() })));
+        setRawEmployees(snap.docs.map(d => ({ id: d.id, ...d.data() })));
       });
       const unsubSites = onSnapshot(query(collection(db, 'Sites')), (snap) => {
-        setSites(snap.docs.map(d => ({ id: d.id, ...d.data() })));
+        setRawSites(snap.docs.map(d => ({ id: d.id, ...d.data() })));
       });
       const unsubAsg = onSnapshot(query(collection(db, 'Assignments')), (snap) => {
-        setAssignments(snap.docs.map(d => ({ id: d.id, ...d.data() })));
+        setRawAssignments(snap.docs.map(d => ({ id: d.id, ...d.data() })));
       });
       const unsubAtt = onSnapshot(query(collection(db, 'attendance')), (snap) => {
-        setAttendance(snap.docs.map(d => ({ id: d.id, ...d.data() })));
+        setRawAttendance(snap.docs.map(d => ({ id: d.id, ...d.data() })));
       });
-      const unsubLogs = onSnapshot(query(collection(db, 'tracking_logs'), limit(10)), (snap) => {
-        setRecentLogs(snap.docs.map(d => ({ id: d.id, ...d.data() })));
+      const unsubLogs = onSnapshot(query(collection(db, 'tracking_logs'), limit(20)), (snap) => {
+        setRawRecentLogs(snap.docs.map(d => ({ id: d.id, ...d.data() })));
       });
       const unsubAi = onSnapshot(query(collection(db, 'ai_analysis')), (snap) => {
         const list = snap.docs.map(d => ({ id: d.id, ...d.data() }));
         list.sort((a, b) => getTsMillis(b.timestamp || b.createdAt) - getTsMillis(a.timestamp || a.createdAt));
-        setAnomalies(list);
+        setRawAnomalies(list);
       });
       return () => { unsubEmp(); unsubSites(); unsubAsg(); unsubAtt(); unsubLogs(); unsubAi(); };
     } catch (e) {

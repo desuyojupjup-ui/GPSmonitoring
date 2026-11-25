@@ -138,7 +138,13 @@ export default function TasksScreen({ navigation, route, user: propUser }) {
 
     const processSnapshot = async () => {
       const emp = employeeRef.current || employee;
-      const cleanDocs = asgDocs.filter(a => a && a.id !== 'asg1' && !isAssignmentDatePassed(a));
+      const empCompanyId = emp?.companyId || 'company_default';
+      const cleanDocs = asgDocs.filter(a =>
+        a &&
+        a.id !== 'asg1' &&
+        (a.companyId || 'company_default') === empCompanyId &&
+        !isAssignmentDatePassed(a)
+      );
       let data = cleanDocs.filter(a => isAssignmentForEmployee(a, emp, emailToUse, currentUserName));
 
       // Loose fallback: if data is empty, check if any clean document matches employee site, name, or email
@@ -243,7 +249,19 @@ export default function TasksScreen({ navigation, route, user: propUser }) {
         )
       );
 
-      if (isFixedEmp && emp) {
+      // Requirement 15: Prioritize live Firestore Assignment docs FIRST for ALL employees (Fixed & Mobile)
+      // so Admin edits (Date, Start/End Time, Worksite, Geofence, Travel Time) immediately reflect!
+      for (const asg of data) {
+        if (Array.isArray(asg.assignedSites) && asg.assignedSites.length > 0) {
+          asg.assignedSites.forEach(s => addCard(s, asg));
+        } else if (asg.site && asg.site.includes(',')) {
+          asg.site.split(',').forEach(s => addCard(s, asg));
+        } else if (asg.site || asg.siteName) {
+          addCard(asg.site || asg.siteName, asg);
+        }
+      }
+
+      if (exploded.length === 0 && isFixedEmp && emp) {
         if (Array.isArray(emp.assignedSites) && emp.assignedSites.length > 0) {
           emp.assignedSites.forEach(s => addCard(s, null, true));
         } else if (emp.assignedSite && emp.assignedSite.includes(',')) {
@@ -256,21 +274,12 @@ export default function TasksScreen({ navigation, route, user: propUser }) {
         }
       }
 
-      if (exploded.length === 0) {
-        for (const asg of data) {
-          if (Array.isArray(asg.assignedSites) && asg.assignedSites.length > 0) {
-            asg.assignedSites.forEach(s => addCard(s, asg));
-          } else if (asg.site && asg.site.includes(',')) {
-            asg.site.split(',').forEach(s => addCard(s, asg));
-          } else if (asg.site || asg.siteName) {
-            addCard(asg.site || asg.siteName, asg);
-          }
-        }
-      }
-
       // Fallback: ONLY if employee has NO explicit assignment records in the database,
       // use the employee's assignedSites or assignedSite configured on their profile by admin.
-      const hasEmployeeAssignmentsInDb = asgDocs.some(a => isAssignmentForEmployee(a, emp, emailToUse, currentUserName));
+      const hasEmployeeAssignmentsInDb = asgDocs.some(a =>
+        (a.companyId || 'company_default') === empCompanyId &&
+        isAssignmentForEmployee(a, emp, emailToUse, currentUserName)
+      );
 
       if (exploded.length === 0 && emp && !hasEmployeeAssignmentsInDb) {
         if (Array.isArray(emp.assignedSites) && emp.assignedSites.length > 0) {
@@ -289,10 +298,16 @@ export default function TasksScreen({ navigation, route, user: propUser }) {
         id: d.id,
         site: d.site,
         shift: d.shift,
+        assignDate: d.assignDate,
         shiftStartTime: d.shiftStartTime,
         shiftEndTime: d.shiftEndTime,
         scheduledWorkingDays: d.scheduledWorkingDays,
-        status: d.status
+        geofenceRadius: d.geofenceRadius,
+        estimatedTravelTimeMinutes: d.estimatedTravelTimeMinutes,
+        travelGracePeriodMinutes: d.travelGracePeriodMinutes,
+        priority: d.priority,
+        status: d.status,
+        updatedAt: d.updatedAt || d.assignmentVersion || null,
       })));
       if (asgKey !== lastAsgKeyRef.current) {
         lastAsgKeyRef.current = asgKey;

@@ -1,66 +1,15 @@
 // ──────────────────────────────────────────────────────────────────────────
 // Real-time Employee Presence & Heartbeat Service
 //
-// Maintains the active online status of the currently logged-in employee:
-//  - Starts on login / session restoration.
-//  - Sends heartbeats every 20 seconds with timestamp and fresh GPS coordinates.
-//  - Responds immediately to AppState transitions (active / background).
-//  - Marks employee as Offline immediately on logout.
-//  - Syncs via Firestore updateDoc, /api/sync HTTP endpoint, and BroadcastChannel.
+// Maintains the active online status of the currently logged-in employee
+// using Cloud Firestore as the single source of truth (no /api/sync relays
+// or BroadcastChannel local DB overrides).
 // ──────────────────────────────────────────────────────────────────────────
-import { AppState, NativeModules } from 'react-native';
+import { AppState } from 'react-native';
 import AsyncStorage from '@react-native-async-storage/async-storage';
 import * as Location from 'expo-location';
-import { db, doc, updateDoc, collection, getDocs, serverTimestamp, ensureAuthenticatedSession } from '../firebase';
+import { db, doc, updateDoc, collection, getDocs, ensureAuthenticatedSession } from '../firebase';
 import locationLogService from './locationLogService';
-
-let expoConstantsObj = null;
-try {
-  expoConstantsObj = require('expo-constants').default || require('expo-constants');
-} catch (e) {}
-
-const getExpoHostIp = () => {
-  try {
-    if (NativeModules?.SourceCode?.scriptURL) {
-      const scriptURL = NativeModules.SourceCode.scriptURL;
-      const host = scriptURL.split('://')[1]?.split('/')[0]?.split(':')[0];
-      if (host && host !== 'localhost' && host !== '127.0.0.1') {
-        return host;
-      }
-    }
-  } catch (e) {}
-  try {
-    if (expoConstantsObj) {
-      const hostUri = expoConstantsObj?.expoConfig?.hostUri || expoConstantsObj?.manifest?.debuggerHost || expoConstantsObj?.manifest2?.extra?.expoGo?.developer?.tool || '';
-      if (hostUri && hostUri.includes(':')) {
-        return hostUri.split(':')[0];
-      }
-    }
-  } catch (e) {}
-  return null;
-};
-
-const getSyncEndpoints = () => {
-  const endpoints = [];
-  const hostIp = getExpoHostIp();
-  if (hostIp) {
-    endpoints.push(`http://${hostIp}:5173/api/sync`);
-  }
-  // Local network host IP fallback for Expo Go / Wi-Fi
-  endpoints.push('http://192.168.0.183:5173/api/sync');
-
-  if (typeof window !== 'undefined' && window.location && window.location.origin) {
-    endpoints.push(window.location.origin + '/api/sync');
-  }
-
-  endpoints.push(
-    'http://localhost:5173/api/sync',
-    'http://127.0.0.1:5173/api/sync',
-    'http://10.0.2.2:5173/api/sync'
-  );
-
-  return Array.from(new Set(endpoints));
-};
 
 class PresenceService {
   constructor() {
@@ -80,36 +29,33 @@ class PresenceService {
   }
 
   setEmployeeId(empId) {
-    if (empId && empId !== 'emp_fallback' && !empId.startsWith('emp_current')) {
+    if (empId && !String(empId).startsWith('emp_current')) {
       this.currentEmployeeId = empId;
     }
   }
 
   async resolveEmployeeId(user) {
-    if (this.currentEmployeeId && this.currentEmployeeId !== 'emp_fallback' && !this.currentEmployeeId.startsWith('emp_current')) {
+    if (this.currentEmployeeId && !String(this.currentEmployeeId).startsWith('emp_current')) {
       return this.currentEmployeeId;
     }
 
     const targetUser = user || this.currentUser;
     const email = (targetUser?.email || '').trim().toLowerCase();
 
-    // Ensure session is authenticated for Firestore rules
     try {
       await ensureAuthenticatedSession();
-    } catch (e) {}
+    } catch (_) {}
 
     try {
       const snap = await getDocs(collection(db, 'employees'));
       if (snap && !snap.empty) {
         const docs = snap.docs.map(d => ({ id: d.id, ...d.data() }));
 
-        // 1. Direct ID match if user has an id that matches an employee doc id
         if (targetUser?.id && docs.some(d => d.id === targetUser.id)) {
           this.currentEmployeeId = targetUser.id;
           return this.currentEmployeeId;
         }
 
-        // 2. Direct ID match if user has a uid that matches an employee doc id or uid
         if (targetUser?.uid) {
           const matchUid = docs.find(d => d.id === targetUser.uid || d.uid === targetUser.uid);
           if (matchUid) {
@@ -118,57 +64,37 @@ class PresenceService {
           }
         }
 
-        // 3. Match by email (ignoring admin gateway)
         if (email && !email.includes('admin@')) {
-          const match = docs.find(data => {
-            const empMail = (data.email || data.empEmail || '').trim().toLowerCase();
-            return empMail === email && data.idNum;
-          }) || docs.find(data => {
-            const empMail = (data.email || data.empEmail || '').trim().toLowerCase();
-            return empMail === email;
-          }) || docs.find(data => {
-            const empMail = (data.email || data.empEmail || '').trim().toLowerCase();
-            const prefix = email.split('@')[0];
-            return prefix && empMail.startsWith(prefix + '@');
-          });
+          const match =
+            docs.find(data => (data.email || data.empEmail || '').trim().toLowerCase() === email) ||
+            docs.find(data => {
+              const empMail = (data.email || data.empEmail || '').trim().toLowerCase();
+              const prefix = email.split('@')[0];
+              return prefix && empMail.startsWith(prefix + '@');
+            });
 
           if (match) {
             this.currentEmployeeId = match.id;
             return match.id;
           }
         }
-
-        // 4. Match by name
-        const targetName = (targetUser?.name || targetUser?.displayName || '').trim().toLowerCase();
-        if (targetName && targetName.length >= 2) {
-          const matchByName = docs.find(d => (d.name || '').trim().toLowerCase() === targetName);
-          if (matchByName) {
-            this.currentEmployeeId = matchByName.id;
-            return matchByName.id;
-          }
-        }
-
-        // 5. If only 1 employee document exists in Firestore, adopt it
-        if (docs.length === 1) {
-          this.currentEmployeeId = docs[0].id;
-          return docs[0].id;
-        }
       }
     } catch (e) {
-      console.warn('[PresenceService] Error resolving employee ID:', e);
+      console.warn('[PresenceService] Error resolving employee ID:', e?.message);
     }
     return null;
   }
 
   async getQuickLocation() {
     try {
+      const servicesEnabled = await Location.hasServicesEnabledAsync().catch(() => true);
       const { status } = await Location.getForegroundPermissionsAsync();
-      if (status !== 'granted') {
+      if (!servicesEnabled || status !== 'granted') {
         if (!this.lastFix) {
           try {
             const cached = await AsyncStorage.getItem('@last_known_location');
             if (cached) this.lastFix = JSON.parse(cached);
-          } catch (err) {}
+          } catch (_) {}
         }
         return this.lastFix;
       }
@@ -184,17 +110,17 @@ class PresenceService {
           lat: loc.coords.latitude,
           lng: loc.coords.longitude,
           accuracy: loc.coords.accuracy,
+          speed: loc.coords.speed || 0,
         };
         AsyncStorage.setItem('@last_known_location', JSON.stringify(this.lastFix)).catch(() => {});
         return this.lastFix;
       }
-    } catch (e) {
-      // Location unavailable or permission error, use last known fix
+    } catch (_) {
       if (!this.lastFix) {
         try {
           const cached = await AsyncStorage.getItem('@last_known_location');
           if (cached) this.lastFix = JSON.parse(cached);
-        } catch (err) {}
+        } catch (__) {}
       }
     }
     return this.lastFix;
@@ -205,10 +131,12 @@ class PresenceService {
 
     try {
       await ensureAuthenticatedSession();
-    } catch (e) {}
+    } catch (_) {}
 
     const empId = await this.resolveEmployeeId(this.currentUser);
-    const loc = isOnline ? await this.getQuickLocation() : this.lastFix;
+    // Only actively fetch GPS coordinates when shift monitoring is active (Requirement 10 & 11)
+    const isActivelyMonitored = locationLogService.isPeriodicLoggingActive();
+    const loc = (isOnline && isActivelyMonitored) ? await this.getQuickLocation() : null;
 
     const now = Date.now();
     const isoString = new Date().toISOString();
@@ -237,72 +165,27 @@ class PresenceService {
       payload.longitude = loc.lng;
       payload.locationAccuracy = loc.accuracy || 10;
 
-      // Continuous shift geofence perimeter check
       try {
-        if (locationLogService.isPeriodicLoggingActive()) {
+        if (isActivelyMonitored) {
           locationLogService.onLocationUpdate(loc);
         }
       } catch (_) {}
     }
 
-    // 1. Update Firestore employee doc if canonical ID is known
-    if (empId && empId !== 'emp_fallback' && !empId.startsWith('emp_current')) {
+    if (empId && !String(empId).startsWith('emp_current')) {
       try {
         await updateDoc(doc(db, 'employees', empId), payload);
-        console.log(`[PresenceService] Heartbeat synced for employee ${empId}: isOnline=${isOnline}, status=${payload.status}, lat=${payload.lat}`);
       } catch (e) {
-        console.warn('[PresenceService] updateDoc error:', e);
+        console.warn('[PresenceService] updateDoc error:', e?.message);
       }
     }
-
-    // 2. HTTP sync to Admin Portal backend
-    try {
-      if (typeof fetch !== 'undefined') {
-        const email = (this.currentUser?.email || '').trim().toLowerCase();
-        const safeId = (empId && empId !== 'emp_fallback' && !empId.startsWith('emp_current')) ? empId : undefined;
-
-        const syncItem = {
-          ...(safeId ? { id: safeId } : {}),
-          email: email || undefined,
-          name: this.currentUser?.name,
-          ...payload,
-        };
-
-        // BroadcastChannel sync for web/hybrid
-        if (typeof BroadcastChannel !== 'undefined') {
-          try {
-            const bc = new BroadcastChannel('subai_firestore_sync');
-            bc.postMessage({
-              type: 'SYNC_COLLECTION',
-              path: 'employees',
-              items: [syncItem]
-            });
-          } catch (e) {}
-        }
-
-        const endpoints = getSyncEndpoints();
-        for (const url of endpoints) {
-          try {
-            const response = await fetch(url, {
-              method: 'POST',
-              headers: { 'Content-Type': 'application/json' },
-              body: JSON.stringify({
-                path: 'employees',
-                data: syncItem,
-              }),
-            });
-            if (response && response.ok) break;
-          } catch (e) {}
-        }
-      }
-    } catch (e) {}
   }
 
   async startPresence(user, employeeId = null, initialStatus = null) {
     if (!user && !employeeId) return;
 
     this.currentUser = user || this.currentUser;
-    if (employeeId && employeeId !== 'emp_fallback' && !employeeId.startsWith('emp_current')) {
+    if (employeeId && !String(employeeId).startsWith('emp_current')) {
       this.currentEmployeeId = employeeId;
     }
     if (initialStatus && initialStatus !== 'Offline') {
@@ -312,32 +195,24 @@ class PresenceService {
     }
     this.isRunning = true;
 
-    // Resolve canonical employee ID before sending heartbeat
-    if (!this.currentEmployeeId || this.currentEmployeeId === 'emp_fallback') {
+    if (!this.currentEmployeeId) {
       await this.resolveEmployeeId(this.currentUser);
     }
 
-    // Send immediate initial heartbeat
     await this.sendHeartbeat(true, this.currentStatus || 'Online');
 
-    // Stop existing timer if any
     if (this.timer) clearInterval(this.timer);
-
-    // Heartbeat every 45 seconds (optimized to preserve Firestore write quota)
     this.timer = setInterval(() => {
       if (this.isRunning) {
         this.sendHeartbeat(true);
       }
     }, 45000);
 
-    // Listen to AppState (foreground / background)
     if (!this.appStateSubscription) {
       this.appStateSubscription = AppState.addEventListener('change', (nextAppState) => {
         if (nextAppState === 'active' && this.isRunning) {
-          // Came back to foreground — immediate heartbeat
           this.sendHeartbeat(true);
-        } else if (nextAppState.match(/inactive|background/)) {
-          // App backgrounded — record lastActive timestamp
+        } else if (nextAppState.match(/inactive|background/) && this.isRunning) {
           this.sendHeartbeat(true);
         }
       });
@@ -353,13 +228,12 @@ class PresenceService {
     }
 
     if (this.appStateSubscription) {
-      try { this.appStateSubscription.remove(); } catch (e) {}
+      try { this.appStateSubscription.remove(); } catch (_) {}
       this.appStateSubscription = null;
     }
 
     if (user) this.currentUser = user;
 
-    // Send offline heartbeat in background without blocking logout
     this.sendHeartbeat(false, 'Offline').catch(() => {});
 
     this.currentUser = null;

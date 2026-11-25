@@ -2,6 +2,7 @@ import React, { useState, useEffect, useMemo } from 'react';
 import { db, collection, onSnapshot, query, orderBy, limit, updateDoc, doc, deleteDoc, addDoc, serverTimestamp } from '../firebase';
 import { Search, ShieldX, AlertCircle, Eye, Lock, Smartphone, Wifi, Cpu, Trash2, ShieldAlert, Radio, Activity, TrendingUp, ShieldCheck, Clock, MapPin, Scan } from 'lucide-react';
 import { showToast, showConfirmDelete } from '../utils/toast';
+import { useCompany, DEFAULT_COMPANY_ID } from '../utils/companyContext';
 import { ResponsiveContainer, PieChart, Pie, Cell, BarChart, Bar, XAxis, YAxis, Tooltip, CartesianGrid, AreaChart, Area } from 'recharts';
 
 // Custom Tooltip for Fraud Vectors Radial/Pie Chart
@@ -85,6 +86,7 @@ const CustomSteppedTooltip = ({ active, payload }) => {
 };
 
 export default function FraudReportList() {
+  const { matchesCompany } = useCompany();
   const [reports, setReports] = useState([]);
   const [securityEvents, setSecurityEvents] = useState([]);
   const [loading, setLoading] = useState(true);
@@ -126,8 +128,9 @@ export default function FraudReportList() {
   const allReports = useMemo(() => {
     const map = new Map();
     // Primary source first
-    securityEvents.forEach(e => map.set(e.id, {
+    securityEvents.filter(matchesCompany).forEach(e => map.set(e.id, {
       id: e.id,
+      companyId: e.companyId || DEFAULT_COMPANY_ID,
       employeeName: e.employeeName,
       employeeId: e.employeeId,
       employeeType: e.employeeType,
@@ -155,10 +158,11 @@ export default function FraudReportList() {
       _raw: e,
     }));
     // Legacy supplement
-    reports.forEach(r => {
+    reports.filter(matchesCompany).forEach(r => {
       const legacyId = r.relatedSecurityEventId || r.id;
       if (!map.has(legacyId)) map.set(r.id, {
         ...r,
+        companyId: r.companyId || DEFAULT_COMPANY_ID,
         violationType: r.violationType || r.category,
         _source: 'fraud_reports',
       });
@@ -168,7 +172,7 @@ export default function FraudReportList() {
       const tb = b.timestamp?.toDate ? b.timestamp.toDate() : new Date(b.timestamp || 0);
       return tb - ta;
     });
-  }, [securityEvents, reports]);
+  }, [securityEvents, reports, matchesCompany]);
 
   const handleUpdateStatus = async (id, status, notes = '') => {
     setSubmitting(true);
@@ -186,6 +190,7 @@ export default function FraudReportList() {
       if (rep?.employeeId) {
         await addDoc(collection(db, 'notifications'), {
           type: 'employee',
+          companyId: rep.companyId || DEFAULT_COMPANY_ID,
           employeeId: rep.employeeId,
           title: status === 'verified' ? 'Security Review Completed' : 'Security Report Dismissed',
           message: status === 'verified'
@@ -247,7 +252,10 @@ export default function FraudReportList() {
     );
     if (confirmed) {
       try {
-        await Promise.all(selectedIds.map(id => deleteDoc(doc(db, 'fraud_reports', id))));
+        await Promise.all(selectedIds.flatMap(id => [
+          deleteDoc(doc(db, 'fraud_reports', id)).catch(() => {}),
+          deleteDoc(doc(db, 'security_events', id)).catch(() => {}),
+        ]));
         showToast('success', 'Bulk Delete Successful', `${selectedIds.length} fraud report(s) deleted.`);
         setSelectedIds([]);
       } catch (err) {
@@ -468,10 +476,10 @@ export default function FraudReportList() {
                         {item.violationType || 'Mock Location App'}
                       </td>
                       <td className="security-col-optional-tablet" style={{ color: '#64748B', fontFamily: 'monospace' }}>
-                        {item.ipAddress || '112.203.45.18'}
+                        {item.ipAddress || item.deviceInformation?.ipAddress || '—'}
                       </td>
                       <td className="security-col-optional-mobile" style={{ color: '#475569' }}>
-                        {item.deviceModel || 'Samsung Galaxy S22'}
+                        {item.deviceModel || item.deviceInformation?.model || item.deviceInformation?.brand || '—'}
                       </td>
                       <td>
                         <span style={{

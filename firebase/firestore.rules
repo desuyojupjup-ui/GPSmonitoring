@@ -1,171 +1,437 @@
 rules_version = '2';
 service cloud.firestore {
   match /databases/{database}/documents {
-    // Helper functions
+
+    // ────────────────────────────────────────────────────────────────────────
+    // Multi-Company, Role Hierarchy & Configurable Permission Security Rules
+    // Hierarchy: Developer -> System Super Admin -> Company Admin -> Company User -> Employee
+    // Profile mapping stored in /user_profiles/{request.auth.uid}
+    // ────────────────────────────────────────────────────────────────────────
+
     function isAuthenticated() {
       return request.auth != null;
     }
-    
-    function isAdmin() {
-      // The adminUsers collection uses auto-generated IDs, so we can't reliably map
-      // request.auth.uid to an admin role in the rules. Allowing all authenticated users.
-      return isAuthenticated();
+
+    function hasProfile() {
+      return isAuthenticated() &&
+        exists(/databases/$(database)/documents/user_profiles/$(request.auth.uid));
     }
-    
-    function isOwner(userId) {
-      return isAuthenticated() && request.auth.uid == userId;
+
+    function profile() {
+      return get(/databases/$(database)/documents/user_profiles/$(request.auth.uid)).data;
+    }
+
+    function isActiveProfile() {
+      return !hasProfile() || profile().get('status', 'Active') == 'Active';
+    }
+
+    function isPlatformAdmin() {
+      return hasProfile() &&
+        isActiveProfile() &&
+        profile().get('role', '') in ['Developer', 'System Super Admin', 'Super Admin'];
+    }
+
+    function isCompanyAdmin() {
+      return hasProfile() &&
+        isActiveProfile() &&
+        profile().get('role', '') in ['Company Admin', 'Admin'];
+    }
+
+    function isEmployee() {
+      return hasProfile() && profile().get('role', '') == 'Employee';
+    }
+
+    function isCompanyStaff() {
+      return hasProfile() && isActiveProfile() && !isEmployee();
+    }
+
+    function userCompanyId() {
+      return hasProfile() ? profile().get('companyId', 'company_default') : 'company_default';
+    }
+
+    function docCompanyId(data) {
+      return data.get('companyId', 'company_default');
+    }
+
+    function sameCompany(data) {
+      return isPlatformAdmin() ||
+        (hasProfile() && docCompanyId(data) == userCompanyId());
+    }
+
+    function hasPerm(permKey) {
+      return isPlatformAdmin() ||
+        isCompanyAdmin() ||
+        (isCompanyStaff() && profile().get('permissions', {}).get(permKey, false) == true);
+    }
+
+    function isEmployeeSelf(empDocId, data) {
+      return isEmployee() &&
+        sameCompany(data) &&
+        (
+          empDocId == profile().get('employeeId', '__none__') ||
+          data.get('uid', '') == request.auth.uid ||
+          data.get('email', '') == profile().get('email', '__none__')
+        );
+    }
+
+    function isOwnEmployeeData(data) {
+      return isEmployee() &&
+        sameCompany(data) &&
+        (
+          data.get('employeeId', '') == profile().get('employeeId', '__none__') ||
+          data.get('employee_id', '') == profile().get('employeeId', '__none__') ||
+          data.get('employeeUid', '') == request.auth.uid ||
+          data.get('email', '') == profile().get('email', '__none__') ||
+          data.get('employeeEmail', '') == profile().get('email', '__none__')
+        );
+    }
+
+    // ── Auth Profile Mapping (synced on Admin Web & Mobile login) ──────────
+    match /user_profiles/{uid} {
+      allow read: if isAuthenticated() && (
+        request.auth.uid == uid ||
+        isPlatformAdmin() ||
+        (isCompanyAdmin() && sameCompany(resource.data))
+      );
+      allow create, update: if isAuthenticated() && (
+        request.auth.uid == uid ||
+        isPlatformAdmin() ||
+        (isCompanyAdmin() && sameCompany(request.resource.data))
+      );
+      allow delete: if isPlatformAdmin();
+    }
+
+    // ── Companies Directory (Platform Admins manage tenants) ───────────────
+    match /companies/{companyId} {
+      allow read: if isPlatformAdmin() ||
+        (isAuthenticated() && (!hasProfile() || companyId == userCompanyId()));
+      allow create, update, delete: if isPlatformAdmin();
+    }
+
+    // ── Portal Users & Configurable Permissions ────────────────────────────
+    match /users/{userId} {
+      allow read: if isAuthenticated() && (
+        !hasProfile() ||
+        isPlatformAdmin() ||
+        (sameCompany(resource.data) && (hasPerm('users') || resource.data.get('email', '') == profile().get('email', '__none__')))
+      );
+      allow create: if isPlatformAdmin() ||
+        (hasPerm('users') && sameCompany(request.resource.data) &&
+          !(request.resource.data.get('role', '') in ['Developer', 'System Super Admin', 'Super Admin']));
+      allow update: if isPlatformAdmin() ||
+        (hasPerm('users') && sameCompany(resource.data) && sameCompany(request.resource.data) &&
+          !(request.resource.data.get('role', '') in ['Developer', 'System Super Admin', 'Super Admin']));
+      allow delete: if isPlatformAdmin() ||
+        (hasPerm('users') && sameCompany(resource.data) &&
+          !(resource.data.get('role', '') in ['Developer', 'System Super Admin', 'Super Admin']));
     }
 
     match /Users/{userId} {
-      allow read: if isAuthenticated();
-      allow write: if isAdmin() || isOwner(userId);
+      allow read: if isPlatformAdmin() || (hasProfile() && sameCompany(resource.data));
+      allow write: if isPlatformAdmin() || (hasPerm('users') && sameCompany(request.resource.data));
     }
-    
+
     match /adminUsers/{docId} {
-      allow read, write: if isAuthenticated();
+      allow read: if isPlatformAdmin() || (hasPerm('users') && sameCompany(resource.data));
+      allow write: if isPlatformAdmin();
     }
-    
+
+    // ── Employees (Multi-company isolated; employees may only update self profile/presence/face) ──
+    match /employees/{employeeId} {
+      allow read: if isAuthenticated() && (
+        !hasProfile() ||
+        isPlatformAdmin() ||
+        (sameCompany(resource.data) && (
+          hasPerm('employees') ||
+          hasPerm('dashboard') ||
+          hasPerm('assignments') ||
+          hasPerm('attendance') ||
+          hasPerm('live_monitoring') ||
+          hasPerm('facial_verification') ||
+          hasPerm('anomaly_detection') ||
+          hasPerm('reports') ||
+          isEmployeeSelf(employeeId, resource.data)
+        ))
+      );
+      allow create: if isPlatformAdmin() ||
+        (sameCompany(request.resource.data) && hasPerm('employees'));
+      allow update: if isPlatformAdmin() ||
+        (sameCompany(resource.data) && sameCompany(request.resource.data) && (
+          hasPerm('employees') ||
+          hasPerm('assignments') ||
+          hasPerm('live_monitoring') ||
+          hasPerm('facial_verification') ||
+          (isEmployeeSelf(employeeId, resource.data) &&
+            !request.resource.data.diff(resource.data).affectedKeys().hasAny(['companyId', 'role', 'idNum']))
+        ));
+      allow delete: if isPlatformAdmin() ||
+        (sameCompany(resource.data) && hasPerm('employees'));
+    }
+
+    match /Employees/{employeeId} {
+      allow read: if isPlatformAdmin() || (sameCompany(resource.data) && (hasPerm('employees') || isEmployeeSelf(employeeId, resource.data)));
+      allow write: if isPlatformAdmin() || (sameCompany(request.resource.data) && hasPerm('employees'));
+    }
+
+    // ── Worksites (Company-scoped; employees read-only) ────────────────────
     match /Sites/{siteId} {
-      allow read: if isAuthenticated();
-      allow write: if isAdmin();
+      allow read: if isPlatformAdmin() || sameCompany(resource.data);
+      allow create, update: if isPlatformAdmin() || (sameCompany(request.resource.data) && hasPerm('worksites'));
+      allow delete: if isPlatformAdmin() || (sameCompany(resource.data) && hasPerm('worksites'));
     }
     match /sites/{siteId} {
-      allow read: if isAuthenticated();
-      allow write: if isAdmin();
+      allow read: if isPlatformAdmin() || sameCompany(resource.data);
+      allow create, update: if isPlatformAdmin() || (sameCompany(request.resource.data) && hasPerm('worksites'));
+      allow delete: if isPlatformAdmin() || (sameCompany(resource.data) && hasPerm('worksites'));
     }
-    
+
+    // ── Assignments (Employees READ-ONLY — cannot modify admin-controlled assignments!) ──
     match /Assignments/{assignmentId} {
-      allow read: if isAuthenticated();
-      allow write: if isAdmin();
+      allow read: if isPlatformAdmin() ||
+        (sameCompany(resource.data) && (
+          hasPerm('assignments') ||
+          hasPerm('dashboard') ||
+          hasPerm('live_monitoring') ||
+          hasPerm('attendance') ||
+          hasPerm('reports') ||
+          isOwnEmployeeData(resource.data)
+        ));
+      allow create, update: if isPlatformAdmin() ||
+        (sameCompany(request.resource.data) && hasPerm('assignments'));
+      allow delete: if isPlatformAdmin() ||
+        (sameCompany(resource.data) && hasPerm('assignments'));
     }
     match /assignments/{assignmentId} {
-      allow read: if isAuthenticated();
-      allow write: if isAdmin();
+      allow read: if isPlatformAdmin() ||
+        (sameCompany(resource.data) && (
+          hasPerm('assignments') ||
+          hasPerm('dashboard') ||
+          hasPerm('live_monitoring') ||
+          hasPerm('attendance') ||
+          hasPerm('reports') ||
+          isOwnEmployeeData(resource.data)
+        ));
+      allow create, update: if isPlatformAdmin() ||
+        (sameCompany(request.resource.data) && hasPerm('assignments'));
+      allow delete: if isPlatformAdmin() ||
+        (sameCompany(resource.data) && hasPerm('assignments'));
     }
-    
-    match /LocationLogs/{logId} {
-      allow read, create: if isAuthenticated();
-      allow update, delete: if isAdmin();
-    }
-    match /locationLogs/{logId} {
-      allow read, create: if isAuthenticated();
-      allow update, delete: if isAdmin();
-    }
-    match /location_logs/{logId} {
-      allow read, create: if isAuthenticated();
-      allow update, delete: if isAdmin();
-    }
-    
+
+    // ── Attendance Records (Company-scoped; employees can create/update own check-in/out) ──
     match /Attendance/{attendanceId} {
-      allow read, create, update: if isAuthenticated();
-      allow delete: if isAdmin();
+      allow read: if isPlatformAdmin() ||
+        (sameCompany(resource.data) && (
+          hasPerm('attendance') ||
+          hasPerm('dashboard') ||
+          hasPerm('live_monitoring') ||
+          hasPerm('reports') ||
+          hasPerm('analytics') ||
+          isOwnEmployeeData(resource.data)
+        ));
+      allow create: if isPlatformAdmin() ||
+        (sameCompany(request.resource.data) && (hasPerm('attendance') || isOwnEmployeeData(request.resource.data)));
+      allow update: if isPlatformAdmin() ||
+        (sameCompany(resource.data) && sameCompany(request.resource.data) && (hasPerm('attendance') || isOwnEmployeeData(resource.data)));
+      allow delete: if isPlatformAdmin() ||
+        (sameCompany(resource.data) && hasPerm('attendance'));
     }
     match /attendance/{attendanceId} {
-      allow read, create, update: if isAuthenticated();
-      allow delete: if isAdmin();
+      allow read: if isPlatformAdmin() ||
+        (sameCompany(resource.data) && (
+          hasPerm('attendance') ||
+          hasPerm('dashboard') ||
+          hasPerm('live_monitoring') ||
+          hasPerm('reports') ||
+          hasPerm('analytics') ||
+          isOwnEmployeeData(resource.data)
+        ));
+      allow create: if isPlatformAdmin() ||
+        (sameCompany(request.resource.data) && (hasPerm('attendance') || isOwnEmployeeData(request.resource.data)));
+      allow update: if isPlatformAdmin() ||
+        (sameCompany(resource.data) && sameCompany(request.resource.data) && (hasPerm('attendance') || isOwnEmployeeData(resource.data)));
+      allow delete: if isPlatformAdmin() ||
+        (sameCompany(resource.data) && hasPerm('attendance'));
     }
-    match /employees/{employeeId} {
-      allow read, write: if isAuthenticated();
-    }
-    match /Employees/{employeeId} {
-      allow read, write: if isAuthenticated();
-    }
-    match /delay_reports/{docId} {
-      allow read, create, update: if isAuthenticated();
-      allow delete: if isAdmin();
-    }
-    match /incident_reports/{docId} {
-      allow read, create, update: if isAuthenticated();
-      allow delete: if isAdmin();
-    }
-    match /facial_verifications/{docId} {
-      allow read, create, update: if isAuthenticated();
-      allow delete: if isAdmin();
-    }
-    match /notifications/{docId} {
-      allow read, create, update: if isAuthenticated();
-      allow delete: if isAdmin();
-    }
-
-    // ── Anti-spoofing / fraud-prevention collections ──
-
-    // Audit log of every security event. Employees may append their own; only
-    // admins can read across employees, update, or delete.
-    match /security_logs/{logId} {
-      allow read, create: if isAuthenticated();
-      allow update, delete: if isAdmin();
-    }
-
-    // Background movement history written by the device during a shift.
-    match /gps_history/{pointId} {
-      allow read, create: if isAuthenticated();
-      allow update, delete: if isAdmin();
-    }
-
-    // Verified attendance actions (separate from the legacy Attendance collection).
     match /attendance_logs/{logId} {
-      allow read, create: if isAuthenticated();
-      allow update, delete: if isAdmin();
-    }
-    
-    // Notifications and history logging
-    match /ActivityLogs/{logId} {
-      allow read, create, update: if isAuthenticated();
-      allow delete: if isAdmin();
+      allow read: if isPlatformAdmin() ||
+        (sameCompany(resource.data) && (hasPerm('attendance') || isOwnEmployeeData(resource.data)));
+      allow create: if isPlatformAdmin() ||
+        (sameCompany(request.resource.data) && (hasPerm('attendance') || isOwnEmployeeData(request.resource.data)));
+      allow update, delete: if isPlatformAdmin() || (sameCompany(resource.data) && hasPerm('attendance'));
     }
 
-    // AI risk assessments & anomaly alerts
+    // ── Facial Verifications (Admin requests + employee selfie submissions) ──
+    match /facial_verifications/{docId} {
+      allow read: if isPlatformAdmin() ||
+        (sameCompany(resource.data) && (
+          hasPerm('facial_verification') ||
+          hasPerm('dashboard') ||
+          hasPerm('reports') ||
+          isOwnEmployeeData(resource.data)
+        ));
+      allow create: if isPlatformAdmin() ||
+        (sameCompany(request.resource.data) && (hasPerm('facial_verification') || isOwnEmployeeData(request.resource.data)));
+      allow update: if isPlatformAdmin() ||
+        (sameCompany(resource.data) && sameCompany(request.resource.data) && (hasPerm('facial_verification') || isOwnEmployeeData(resource.data)));
+      allow delete: if isPlatformAdmin() ||
+        (sameCompany(resource.data) && hasPerm('facial_verification'));
+    }
+
+    // ── AI Anomalies & Operational Monitoring Events ───────────────────────
     match /ai_analysis/{docId} {
-      allow read, create, update: if isAuthenticated();
-      allow delete: if isAdmin();
+      allow read: if isPlatformAdmin() ||
+        (sameCompany(resource.data) && (
+          hasPerm('anomaly_detection') ||
+          hasPerm('dashboard') ||
+          hasPerm('analytics') ||
+          hasPerm('reports') ||
+          isOwnEmployeeData(resource.data)
+        ));
+      allow create: if isPlatformAdmin() ||
+        (sameCompany(request.resource.data) && (hasPerm('anomaly_detection') || isCompanyStaff() || isOwnEmployeeData(request.resource.data)));
+      allow update: if isPlatformAdmin() ||
+        (sameCompany(resource.data) && sameCompany(request.resource.data) && (hasPerm('anomaly_detection') || isOwnEmployeeData(resource.data)));
+      allow delete: if isPlatformAdmin() ||
+        (sameCompany(resource.data) && hasPerm('anomaly_detection'));
     }
 
-    // Employee anomaly responses & explanations
     match /anomaly_responses/{docId} {
-      allow read, create, update: if isAuthenticated();
-      allow delete: if isAdmin();
+      allow read: if isPlatformAdmin() ||
+        (sameCompany(resource.data) && (hasPerm('anomaly_detection') || isOwnEmployeeData(resource.data)));
+      allow create, update: if isPlatformAdmin() ||
+        (sameCompany(request.resource.data) && (hasPerm('anomaly_detection') || isOwnEmployeeData(request.resource.data)));
+      allow delete: if isPlatformAdmin() || (sameCompany(resource.data) && hasPerm('anomaly_detection'));
     }
 
-    // Device binding. An employee can register/append a record for their own
-    // account; only an admin can approve (set status) or remove devices.
-    match /device_registry/{docId} {
-      allow read: if isAuthenticated();
-      allow create, update: if isAuthenticated();
-      allow delete: if isAdmin();
-    }
-
-    // Fraud reports (mock/vpn/root/speed/inactivity/site-exit).
+    // ── Fraud & Security Reports ───────────────────────────────────────────
     match /fraud_reports/{docId} {
-      allow read, create: if isAuthenticated();
-      allow update, delete: if isAdmin();
+      allow read: if isPlatformAdmin() ||
+        (sameCompany(resource.data) && (hasPerm('fraud_reports') || hasPerm('anomaly_detection') || hasPerm('dashboard') || isOwnEmployeeData(resource.data)));
+      allow create: if isPlatformAdmin() ||
+        (sameCompany(request.resource.data) && (hasPerm('fraud_reports') || hasPerm('anomaly_detection') || isOwnEmployeeData(request.resource.data)));
+      allow update: if isPlatformAdmin() ||
+        (sameCompany(resource.data) && sameCompany(request.resource.data) && hasPerm('fraud_reports'));
+      allow delete: if isPlatformAdmin() ||
+        (sameCompany(resource.data) && hasPerm('fraud_reports'));
     }
 
-    // Geofence enter/exit/violation events.
-    match /geofence_events/{docId} {
-      allow read, create: if isAuthenticated();
-      allow update, delete: if isAdmin();
+    match /security_events/{docId} {
+      allow read: if isPlatformAdmin() ||
+        (sameCompany(resource.data) && (hasPerm('fraud_reports') || hasPerm('anomaly_detection') || isOwnEmployeeData(resource.data)));
+      allow create: if isPlatformAdmin() ||
+        (sameCompany(request.resource.data) && (hasPerm('fraud_reports') || hasPerm('anomaly_detection') || isOwnEmployeeData(request.resource.data)));
+      allow update, delete: if isPlatformAdmin() ||
+        (sameCompany(resource.data) && hasPerm('fraud_reports'));
     }
 
-    // ── Work Type Module – New Collections ──────────────────
+    match /security_logs/{logId} {
+      allow read: if isPlatformAdmin() ||
+        (sameCompany(resource.data) && (hasPerm('fraud_reports') || isOwnEmployeeData(resource.data)));
+      allow create: if isPlatformAdmin() ||
+        (sameCompany(request.resource.data) && (hasPerm('fraud_reports') || isOwnEmployeeData(request.resource.data)));
+      allow update, delete: if isPlatformAdmin() ||
+        (sameCompany(resource.data) && hasPerm('fraud_reports'));
+    }
 
-    // Tracking logs: stores both fixed-site geofence events and
-    // mobile destination arrival/completion events.
-    // Fields: trackingType (fixed|mobile), entryExitEvents, destinationArrival
+    // ── Delay & Incident Reports ───────────────────────────────────────────
+    match /delay_reports/{docId} {
+      allow read: if isPlatformAdmin() ||
+        (sameCompany(resource.data) && (hasPerm('delay_reports') || hasPerm('dashboard') || isOwnEmployeeData(resource.data)));
+      allow create: if isPlatformAdmin() ||
+        (sameCompany(request.resource.data) && (hasPerm('delay_reports') || isOwnEmployeeData(request.resource.data)));
+      allow update: if isPlatformAdmin() ||
+        (sameCompany(resource.data) && sameCompany(request.resource.data) && hasPerm('delay_reports'));
+      allow delete: if isPlatformAdmin() ||
+        (sameCompany(resource.data) && hasPerm('delay_reports'));
+    }
+
+    match /incident_reports/{docId} {
+      allow read: if isPlatformAdmin() ||
+        (sameCompany(resource.data) && (hasPerm('delay_reports') || hasPerm('dashboard') || isOwnEmployeeData(resource.data)));
+      allow create: if isPlatformAdmin() ||
+        (sameCompany(request.resource.data) && (hasPerm('delay_reports') || isOwnEmployeeData(request.resource.data)));
+      allow update: if isPlatformAdmin() ||
+        (sameCompany(resource.data) && sameCompany(request.resource.data) && hasPerm('delay_reports'));
+      allow delete: if isPlatformAdmin() ||
+        (sameCompany(resource.data) && hasPerm('delay_reports'));
+    }
+
+    // ── Persistent Notifications ───────────────────────────────────────────
+    match /notifications/{docId} {
+      allow read: if isPlatformAdmin() ||
+        (sameCompany(resource.data) && (
+          hasPerm('notifications') ||
+          hasPerm('dashboard') ||
+          isOwnEmployeeData(resource.data) ||
+          resource.data.get('target', '') == 'All Employees'
+        ));
+      allow create: if isPlatformAdmin() ||
+        (sameCompany(request.resource.data) && (isCompanyStaff() || isEmployee()));
+      allow update: if isPlatformAdmin() ||
+        (sameCompany(resource.data) && sameCompany(request.resource.data) && (
+          hasPerm('notifications') ||
+          hasPerm('dashboard') ||
+          isOwnEmployeeData(resource.data)
+        ));
+      allow delete: if isPlatformAdmin() ||
+        (sameCompany(resource.data) && hasPerm('notifications'));
+    }
+
+    // ── Telemetry, Location Logs, Geofence Events & Activity Logs ──────────
+    match /LocationLogs/{logId} {
+      allow read: if isPlatformAdmin() || (sameCompany(resource.data) && (isCompanyStaff() || isOwnEmployeeData(resource.data)));
+      allow create: if isPlatformAdmin() || (sameCompany(request.resource.data) && (isCompanyStaff() || isOwnEmployeeData(request.resource.data)));
+      allow update, delete: if isPlatformAdmin() || (sameCompany(resource.data) && (isCompanyAdmin() || hasPerm('live_monitoring')));
+    }
+    match /locationLogs/{logId} {
+      allow read: if isPlatformAdmin() || (sameCompany(resource.data) && (isCompanyStaff() || isOwnEmployeeData(resource.data)));
+      allow create: if isPlatformAdmin() || (sameCompany(request.resource.data) && (isCompanyStaff() || isOwnEmployeeData(request.resource.data)));
+      allow update, delete: if isPlatformAdmin() || (sameCompany(resource.data) && (isCompanyAdmin() || hasPerm('live_monitoring')));
+    }
+    match /location_logs/{logId} {
+      allow read: if isPlatformAdmin() || (sameCompany(resource.data) && (isCompanyStaff() || isOwnEmployeeData(resource.data)));
+      allow create: if isPlatformAdmin() || (sameCompany(request.resource.data) && (isCompanyStaff() || isOwnEmployeeData(request.resource.data)));
+      allow update, delete: if isPlatformAdmin() || (sameCompany(resource.data) && (isCompanyAdmin() || hasPerm('live_monitoring')));
+    }
+    match /gps_history/{pointId} {
+      allow read: if isPlatformAdmin() || (sameCompany(resource.data) && (isCompanyStaff() || isOwnEmployeeData(resource.data)));
+      allow create: if isPlatformAdmin() || (sameCompany(request.resource.data) && (isCompanyStaff() || isOwnEmployeeData(request.resource.data)));
+      allow update, delete: if isPlatformAdmin() || (sameCompany(resource.data) && isCompanyAdmin());
+    }
     match /tracking_logs/{logId} {
-      allow read, create: if isAuthenticated();
-      allow update, delete: if isAdmin();
+      allow read: if isPlatformAdmin() || (sameCompany(resource.data) && (isCompanyStaff() || isOwnEmployeeData(resource.data)));
+      allow create: if isPlatformAdmin() || (sameCompany(request.resource.data) && (isCompanyStaff() || isOwnEmployeeData(request.resource.data)));
+      allow update, delete: if isPlatformAdmin() || (sameCompany(resource.data) && isCompanyAdmin());
     }
-
-    // Mobile route logs per employee per day.
     match /route_logs/{logId} {
-      allow read, create: if isAuthenticated();
-      allow update, delete: if isAdmin();
+      allow read: if isPlatformAdmin() || (sameCompany(resource.data) && (isCompanyStaff() || isOwnEmployeeData(resource.data)));
+      allow create: if isPlatformAdmin() || (sameCompany(request.resource.data) && (isCompanyStaff() || isOwnEmployeeData(request.resource.data)));
+      allow update, delete: if isPlatformAdmin() || (sameCompany(resource.data) && isCompanyAdmin());
+    }
+    match /geofence_events/{docId} {
+      allow read: if isPlatformAdmin() || (sameCompany(resource.data) && (isCompanyStaff() || isOwnEmployeeData(resource.data)));
+      allow create: if isPlatformAdmin() || (sameCompany(request.resource.data) && (isCompanyStaff() || isOwnEmployeeData(request.resource.data)));
+      allow update, delete: if isPlatformAdmin() || (sameCompany(resource.data) && isCompanyAdmin());
+    }
+    match /geofence_violations/{docId} {
+      allow read: if isPlatformAdmin() || (sameCompany(resource.data) && (isCompanyStaff() || isOwnEmployeeData(resource.data)));
+      allow create: if isPlatformAdmin() || (sameCompany(request.resource.data) && (isCompanyStaff() || isOwnEmployeeData(request.resource.data)));
+      allow update, delete: if isPlatformAdmin() || (sameCompany(resource.data) && isCompanyAdmin());
+    }
+    match /ActivityLogs/{logId} {
+      allow read: if isPlatformAdmin() || (sameCompany(resource.data) && (isCompanyStaff() || isOwnEmployeeData(resource.data)));
+      allow create: if isPlatformAdmin() || (sameCompany(request.resource.data) && (isCompanyStaff() || isEmployee()));
+      allow update, delete: if isPlatformAdmin() || (sameCompany(resource.data) && (isCompanyAdmin() || hasPerm('settings')));
+    }
+    match /device_registry/{docId} {
+      allow read: if isPlatformAdmin() || (sameCompany(resource.data) && (isCompanyStaff() || isOwnEmployeeData(resource.data)));
+      allow create, update: if isPlatformAdmin() || (sameCompany(request.resource.data) && (isCompanyStaff() || isOwnEmployeeData(request.resource.data)));
+      allow delete: if isPlatformAdmin() || (sameCompany(resource.data) && isCompanyAdmin());
     }
 
-    // Detailed geofence violation records for Fixed Site employees.
-    match /geofence_violations/{docId} {
-      allow read, create: if isAuthenticated();
-      allow update, delete: if isAdmin();
+    // ── Default Deny ───────────────────────────────────────────────────────
+    match /{document=**} {
+      allow read, write: if false;
     }
   }
 }

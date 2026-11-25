@@ -12,13 +12,15 @@ import {
 } from 'recharts';
 import { db, collection, onSnapshot, query } from '../firebase';
 import { showToast } from '../utils/toast';
+import { useCompany } from '../utils/companyContext';
 
 const STATUS_STYLES = {
-  'Completed':  { bg: '#ECFDF5', color: '#065F46', border: '#A7F3D0', dot: '#10B981' },
-  'On Site':    { bg: '#FFFBEB', color: '#92400E', border: '#FDE68A', dot: '#F59E0B' },
-  'Missed':     { bg: '#FEF2F2', color: '#991B1B', border: '#FCA5A5', dot: '#EF4444' },
-  'In Transit': { bg: '#EFF6FF', color: '#1E40AF', border: '#BFDBFE', dot: '#3B82F6' },
-  'Offline':    { bg: '#F8FAFC', color: '#475569', border: '#E2E8F0', dot: '#64748B' },
+  'Completed':     { bg: '#ECFDF5', color: '#065F46', border: '#A7F3D0', dot: '#10B981' },
+  'Late Checkout': { bg: '#F5F3FF', color: '#6D28D9', border: '#DDD6FE', dot: '#7C3AED' },
+  'On Site':       { bg: '#FFFBEB', color: '#92400E', border: '#FDE68A', dot: '#F59E0B' },
+  'Missed':        { bg: '#FEF2F2', color: '#991B1B', border: '#FCA5A5', dot: '#EF4444' },
+  'In Transit':    { bg: '#EFF6FF', color: '#1E40AF', border: '#BFDBFE', dot: '#3B82F6' },
+  'Offline':       { bg: '#F8FAFC', color: '#475569', border: '#E2E8F0', dot: '#64748B' },
 };
 
 function formatReportTime(val) {
@@ -56,23 +58,27 @@ function formatMinutesToHoursMins(val) {
 }
 
 export default function ReportsPage() {
-  const [employees, setEmployees] = useState([]);
-  const [attendance, setAttendance] = useState([]);
+  const { matchesCompany } = useCompany();
+  const [rawEmployees, setRawEmployees] = useState([]);
+  const [rawAttendance, setRawAttendance] = useState([]);
   const [search, setSearch] = useState('');
   const [reportType, setReportType] = useState('all');
   const [dateRange, setDateRange] = useState('Today');
   const [selectedReport, setSelectedReport] = useState(null);
 
+  const employees = React.useMemo(() => rawEmployees.filter(matchesCompany), [rawEmployees, matchesCompany]);
+  const attendance = React.useMemo(() => rawAttendance.filter(matchesCompany), [rawAttendance, matchesCompany]);
+
   useEffect(() => {
     try {
       const unsubEmp = onSnapshot(query(collection(db, 'employees')), (snap) => {
-        setEmployees(snap.docs.map(d => ({ id: d.id, ...d.data() })));
+        setRawEmployees(snap.docs.map(d => ({ id: d.id, ...d.data() })));
       });
       let att1Docs = [], att2Docs = [];
       const mergeAtt = () => {
         const map = new Map();
         [...att1Docs, ...att2Docs].forEach(d => { if (d.id) map.set(d.id, d); });
-        setAttendance(Array.from(map.values()));
+        setRawAttendance(Array.from(map.values()));
       };
 
       const unsubAtt1 = onSnapshot(query(collection(db, 'Attendance')), (snap) => {
@@ -113,10 +119,10 @@ export default function ReportsPage() {
 
   // Analytics Metrics Calculation from real data
   const totalReports = displayReports.length;
-  const completedCount = displayReports.filter(r => r.status === 'Completed').length;
+  const completedCount = displayReports.filter(r => r.status === 'Completed' || r.status === 'Late Checkout').length;
   const onSiteCount = displayReports.filter(r => r.status === 'On Site').length;
   const inTransitCount = displayReports.filter(r => r.status === 'In Transit').length;
-  const missedCount = displayReports.filter(r => r.status === 'Missed').length;
+  const missedCount = displayReports.filter(r => r.status === 'Missed' || r.status === 'Missed Shift').length;
 
   const attendanceRate = totalReports > 0 ? Math.round(((completedCount + onSiteCount + inTransitCount) / totalReports) * 100) : 0;
 
@@ -136,13 +142,26 @@ export default function ReportsPage() {
     { name: 'Mobile Field', Staff: mobileStaffCount, Active: inTransitCount },
   ];
 
-  const weeklyTrendData = [
-    { day: 'Mon', checkIns: Math.max(0, totalReports - 4) },
-    { day: 'Tue', checkIns: Math.max(0, totalReports - 2) },
-    { day: 'Wed', checkIns: Math.max(0, totalReports - 3) },
-    { day: 'Thu', checkIns: Math.max(0, totalReports - 1) },
-    { day: 'Today', checkIns: totalReports },
-  ];
+  const weeklyTrendData = React.useMemo(() => {
+    const dayLabels = ['Sun', 'Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat'];
+    const today = new Date();
+    const buckets = [];
+    for (let i = 4; i >= 0; i--) {
+      const d = new Date(today.getFullYear(), today.getMonth(), today.getDate() - i);
+      const key = d.toISOString().slice(0, 10);
+      buckets.push({ key, day: i === 0 ? 'Today' : dayLabels[d.getDay()], checkIns: 0 });
+    }
+    displayReports.forEach((r) => {
+      const raw = r.date || r.timeIn || r.checkIn || r.createdAt;
+      if (!raw) return;
+      const dt = raw?.toDate ? raw.toDate() : new Date(raw);
+      if (isNaN(dt.getTime())) return;
+      const key = dt.toISOString().slice(0, 10);
+      const b = buckets.find((x) => x.key === key);
+      if (b) b.checkIns += 1;
+    });
+    return buckets.map(({ day, checkIns }) => ({ day, checkIns }));
+  }, [displayReports]);
 
   // CSV Export Handler
   const exportToCSV = () => {

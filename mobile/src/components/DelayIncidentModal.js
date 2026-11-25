@@ -54,21 +54,22 @@ export default function DelayIncidentModal({ visible, employee, assignment, onCl
   const emailPrefixName = authEmail ? authEmail.split('@')[0].split('.').map(p => p.charAt(0).toUpperCase() + p.slice(1)).join(' ') : 'Field Staff';
 
   const currentEmpId = React.useMemo(() => {
-    return employee?.id || employee?.employeeId || employee?.emp_id || auth?.currentUser?.uid || 'emp_fallback';
+    return employee?.id || employee?.employeeId || employee?.emp_id || auth?.currentUser?.uid || null;
   }, [employee?.id, employee?.employeeId, employee?.emp_id]);
 
   const currentEmpName = React.useMemo(() => {
-    return employee?.name || employee?.employeeName || auth?.currentUser?.displayName || emailPrefixName || 'Jupiter Desuyo';
+    return employee?.name || employee?.employeeName || auth?.currentUser?.displayName || emailPrefixName || 'Employee';
   }, [employee?.name, employee?.employeeName, emailPrefixName]);
 
   const currentEmpEmail = React.useMemo(() => {
-    return getCleanEmployeeEmail(employee, auth?.currentUser) || (currentEmpName ? `${currentEmpName.toLowerCase().replace(/\s+/g, '.')}@subai.com` : 'employee@subai.com');
-  }, [employee?.email, currentEmpName]);
+    return getCleanEmployeeEmail(employee, auth?.currentUser) || '';
+  }, [employee?.email]);
 
-  const currentEmpType = employee?.type || employee?.workType || employee?.role || 'Field Employee';
-  const currentSiteName = assignment?.site || assignment?.siteName || assignment?.name || employee?.assignedSiteName || 'Assigned Worksite';
-  const currentSiteId = assignment?.siteId || assignment?.id || employee?.assignedSite || 'site-main';
-  const currentAsgnId = assignment?.id || 'asgn-main';
+  const currentCompanyId = employee?.companyId || assignment?.companyId || 'company_default';
+  const currentEmpType = employee?.workType || employee?.employeeType || employee?.type || employee?.role || 'Employee';
+  const currentSiteName = assignment?.site || assignment?.siteName || assignment?.name || employee?.assignedSiteName || employee?.assignedSite || 'Assigned Worksite';
+  const currentSiteId = assignment?.siteId || assignment?.id || employee?.assignedSiteId || null;
+  const currentAsgnId = assignment?.id || null;
 
   // Get current GPS on modal open
   useEffect(() => {
@@ -96,9 +97,9 @@ export default function DelayIncidentModal({ visible, employee, assignment, onCl
           const nameMatch = empName && currName && (empName.includes(currName) || currName.includes(empName));
           const emailMatch = empEmail && currEmail && empEmail === currEmail;
           const idMatch = empId && currId && empId === currId;
-          const isFallback = d.employeeId === 'emp_fallback' || empName === 'jupiter desuyo' || currName === 'jupiter desuyo';
+          const companyOk = (d.companyId || 'company_default') === currentCompanyId;
 
-          return nameMatch || emailMatch || idMatch || isFallback;
+          return companyOk && (nameMatch || emailMatch || idMatch);
         });
       };
 
@@ -192,8 +193,8 @@ export default function DelayIncidentModal({ visible, employee, assignment, onCl
         });
       }
     } catch (e) {
-      console.warn('GPS location fetch fallback:', e);
-      setLocationData({ latitude: 14.5815, longitude: 121.0571, accuracy: 15 });
+      console.warn('GPS location unavailable:', e?.message);
+      setLocationData(null);
     } finally {
       setLocating(false);
     }
@@ -235,28 +236,28 @@ export default function DelayIncidentModal({ visible, employee, assignment, onCl
     }
 
     setSubmitting(true);
-    const coords = locationData || { latitude: 14.5815, longitude: 121.0571, accuracy: 15 };
+    const coords = locationData || { latitude: null, longitude: null, accuracy: null };
     const isDelay = activeTab === 'delay';
     const collectionName = isDelay ? 'delay_reports' : 'incident_reports';
 
     const payload = {
-      id: `doc_${Date.now()}_${Math.random().toString(36).substring(2, 7)}`,
+      companyId: currentCompanyId,
       reportId: `REP-${Math.floor(100000 + Math.random() * 900000)}`,
-      employeeId: currentEmpId || 'emp_fallback',
-      employeeName: currentEmpName || 'Jupiter Desuyo',
-      employeeEmail: currentEmpEmail || 'jupiter@subai.com',
-      employeeType: currentEmpType || 'Field Employee',
-      assignmentId: currentAsgnId || 'asgn-001',
-      assignmentName: currentSiteName || 'Assigned Worksite',
-      siteId: currentSiteId || 'site-main',
-      siteName: currentSiteName || 'Assigned Worksite',
+      employeeId: currentEmpId,
+      employeeName: currentEmpName,
+      employeeEmail: currentEmpEmail,
+      employeeType: currentEmpType,
+      assignmentId: currentAsgnId,
+      assignmentName: currentSiteName,
+      siteId: currentSiteId,
+      siteName: currentSiteName,
       category: isDelay ? 'Delay' : 'Incident',
       reason: isDelay ? reason : (incidentType || 'Security Alert'),
       incidentType: !isDelay ? incidentType : (reason || 'General Incident'),
       description: description.trim(),
-      latitude: coords.latitude || 14.5815,
-      longitude: coords.longitude || 121.0571,
-      locationAccuracy: coords.accuracy || 15,
+      latitude: coords.latitude,
+      longitude: coords.longitude,
+      locationAccuracy: coords.accuracy,
       delayDuration: isDelay ? Number(delayDuration) : 0,
       evidenceUrl: photoUri || null,
       photoEvidence: photoUri || null,
@@ -270,8 +271,15 @@ export default function DelayIncidentModal({ visible, employee, assignment, onCl
     try {
       await ensureAuthenticatedSession();
 
-      // 1. Primary write to ActivityLogs (Whitelisted and allowed by Firestore security rules)
+      // 1. Primary write to delay_reports / incident_reports
+      await addDoc(collection(db, collectionName), {
+        ...payload,
+        timestamp: serverTimestamp(),
+      });
+
+      // 2. Audit log in ActivityLogs (keep photo light)
       const activityPayload = {
+        companyId: currentCompanyId,
         employee_id: payload.employeeId,
         employeeId: payload.employeeId,
         employeeName: payload.employeeName,
@@ -282,37 +290,42 @@ export default function DelayIncidentModal({ visible, employee, assignment, onCl
         site_id: payload.siteId,
         siteName: payload.siteName,
         action: isDelay ? `Filed Delay Report: ${reason}` : `Filed Incident Alert: ${incidentType}`,
-        type: 'Security Alert',
+        type: isDelay ? 'Delay Report' : 'Incident',
         category: isDelay ? 'Delay' : 'Incident',
         reason: isDelay ? reason : incidentType,
         incidentType: !isDelay ? incidentType : reason,
         description: description.trim(),
         delayDuration: isDelay ? Number(delayDuration) : 0,
-        evidenceUrl: photoUri || null,
-        photo: photoUri || null,
-        photoEvidence: photoUri || null,
-        capturedEvidence: photoUri || null,
         latitude: coords.latitude,
         longitude: coords.longitude,
-        locationAccuracy: coords.accuracy || 15,
+        locationAccuracy: coords.accuracy,
         submittedAt: payload.submittedAt,
         status: 'Pending',
         reportId: payload.reportId,
         timestamp: serverTimestamp(),
       };
 
-      await addDoc(collection(db, 'ActivityLogs'), activityPayload);
+      await addDoc(collection(db, 'ActivityLogs'), activityPayload).catch(() => {});
 
-      // 2. Secondary write to collectionName (fails gracefully if restricted by security rules)
-      await addDoc(collection(db, collectionName), {
-        ...payload,
+      // 3. Persistent Admin Notification
+      const nowD = new Date();
+      await addDoc(collection(db, 'notifications'), {
+        companyId: currentCompanyId,
+        type: 'admin',
+        notificationType: isDelay ? 'DELAY_REPORT' : 'INCIDENT_REPORT',
+        targetRole: 'admin',
+        title: isDelay ? `Delay Report: ${reason}` : `Incident Report: ${incidentType}`,
+        message: `${payload.employeeName} reported ${isDelay ? `${reason} (${delayDuration}m delay)` : incidentType}: ${description.trim()}`,
+        severity: isDelay ? 'Medium' : 'High',
+        employeeId: payload.employeeId,
+        employeeName: payload.employeeName,
+        relatedRecordId: payload.reportId,
+        date: nowD.toISOString().split('T')[0],
+        time: nowD.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit', hour12: true }),
+        status: 'Unread',
+        read: false,
         timestamp: serverTimestamp(),
-      }).catch(() => {});
-
-      // 3. Secondary write to tracking_logs for compatibility
-      await addDoc(collection(db, 'tracking_logs'), {
-        ...payload,
-        timestamp: serverTimestamp(),
+        createdAt: serverTimestamp(),
       }).catch(() => {});
 
       Alert.alert(

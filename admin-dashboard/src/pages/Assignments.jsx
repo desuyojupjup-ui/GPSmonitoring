@@ -4,6 +4,7 @@ import { Search, Plus, Edit2, Trash2, X, ClipboardList, Clock, CheckCircle, XCir
 import Swal from 'sweetalert2';
 import { db, collection, onSnapshot, addDoc, updateDoc, deleteDoc, doc, setDoc, query, getDocs } from '../firebase';
 import { showToast, showConfirmDelete } from '../utils/toast';
+import { useCompany, DEFAULT_COMPANY_ID } from '../utils/companyContext';
 import { ResponsiveContainer, PieChart, Pie, Cell, BarChart, Bar, XAxis, YAxis, Tooltip, CartesianGrid } from 'recharts';
 
 const CustomPieTooltip = ({ active, payload }) => {
@@ -440,7 +441,23 @@ export function resolveAssignmentStatus(asg, attendanceList = [], now = new Date
   return 'Active';
 }
 
-const EMPTY = { empName: '', empId: '', site: '', assignedSites: [], assignDate: '', shiftStart: '08:00', shiftEnd: '17:00', shift: '08:00 AM - 05:00 PM', priority: 'Medium', status: 'Active' };
+const EMPTY = {
+  empName: '',
+  empId: '',
+  workType: 'Mobile Field Employee',
+  site: '',
+  assignedSites: [],
+  assignDate: new Date().toISOString().split('T')[0],
+  shiftStart: '08:00',
+  shiftEnd: '17:00',
+  shift: '08:00 AM - 05:00 PM',
+  geofenceRadius: 100,
+  locationSyncInterval: 30,
+  estimatedTravelTimeMinutes: 30,
+  travelGracePeriodMinutes: 15,
+  priority: 'Medium',
+  status: 'Active',
+};
 
 export function isFixedEmployeeAssignment(asg, employeesList = []) {
   if (!asg) return false;
@@ -476,10 +493,11 @@ const selStyle = { width: '100%', padding: '9px 12px', borderRadius: 8, border: 
 const inpStyle = { width: '100%', padding: '9px 12px', borderRadius: 8, border: '1px solid #E5E7EB', fontSize: 13, outline: 'none', fontFamily: 'Inter, sans-serif' };
 
 export default function Assignments() {
+  const { matchesCompany, stampCompany } = useCompany();
   const [rawData, setRawData] = useState([]);
-  const [employees, setEmployees] = useState([]);
-  const [sites, setSites] = useState([]);
-  const [attendance, setAttendance] = useState([]);
+  const [rawEmployees, setRawEmployees] = useState([]);
+  const [rawSites, setRawSites] = useState([]);
+  const [rawAttendance, setRawAttendance] = useState([]);
   const [loading, setLoading] = useState(true);
   const [search, setSearch] = useState('');
   const [modal, setModal] = useState(false);
@@ -488,9 +506,14 @@ export default function Assignments() {
   const [isSaving, setIsSaving] = useState(false);
   const { toasts, show } = useToast();
 
+  const employees = React.useMemo(() => rawEmployees.filter(matchesCompany), [rawEmployees, matchesCompany]);
+  const sites = React.useMemo(() => rawSites.filter(matchesCompany), [rawSites, matchesCompany]);
+  const attendance = React.useMemo(() => rawAttendance.filter(matchesCompany), [rawAttendance, matchesCompany]);
+  const scopedRawData = React.useMemo(() => rawData.filter(matchesCompany), [rawData, matchesCompany]);
+
   // Only show Field Employee (Mobile Field Employee) assignments on the Assignments page;
   // Fixed Site Employees have their assigned site configured directly on the Employees page.
-  const data = rawData.filter(d => !isFixedEmployeeAssignment(d, employees));
+  const data = scopedRawData.filter(d => !isFixedEmployeeAssignment(d, employees));
   const fieldEmployees = employees.filter(e => {
     const wt = (e.workType || '').toString().trim().toLowerCase();
     return wt.includes('mobile') || wt.includes('field');
@@ -524,19 +547,19 @@ export default function Assignments() {
 
       const qEmp = query(collection(db, 'employees'));
       const unsubEmp = onSnapshot(qEmp, (snapshot) => {
-        setEmployees(snapshot.docs.map(d => ({ id: d.id, ...d.data() })));
+        setRawEmployees(snapshot.docs.map(d => ({ id: d.id, ...d.data() })));
       });
 
       const qSites = query(collection(db, 'Sites'));
       const unsubSites = onSnapshot(qSites, (snapshot) => {
-        setSites(snapshot.docs.map(d => ({ id: d.id, ...d.data() })));
+        setRawSites(snapshot.docs.map(d => ({ id: d.id, ...d.data() })));
       });
 
       let attDocs1 = [], attDocs2 = [];
       const updateAttendance = () => {
         const merged = [...attDocs1, ...attDocs2];
         const unique = Array.from(new Map(merged.map(item => [item.id, item])).values());
-        setAttendance(unique);
+        setRawAttendance(unique);
       };
 
       const unsubAtt1 = onSnapshot(query(collection(db, 'attendance')), (snap) => {
@@ -634,6 +657,7 @@ export default function Assignments() {
               syncedMissedAttRef.current.add(missedAttId);
               const missedAttDoc = {
                 id: missedAttId,
+                companyId: asg.companyId || DEFAULT_COMPANY_ID,
                 attendanceId: missedAttId,
                 assignmentId: asg.id,
                 employee_name: empName,
@@ -724,6 +748,7 @@ export default function Assignments() {
               syncedAlertsRef.current.add(alertId);
               const anomalyDoc = {
                 id: alertId,
+                companyId: asg.companyId || DEFAULT_COMPANY_ID,
                 anomalyId: alertId,
                 type: 'Missed Shift Check-In',
                 eventType: 'MISSED_CHECK_IN',
@@ -761,6 +786,7 @@ export default function Assignments() {
               syncedAlertsRef.current.add(alertId);
               const anomalyDoc = {
                 id: alertId,
+                companyId: asg.companyId || DEFAULT_COMPANY_ID,
                 anomalyId: alertId,
                 type: 'Missing Shift Check-Out',
                 eventType: 'MISSING_CHECK_OUT',
@@ -987,16 +1013,42 @@ export default function Assignments() {
 
   const location = useLocation();
 
-  const openAdd  = () => { setForm(EMPTY); setEditId(null); setModal(true); };
+  const openAdd  = () => {
+    setForm({ ...EMPTY, assignDate: new Date().toISOString().split('T')[0] });
+    setEditId(null);
+    setModal(true);
+  };
   const openEdit = (row) => {
     let sitesArray = Array.isArray(row.assignedSites) ? row.assignedSites : [];
     if (sitesArray.length === 0 && row.site) {
       sitesArray = row.site.split(',').map(s => s.trim()).filter(Boolean);
     }
+    const to24 = (t, fallback) => {
+      if (!t) return fallback;
+      const m = String(t).trim().match(/^(\d{1,2}):(\d{2})(?::\d{2})?\s*([AP]M)?$/i);
+      if (!m) return fallback;
+      let h = parseInt(m[1], 10);
+      const min = m[2];
+      if (m[3]) {
+        const ap = m[3].toUpperCase();
+        if (ap === 'PM' && h < 12) h += 12;
+        if (ap === 'AM' && h === 12) h = 0;
+      }
+      return `${String(h).padStart(2, '0')}:${min}`;
+    };
+    const shiftParts = (row.shift || row.shiftTime || '').split(/\s*[-~]|(?:\s+to\s+)\s*/i).filter(Boolean);
     setForm({
+      ...EMPTY,
       ...row,
       assignedSites: sitesArray,
-      site: row.site || sitesArray.join(', ')
+      site: row.site || sitesArray.join(', '),
+      assignDate: extractDateString(row.assignDate || row.scheduleDate || row.date) || new Date().toISOString().split('T')[0],
+      shiftStart: to24(row.shiftStart || row.startTime || shiftParts[0], '08:00'),
+      shiftEnd: to24(row.shiftEnd || row.endTime || shiftParts[1], '17:00'),
+      geofenceRadius: Number(row.geofenceRadius) || 100,
+      locationSyncInterval: Number(row.locationSyncInterval) || 30,
+      estimatedTravelTimeMinutes: Number(row.estimatedTravelTimeMinutes) || 30,
+      travelGracePeriodMinutes: Number(row.travelGracePeriodMinutes) || 15,
     });
     setEditId(row.id);
     setModal(true);
@@ -1102,32 +1154,48 @@ export default function Assignments() {
       return showToast('error', 'Field Employees Only', 'Fixed Site Employees already have their assigned site set on the Employees page.');
     }
 
-    let siteId = 'site-main';
-    let siteName = form.site || 'Assigned Worksite';
-    let siteAddress = 'Registered Worksite Address';
-    let latitude = 10.2818;
-    let longitude = 123.8808;
-    let geofenceRadius = 20;
+    let siteId = '';
+    let siteName = form.site || '';
+    let siteAddress = '';
+    let latitude = null;
+    let longitude = null;
+    let geofenceRadius = Number(form.geofenceRadius) || 100;
     let assignedSitesList = (form.assignedSites && form.assignedSites.length > 0)
       ? form.assignedSites
       : (form.site ? form.site.split(',').map(s => s.trim()).filter(Boolean) : []);
 
     if (assignedSitesList.length === 0) {
-      return showToast('error', 'Missing Assigned Sites', 'Please select at least one site for this mobile field employee.');
+      return showToast('error', 'Missing Assigned Sites', 'Please select at least one worksite or destination for this assignment.');
     }
 
     siteName = assignedSitesList.join(', ');
-    const matchedSites = sites.filter(s => assignedSitesList.includes(s.name || s.id));
+    // Preserve admin's selected destination order for travel time sequencing
+    const matchedSites = assignedSitesList
+      .map(nameOrId => sites.find(s => (s.name || s.id) === nameOrId))
+      .filter(Boolean);
+
+    const destinationSchedule = matchedSites.map((s, idx) => ({
+      order: idx + 1,
+      siteId: s.id,
+      name: s.name || s.id,
+      address: s.address || s.location || '',
+      latitude: Number(s.latitude ?? s.lat ?? 0) || null,
+      longitude: Number(s.longitude ?? s.lng ?? 0) || null,
+      radius: Number(String(s.geofenceRadius ?? s.radius ?? geofenceRadius).replace(/[^0-9.]/g, '')) || geofenceRadius,
+    }));
+
     if (matchedSites.length > 0) {
       siteId = matchedSites.map(s => s.id).join(', ');
       siteAddress = matchedSites.map(s => s.address || s.location || s.name).join(' | ');
-      latitude = Number(matchedSites[0].latitude || matchedSites[0].lat || 10.2818);
-      longitude = Number(matchedSites[0].longitude || matchedSites[0].lng || 123.8808);
-      geofenceRadius = Number(matchedSites[0].geofenceRadius ?? matchedSites[0].radius ?? 20);
+      latitude = Number(matchedSites[0].latitude ?? matchedSites[0].lat) || null;
+      longitude = Number(matchedSites[0].longitude ?? matchedSites[0].lng) || null;
+      if (!form.geofenceRadius) {
+        geofenceRadius = Number(String(matchedSites[0].geofenceRadius ?? matchedSites[0].radius ?? 100).replace(/[^0-9.]/g, '')) || 100;
+      }
     }
 
     const todayStr = new Date().toISOString().split('T')[0];
-    if (form.assignDate && form.assignDate < todayStr) {
+    if (!editId && form.assignDate && form.assignDate < todayStr) {
       return showToast('error', 'Invalid Date', 'Schedule Assignment Date cannot be in the past. Please select today or a future date.');
     }
 
@@ -1151,8 +1219,40 @@ export default function Assignments() {
         ? `${sStartFormatted} - ${sEndFormatted}`
         : form.shift || form.shiftTime || '08:00 AM - 05:00 PM';
 
-      const finalForm = {
+      const targetDateStr = form.assignDate || todayStr;
+      const estimatedTravelTimeMinutes = Math.max(5, Number(form.estimatedTravelTimeMinutes) || 30);
+      const travelGracePeriodMinutes = Math.max(0, Number(form.travelGracePeriodMinutes) || 15);
+      const locationSyncInterval = Math.max(10, Number(form.locationSyncInterval) || 30);
+
+      // When editing an assignment to a new schedule/active state, clear stale completion flags so mobile does not stay stuck on "Shift Completed"
+      const requestedStatus = form.status || 'Active';
+      const isRescheduledActive = editId && requestedStatus !== 'Cancelled' && requestedStatus !== 'Completed';
+      const computedStatus = isRescheduledActive
+        ? resolveAssignmentStatus({
+            assignDate: targetDateStr,
+            scheduleDate: targetDateStr,
+            shiftStart: sStartFormatted,
+            shiftEnd: sEndFormatted,
+            shift: computedShift,
+            shiftTime: computedShift,
+            status: requestedStatus,
+            hasCheckIn: false,
+            hasCheckOut: false,
+          }, [])
+        : resolveAssignmentStatus({
+            assignDate: targetDateStr,
+            scheduleDate: targetDateStr,
+            shiftStart: sStartFormatted,
+            shiftEnd: sEndFormatted,
+            shift: computedShift,
+            shiftTime: computedShift,
+            status: requestedStatus,
+          }, attendance);
+
+      const nowTs = Date.now();
+      const finalForm = stampCompany({
         ...form,
+        companyId: empToUpdate?.companyId || form.companyId || undefined,
         employeeId: empToUpdate?.idNum || empToUpdate?.id || empToUpdate?.uid || form.empId || '',
         employeeUid: empToUpdate?.uid || empToUpdate?.id || '',
         employeeName: empToUpdate?.name || form.empName || '',
@@ -1167,33 +1267,29 @@ export default function Assignments() {
         site: siteName,
         assignedSites: assignedSitesList,
         assignedDestinations: assignedSitesList,
+        destinationSchedule,
         siteAddress,
         address: siteAddress,
         latitude,
         longitude,
         geofenceRadius,
-        scheduleDate: form.assignDate || new Date().toISOString().split('T')[0],
-        assignDate: form.assignDate || new Date().toISOString().split('T')[0],
+        locationSyncInterval,
+        estimatedTravelTimeMinutes,
+        travelGracePeriodMinutes,
+        scheduleDate: targetDateStr,
+        assignDate: targetDateStr,
         startTime: sStartFormatted,
         endTime: sEndFormatted,
         shiftStart: sStartFormatted,
         shiftEnd: sEndFormatted,
         shift: computedShift,
         shiftTime: computedShift,
-        supervisorName: form.supervisorName || empToUpdate?.supervisorName || 'Operations Supervisor',
-        supervisorContact: form.supervisorContact || empToUpdate?.supervisorContact || '+63 917 123 4567',
         priority: form.priority || 'Medium',
-        status: resolveAssignmentStatus({
-          assignDate: form.assignDate || new Date().toISOString().split('T')[0],
-          scheduleDate: form.assignDate || new Date().toISOString().split('T')[0],
-          shiftStart: sStartFormatted,
-          shiftEnd: sEndFormatted,
-          shift: computedShift,
-          shiftTime: computedShift,
-          status: (editId && form.status === 'Cancelled') ? 'Cancelled' : (form.status || 'Active')
-        }, attendance),
-        updatedAt: Date.now(),
-      };
+        status: computedStatus,
+        ...(isRescheduledActive ? { hasCheckIn: false, hasCheckOut: false } : {}),
+        assignmentVersion: nowTs,
+        updatedAt: nowTs,
+      });
 
       if (!editId && (finalForm.status === 'Active' || finalForm.status === 'active') && empToUpdate) {
         // Complete older active assignments for this employee
@@ -1219,7 +1315,7 @@ export default function Assignments() {
                                   (eName && asgName && (eName === asgName || eName.includes(asgName) || asgName.includes(eName)));
 
                   if (isMatch) {
-                    await updateDoc(doc(db, colName, dDoc.id), { status: 'Cancelled', updatedAt: Date.now() }).catch(() => {});
+                    await updateDoc(doc(db, colName, dDoc.id), { status: 'Cancelled', updatedAt: nowTs }).catch(() => {});
                   }
                 }
               }
@@ -1231,51 +1327,38 @@ export default function Assignments() {
       }
 
       if (editId) {
-        await updateDoc(doc(db, 'Assignments', editId), finalForm).catch(() => {});
-        await updateDoc(doc(db, 'assignments', editId), finalForm).catch(() => {});
-        showToast('success', 'Assignment Updated', 'Assignment details saved.');
+        await setDoc(doc(db, 'Assignments', editId), finalForm, { merge: true });
+        await setDoc(doc(db, 'assignments', editId), { ...finalForm, id: editId, assignmentId: editId }, { merge: true }).catch(() => {});
+        showToast('success', 'Assignment Updated', 'Updated assignment synced to Cloud Firestore and mobile devices.');
       } else {
         const nowStr = new Date().toLocaleString('en-US', { month: 'short', day: 'numeric', year: 'numeric', hour: 'numeric', minute: 'numeric', hour12: true });
-        const newAsg = { ...finalForm, assignedAt: nowStr.replace(', ', '\n'), createdAt: Date.now() };
+        const newAsg = { ...finalForm, assignedAt: nowStr.replace(', ', '\n'), createdAt: nowTs };
         
-        // Write to both collections for instant multi-app real-time synchronization
         const newRef1 = await addDoc(collection(db, 'Assignments'), newAsg);
-        await addDoc(collection(db, 'assignments'), { ...newAsg, id: newRef1.id, assignmentId: newRef1.id }).catch(() => {});
+        await setDoc(doc(db, 'assignments', newRef1.id), { ...newAsg, id: newRef1.id, assignmentId: newRef1.id }, { merge: true }).catch(() => {});
         
-        showToast('success', 'Assignment Created', 'New site assignment created and active.');
+        showToast('success', 'Assignment Created', 'New assignment saved and synced in real time.');
       }
 
-      // Sync site assignment directly to matching employee profiles in Firestore
-      if (cleanFormName) {
-        try {
-          const empQuerySnap = await getDocs(collection(db, 'employees'));
-          if (empQuerySnap && !empQuerySnap.empty) {
-            const formTokens = cleanFormName.split(/\s+/).filter(t => t.length > 1);
-            for (const empDoc of empQuerySnap.docs) {
-              const eData = empDoc.data();
-              if ((eData.workType || 'Fixed Site Employee') === 'Fixed Site Employee') continue;
-              const eName = (eData.name || '').toLowerCase();
-              const eEmail = (eData.email || '').toLowerCase();
-              const isMatch = (eName && (cleanFormName.includes(eName) || eName.includes(cleanFormName))) ||
-                              (eEmail && eEmail.includes(cleanFormName)) ||
-                              (formTokens.length > 0 && formTokens.some(ft => eName.includes(ft)));
-
-              if (isMatch) {
-                const empUpdateData = {
-                  assignedSite: siteName,
-                  assignedSiteId: siteId,
-                  assignedSites: assignedSitesList,
-                  assignedDestinations: assignedSitesList,
-                  shift: computedShift,
-                  updatedAt: Date.now()
-                };
-                await updateDoc(doc(db, 'employees', empDoc.id), empUpdateData).catch(console.warn);
-              }
-            }
-          }
-        } catch (eErr) {
-          console.warn('Sync employee profile error:', eErr);
-        }
+      // Sync site assignment directly to matching employee profile in Firestore
+      if (empToUpdate?.id) {
+        const empUpdateData = {
+          assignedSite: siteName,
+          assignedSiteId: siteId,
+          assignedSites: assignedSitesList,
+          assignedDestinations: assignedSitesList,
+          destinationSchedule,
+          geofenceRadius,
+          locationSyncInterval,
+          estimatedTravelTimeMinutes,
+          travelGracePeriodMinutes,
+          shift: computedShift,
+          shiftTime: computedShift,
+          assignmentUpdatedAt: nowTs,
+          updatedAt: nowTs,
+          ...(isRescheduledActive ? { lastCheckOut: null, attendanceStatus: 'Assigned' } : {}),
+        };
+        await updateDoc(doc(db, 'employees', empToUpdate.id), empUpdateData).catch(console.warn);
       }
 
       setModal(false);
@@ -1819,7 +1902,7 @@ export default function Assignments() {
             </div>
 
             {/* Modal Form Content */}
-            <div style={{ padding: '24px 28px', display: 'flex', flexDirection: 'column', gap: 16 }}>
+            <div style={{ padding: '22px 28px', display: 'flex', flexDirection: 'column', gap: 14, maxHeight: '72vh', overflowY: 'auto' }}>
 
               {(() => {
                 const selectedEmp = fieldEmployees.find(em => em.name === form.empName || (form.empId && (em.idNum === form.empId || em.id === form.empId)));
@@ -2112,33 +2195,104 @@ export default function Assignments() {
                 </div>
               </div>
 
-              {/* Priority Level */}
-              <div>
-                <label style={{ fontSize: 11, fontWeight: 700, color: '#475569', display: 'block', marginBottom: 6 }}>
-                  Priority Level
-                </label>
-                <div style={{ position: 'relative' }}>
-                  <Flag size={15} color="#94A3B8" style={{ position: 'absolute', left: 12, top: 12 }} />
+              {/* Geofence Radius, Location Sync Interval & Off-Site Travel Time Settings */}
+              <div style={{ background: '#F8FAFC', borderRadius: 12, padding: 14, border: '1px solid #E2E8F0', display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 12 }}>
+                <div>
+                  <label style={{ fontSize: 11, fontWeight: 700, color: '#475569', display: 'block', marginBottom: 5 }}>
+                    Geofence Radius (meters)
+                  </label>
+                  <input
+                    type="number"
+                    min={20}
+                    max={5000}
+                    value={form.geofenceRadius ?? 100}
+                    onChange={e => setForm(p => ({ ...p, geofenceRadius: Math.max(20, Number(e.target.value) || 20) }))}
+                    style={{ width: '100%', padding: '8px 12px', borderRadius: 10, border: '1.5px solid #E2E8F0', fontSize: 13, outline: 'none', background: '#FFFFFF', boxSizing: 'border-box', fontWeight: 600 }}
+                  />
+                </div>
+                <div>
+                  <label style={{ fontSize: 11, fontWeight: 700, color: '#475569', display: 'block', marginBottom: 5 }}>
+                    Location Sync Interval (sec)
+                  </label>
                   <select
-                    value={form.priority}
-                    onChange={e => setForm(p => ({ ...p, priority: e.target.value }))}
+                    value={form.locationSyncInterval ?? 30}
+                    onChange={e => setForm(p => ({ ...p, locationSyncInterval: Number(e.target.value) || 30 }))}
+                    style={{ width: '100%', padding: '8px 12px', borderRadius: 10, border: '1.5px solid #E2E8F0', fontSize: 13, outline: 'none', background: '#FFFFFF', boxSizing: 'border-box', fontWeight: 600 }}
+                  >
+                    <option value={15}>Every 15 seconds</option>
+                    <option value={30}>Every 30 seconds</option>
+                    <option value={60}>Every 60 seconds</option>
+                    <option value={120}>Every 2 minutes</option>
+                  </select>
+                </div>
+                <div>
+                  <label style={{ fontSize: 11, fontWeight: 700, color: '#475569', display: 'block', marginBottom: 5 }}>
+                    Est. Travel Time Between Sites (min)
+                  </label>
+                  <input
+                    type="number"
+                    min={5}
+                    max={360}
+                    value={form.estimatedTravelTimeMinutes ?? 30}
+                    onChange={e => setForm(p => ({ ...p, estimatedTravelTimeMinutes: Math.max(5, Number(e.target.value) || 30) }))}
+                    style={{ width: '100%', padding: '8px 12px', borderRadius: 10, border: '1.5px solid #E2E8F0', fontSize: 13, outline: 'none', background: '#FFFFFF', boxSizing: 'border-box', fontWeight: 600 }}
+                  />
+                </div>
+                <div>
+                  <label style={{ fontSize: 11, fontWeight: 700, color: '#475569', display: 'block', marginBottom: 5 }}>
+                    Travel Grace Period (min)
+                  </label>
+                  <input
+                    type="number"
+                    min={0}
+                    max={120}
+                    value={form.travelGracePeriodMinutes ?? 15}
+                    onChange={e => setForm(p => ({ ...p, travelGracePeriodMinutes: Math.max(0, Number(e.target.value) || 0) }))}
+                    style={{ width: '100%', padding: '8px 12px', borderRadius: 10, border: '1.5px solid #E2E8F0', fontSize: 13, outline: 'none', background: '#FFFFFF', boxSizing: 'border-box', fontWeight: 600 }}
+                  />
+                </div>
+              </div>
+
+              {/* Priority & Status */}
+              <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 12 }}>
+                <div>
+                  <label style={{ fontSize: 11, fontWeight: 700, color: '#475569', display: 'block', marginBottom: 6 }}>
+                    Priority Level
+                  </label>
+                  <div style={{ position: 'relative' }}>
+                    <Flag size={15} color="#94A3B8" style={{ position: 'absolute', left: 12, top: 12 }} />
+                    <select
+                      value={form.priority}
+                      onChange={e => setForm(p => ({ ...p, priority: e.target.value }))}
+                      style={{
+                        width: '100%', padding: '10px 14px 10px 38px', borderRadius: 12,
+                        border: '1.5px solid #E2E8F0', fontSize: 13, outline: 'none',
+                        background: '#FFFFFF', boxSizing: 'border-box', color: '#0F172A', fontWeight: 600, cursor: 'pointer'
+                      }}
+                    >
+                      {['High', 'Medium', 'Low'].map(p => (
+                        <option key={p} value={p}>{p} Priority</option>
+                      ))}
+                    </select>
+                  </div>
+                </div>
+                <div>
+                  <label style={{ fontSize: 11, fontWeight: 700, color: '#475569', display: 'block', marginBottom: 6 }}>
+                    Assignment Status
+                  </label>
+                  <select
+                    value={form.status || 'Active'}
+                    onChange={e => setForm(p => ({ ...p, status: e.target.value }))}
                     style={{
-                      width: '100%',
-                      padding: '10px 14px 10px 38px',
-                      borderRadius: 12,
-                      border: '1.5px solid #E2E8F0',
-                      fontSize: 13,
-                      outline: 'none',
-                      background: '#FFFFFF',
-                      boxSizing: 'border-box',
-                      color: '#0F172A',
-                      fontWeight: 600,
-                      cursor: 'pointer'
+                      width: '100%', padding: '10px 14px', borderRadius: 12,
+                      border: '1.5px solid #E2E8F0', fontSize: 13, outline: 'none',
+                      background: '#FFFFFF', boxSizing: 'border-box', color: '#0F172A', fontWeight: 600, cursor: 'pointer'
                     }}
                   >
-                    {['High', 'Medium', 'Low'].map(p => (
-                      <option key={p} value={p}>{p} Priority</option>
-                    ))}
+                    <option value="Active">Active</option>
+                    <option value="Upcoming">Upcoming</option>
+                    <option value="Completed">Completed</option>
+                    <option value="Cancelled">Cancelled</option>
                   </select>
                 </div>
               </div>

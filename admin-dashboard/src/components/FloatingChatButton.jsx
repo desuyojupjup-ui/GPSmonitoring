@@ -5,6 +5,7 @@ import chatbotIcon from '../assets/chatbot.png';
 import { db, collection, onSnapshot, query } from '../firebase';
 import { resolveAssignmentStatus } from '../pages/Assignments';
 import { isEmployeeOnline, resolveEmployeeStatus, isEmployeeOnSite } from '../utils/statusUtils';
+import { useCompany } from '../utils/companyContext';
 
 const QUICK_PROMPTS = [
   'Show detected anomalies',
@@ -16,15 +17,24 @@ const QUICK_PROMPTS = [
 ];
 
 export default function FloatingChatButton() {
+  const { matchesCompany } = useCompany();
   const [open, setOpen] = useState(false);
-  const [employees, setEmployees] = useState([]);
-  const [assignments, setAssignments] = useState([]);
-  const [attendance, setAttendance] = useState([]);
-  const [sites, setSites] = useState([]);
-  const [logs, setLogs] = useState([]);
-  const [delays, setDelays] = useState([]);
-  const [anomalies, setAnomalies] = useState([]);
+  const [rawEmployees, setRawEmployees] = useState([]);
+  const [rawAssignments, setRawAssignments] = useState([]);
+  const [rawAttendance, setRawAttendance] = useState([]);
+  const [rawSites, setRawSites] = useState([]);
+  const [rawLogs, setRawLogs] = useState([]);
+  const [rawDelays, setRawDelays] = useState([]);
+  const [rawAnomalies, setRawAnomalies] = useState([]);
   const [employeesLoaded, setEmployeesLoaded] = useState(false);
+
+  const employees = React.useMemo(() => rawEmployees.filter(matchesCompany), [rawEmployees, matchesCompany]);
+  const assignments = React.useMemo(() => rawAssignments.filter(matchesCompany), [rawAssignments, matchesCompany]);
+  const attendance = React.useMemo(() => rawAttendance.filter(matchesCompany), [rawAttendance, matchesCompany]);
+  const sites = React.useMemo(() => rawSites.filter(matchesCompany), [rawSites, matchesCompany]);
+  const logs = React.useMemo(() => rawLogs.filter(matchesCompany), [rawLogs, matchesCompany]);
+  const delays = React.useMemo(() => rawDelays.filter(matchesCompany), [rawDelays, matchesCompany]);
+  const anomalies = React.useMemo(() => rawAnomalies.filter(matchesCompany), [rawAnomalies, matchesCompany]);
   const [messages, setMessages] = useState([
     {
       id: '1',
@@ -43,29 +53,29 @@ export default function FloatingChatButton() {
   useEffect(() => {
     try {
       const unsubE = onSnapshot(query(collection(db, 'employees')), (s) => {
-        setEmployees(s.docs.map((d) => ({ id: d.id, ...d.data() })));
+        setRawEmployees(s.docs.map((d) => ({ id: d.id, ...d.data() })));
         setEmployeesLoaded(true);
       });
       const unsubA = onSnapshot(query(collection(db, 'Assignments')), (s) =>
-        setAssignments(s.docs.map((d) => ({ id: d.id, ...d.data() })))
+        setRawAssignments(s.docs.map((d) => ({ id: d.id, ...d.data() })))
       );
       const unsubAtt = onSnapshot(query(collection(db, 'attendance')), (s) =>
-        setAttendance(s.docs.map((d) => ({ id: d.id, ...d.data() })))
+        setRawAttendance(s.docs.map((d) => ({ id: d.id, ...d.data() })))
       );
       const unsubS = onSnapshot(query(collection(db, 'Sites')), (s) =>
-        setSites(s.docs.map((d) => ({ id: d.id, ...d.data() }))),
+        setRawSites(s.docs.map((d) => ({ id: d.id, ...d.data() }))),
         () => {}
       );
       const unsubL = onSnapshot(query(collection(db, 'ActivityLogs')), (s) =>
-        setLogs(s.docs.map((d) => ({ id: d.id, ...d.data() }))),
+        setRawLogs(s.docs.map((d) => ({ id: d.id, ...d.data() }))),
         () => {}
       );
       const unsubD = onSnapshot(query(collection(db, 'delay_reports')), (s) =>
-        setDelays(s.docs.map((d) => ({ id: d.id, ...d.data() }))),
+        setRawDelays(s.docs.map((d) => ({ id: d.id, ...d.data() }))),
         () => {}
       );
       const unsubAnom = onSnapshot(query(collection(db, 'ai_analysis')), (s) =>
-        setAnomalies(s.docs.map((d) => ({ id: d.id, ...d.data() }))),
+        setRawAnomalies(s.docs.map((d) => ({ id: d.id, ...d.data() }))),
         () => {}
       );
 

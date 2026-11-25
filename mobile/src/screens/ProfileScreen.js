@@ -7,6 +7,7 @@ import AsyncStorage from '@react-native-async-storage/async-storage';
 import { auth, db, signOut, signInWithEmailAndPassword, updatePassword, EmailAuthProvider, reauthenticateWithCredential, collection, query, where, onSnapshot, doc, updateDoc, getDocs, getCleanEmployeeEmail, performGlobalLogout } from '../firebase';
 
 import DelayIncidentModal from '../components/DelayIncidentModal';
+import FacialVerificationModal from '../components/FacialVerificationModal';
 import presenceService from '../services/presenceService';
 
 const AVATAR_PRESETS = [
@@ -81,6 +82,7 @@ export default function ProfileScreen({ navigation, route, user: propUser, onLog
   const [showQRModal, setShowQRModal] = useState(false);
   const [activeModal, setActiveModal] = useState(null);
   const [showDelayModal, setShowDelayModal] = useState(false);
+  const [showFaceRegModal, setShowFaceRegModal] = useState(false);
   const [showPasswordModal, setShowPasswordModal] = useState(false);
   const [currentPassword, setCurrentPassword] = useState('');
   const [newPassword, setNewPassword] = useState('');
@@ -162,6 +164,7 @@ export default function ProfileScreen({ navigation, route, user: propUser, onLog
 
       const empKey = JSON.stringify({ 
         id: empData.id, 
+        companyId: empData.companyId || 'company_default',
         name: empData.name, 
         email: empData.email, 
         status: empData.status, 
@@ -170,7 +173,9 @@ export default function ProfileScreen({ navigation, route, user: propUser, onLog
         workType: empData.workType || empData.employeeType,
         idNum: empData.idNum || empData.employeeId,
         assignedSite: empData.assignedSite,
-        profilePic: empData.profilePic 
+        profilePic: empData.profilePic,
+        faceRegistered: Boolean(empData.faceRegistered),
+        faceRegisteredAt: empData.faceRegisteredAt || null,
       });
       if (empKey !== lastEmpKeyRef.current) {
         lastEmpKeyRef.current = empKey;
@@ -253,6 +258,8 @@ export default function ProfileScreen({ navigation, route, user: propUser, onLog
       fetchModalData('history');
     } else if (title === 'Settings') {
       setActiveModal('settings');
+    } else if (title === 'Face ID Registration') {
+      setShowFaceRegModal(true);
     } else if (title === 'Change Password') {
       setCurrentPassword('');
       setNewPassword('');
@@ -673,6 +680,33 @@ export default function ProfileScreen({ navigation, route, user: propUser, onLog
 
         {/* ── 5. Menu Group 2: Support & Updates (Matches Group 2 in screenshot) ── */}
         <View style={[styles.menuSectionCard, isDarkMode && styles.darkCard, isDarkMode && styles.darkBorder]}>
+          {/* Face ID Registration (Requirement 8) */}
+          <TouchableOpacity 
+            style={[styles.menuRowItem, isDarkMode && styles.darkBorder]} 
+            onPress={() => handleMenuPress('Face ID Registration')}
+            activeOpacity={0.7}
+          >
+            <View style={styles.menuItemLeft}>
+              <View style={[styles.iconBadge, { backgroundColor: employee?.faceRegistered ? '#D1FAE5' : '#FEF3C7' }]}>
+                <Ionicons name="scan-outline" size={18} color={employee?.faceRegistered ? '#059669' : '#D97706'} />
+              </View>
+              <Text style={[styles.menuItemTitle, isDarkMode && styles.darkText]}>Face ID Registration</Text>
+            </View>
+            <View style={{ flexDirection: 'row', alignItems: 'center', gap: 6 }}>
+              <View style={{
+                backgroundColor: employee?.faceRegistered ? '#D1FAE5' : '#FEF3C7',
+                paddingHorizontal: 8,
+                paddingVertical: 2,
+                borderRadius: 10,
+              }}>
+                <Text style={{ fontSize: 11, fontWeight: '700', color: employee?.faceRegistered ? '#065F46' : '#92400E' }}>
+                  {employee?.faceRegistered ? 'Registered' : 'Required'}
+                </Text>
+              </View>
+              <Ionicons name="chevron-forward" size={18} color="#94A3B8" />
+            </View>
+          </TouchableOpacity>
+
           {/* Item 0: Change Password (Indigo) — available for both Mobile Field and Fixed Site employees */}
           <TouchableOpacity 
             style={[styles.menuRowItem, isDarkMode && styles.darkBorder]} 
@@ -1227,6 +1261,17 @@ export default function ProfileScreen({ navigation, route, user: propUser, onLog
         visible={showDelayModal}
         employee={employee}
         onClose={() => setShowDelayModal(false)}
+      />
+
+      <FacialVerificationModal
+        visible={showFaceRegModal}
+        employee={employee}
+        mode="register"
+        triggerType="registration"
+        onClose={() => setShowFaceRegModal(false)}
+        onFaceRegistered={(info) => {
+          setEmployee(prev => prev ? { ...prev, ...info } : prev);
+        }}
       />
     </View>
   );

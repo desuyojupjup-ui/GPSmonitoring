@@ -38,8 +38,13 @@ function StatusBadge({ status, result }) {
     successful: { bg: '#D1FAE5', text: '#065F46' },
     verified: { bg: '#D1FAE5', text: '#065F46' },
     Verified: { bg: '#D1FAE5', text: '#065F46' },
+    Pending: { bg: '#FEF3C7', text: '#92400E' },
+    pending: { bg: '#FEF3C7', text: '#92400E' },
     pending_review: { bg: '#FEF3C7', text: '#92400E' },
+    Expired: { bg: '#F3F4F6', text: '#6B7280' },
+    expired: { bg: '#F3F4F6', text: '#6B7280' },
     missed: { bg: '#F3F4F6', text: '#6B7280' },
+    Failed: { bg: '#FEE2E2', text: '#991B1B' },
     failed: { bg: '#FEE2E2', text: '#991B1B' },
     rejected: { bg: '#FEE2E2', text: '#991B1B' },
     dismissed: { bg: '#F3F4F6', text: '#6B7280' },
@@ -60,7 +65,9 @@ export default function VerificationHistoryScreen({ navigation, route, employee:
   const [expandedPhoto, setExpandedPhoto] = useState(null);
 
   const currentEmail = getCleanEmployeeEmail(propEmployee, route?.params?.employee, route?.params?.user, auth.currentUser);
-  const employeeId = propEmployee?.id || route?.params?.employee?.id || auth.currentUser?.uid || 'emp_fallback';
+  const employeeObj = propEmployee || route?.params?.employee || route?.params?.user || null;
+  const employeeId = employeeObj?.id || auth.currentUser?.uid || '';
+  const companyId = employeeObj?.companyId || 'company_default';
 
   useEffect(() => {
     setLoading(true);
@@ -103,9 +110,10 @@ export default function VerificationHistoryScreen({ navigation, route, employee:
 
       const all = Array.from(recordsMap.values());
       const mine = all.filter(r => {
-        const empIdMatch = r.employeeId && (r.employeeId === employeeId || r.employeeId.includes(employeeId));
+        if ((r.companyId || 'company_default') !== companyId) return false;
+        const empIdMatch = employeeId && r.employeeId && String(r.employeeId) === String(employeeId);
         const emailMatch = currentEmail && r.employeeEmail && r.employeeEmail.toLowerCase() === currentEmail;
-        return empIdMatch || emailMatch || (!r.employeeEmail && !r.employeeId);
+        return empIdMatch || emailMatch;
       });
 
       mine.sort((a, b) => {

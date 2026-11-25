@@ -5,7 +5,7 @@ import {
   CalendarCheck, FileBarChart2, Bell, Settings, ShieldCheck, ScrollText,
   ScanLine, ShieldAlert, ShieldX, Clock, ChevronsLeft, ChevronsRight
 } from 'lucide-react';
-import { isPathAllowedForRole, getRoleConfig } from '../utils/roles';
+import { isPathAllowedForUser, getRoleConfig } from '../utils/roles';
 
 import logoImage from '../assets/logo.png';
 
@@ -28,9 +28,9 @@ const navItems = [
 ];
 
 export default function Sidebar({ collapsed, setCollapsed, mobileOpen, setMobileOpen, user }) {
-  const currentRole = user?.role || 'Super Admin';
+  const currentRole = user?.role || 'Company User';
   const roleConfig = getRoleConfig(currentRole);
-  const visibleNavItems = navItems.filter(item => isPathAllowedForRole(currentRole, item.to));
+  const visibleNavItems = navItems.filter(item => isPathAllowedForUser(user, item.to));
 
   return (
     <aside className={`sidebar ${collapsed ? 'collapsed' : ''} ${mobileOpen ? 'mobile-open' : ''}`}>

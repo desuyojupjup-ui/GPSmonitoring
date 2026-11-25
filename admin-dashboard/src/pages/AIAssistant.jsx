@@ -3,6 +3,7 @@ import { Bot, Send, User, BarChart2, Users, MapPin, Clock, AlertCircle } from 'l
 import { db, collection, onSnapshot, query } from '../firebase';
 import { resolveAssignmentStatus } from './Assignments';
 import { isEmployeeOnline, resolveEmployeeStatus, isEmployeeOnSite } from '../utils/statusUtils';
+import { useCompany } from '../utils/companyContext';
 
 const QUICK_PROMPTS = [
   { label: '🔴 Offline employees', query: 'who is offline' },
@@ -15,11 +16,18 @@ const QUICK_PROMPTS = [
 ];
 
 export default function AIAssistant() {
-  const [employees, setEmployees] = useState([]);
-  const [assignments, setAssignments] = useState([]);
-  const [attendance, setAttendance] = useState([]);
-  const [sites, setSites] = useState([]);
-  const [logs, setLogs] = useState([]);
+  const { matchesCompany } = useCompany();
+  const [rawEmployees, setRawEmployees] = useState([]);
+  const [rawAssignments, setRawAssignments] = useState([]);
+  const [rawAttendance, setRawAttendance] = useState([]);
+  const [rawSites, setRawSites] = useState([]);
+  const [rawLogs, setRawLogs] = useState([]);
+
+  const employees = React.useMemo(() => rawEmployees.filter(matchesCompany), [rawEmployees, matchesCompany]);
+  const assignments = React.useMemo(() => rawAssignments.filter(matchesCompany), [rawAssignments, matchesCompany]);
+  const attendance = React.useMemo(() => rawAttendance.filter(matchesCompany), [rawAttendance, matchesCompany]);
+  const sites = React.useMemo(() => rawSites.filter(matchesCompany), [rawSites, matchesCompany]);
+  const logs = React.useMemo(() => rawLogs.filter(matchesCompany), [rawLogs, matchesCompany]);
 
   const [messages, setMessages] = useState([
     {
@@ -35,11 +43,11 @@ export default function AIAssistant() {
 
   useEffect(() => {
     try {
-      const unsubE = onSnapshot(query(collection(db, 'employees')), s => setEmployees(s.docs.map(d => ({ id: d.id, ...d.data() }))));
-      const unsubA = onSnapshot(query(collection(db, 'Assignments')), s => setAssignments(s.docs.map(d => ({ id: d.id, ...d.data() }))));
-      const unsubAtt = onSnapshot(query(collection(db, 'attendance')), s => setAttendance(s.docs.map(d => ({ id: d.id, ...d.data() }))));
-      const unsubS = onSnapshot(query(collection(db, 'Sites')), s => setSites(s.docs.map(d => ({ id: d.id, ...d.data() }))));
-      const unsubL = onSnapshot(query(collection(db, 'ActivityLogs')), s => setLogs(s.docs.map(d => ({ id: d.id, ...d.data() }))));
+      const unsubE = onSnapshot(query(collection(db, 'employees')), s => setRawEmployees(s.docs.map(d => ({ id: d.id, ...d.data() }))));
+      const unsubA = onSnapshot(query(collection(db, 'Assignments')), s => setRawAssignments(s.docs.map(d => ({ id: d.id, ...d.data() }))));
+      const unsubAtt = onSnapshot(query(collection(db, 'attendance')), s => setRawAttendance(s.docs.map(d => ({ id: d.id, ...d.data() }))));
+      const unsubS = onSnapshot(query(collection(db, 'Sites')), s => setRawSites(s.docs.map(d => ({ id: d.id, ...d.data() }))));
+      const unsubL = onSnapshot(query(collection(db, 'ActivityLogs')), s => setRawLogs(s.docs.map(d => ({ id: d.id, ...d.data() }))));
       return () => { unsubE(); unsubA(); unsubAtt(); unsubS(); unsubL(); };
     } catch (e) {}
   }, []);

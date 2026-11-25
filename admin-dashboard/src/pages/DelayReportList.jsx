@@ -2,6 +2,7 @@ import React, { useState, useEffect, useMemo } from 'react';
 import { db, collection, onSnapshot, query, orderBy, limit, updateDoc, addDoc, doc, deleteDoc, serverTimestamp } from '../firebase';
 import { Search, Clock, AlertCircle, CheckCircle2, XCircle, Eye, Camera, Trash2, AlertTriangle, TrendingUp, Navigation, Truck, MapPin, User, Calendar, FileText, Check, X, ShieldCheck } from 'lucide-react';
 import { showToast, showConfirmDelete } from '../utils/toast';
+import { useCompany, DEFAULT_COMPANY_ID } from '../utils/companyContext';
 import { ResponsiveContainer, PieChart, Pie, Cell, BarChart, Bar, XAxis, YAxis, Tooltip, CartesianGrid, LineChart, Line } from 'recharts';
 
 // Custom Tooltip for Delay Duration Pie
@@ -114,6 +115,7 @@ const formatSubmittedTime = (raw) => {
 };
 
 export default function DelayReportList() {
+  const { matchesCompany } = useCompany();
   const [delayDocs, setDelayDocs] = useState([]);
   const [incidentDocs, setIncidentDocs] = useState([]);
   const [trackingDocs, setTrackingDocs] = useState([]);
@@ -199,12 +201,12 @@ export default function DelayReportList() {
     };
 
     const addOrMerge = (item, defaultCol) => {
-      if (!item) return;
+      if (!item || !matchesCompany(item)) return;
 
       const isDummyTestId = (item.id === 'dr1' || item.id === 'dr2' || item.id === 'dr3') && !item.employeeName;
       if (isDummyTestId) return;
 
-      const empName = (item.employeeName || item.employee || item.empName || item.submittedBy || item.user || 'Jupiter Desuyo').trim().toLowerCase();
+      const empName = (item.employeeName || item.employee || item.empName || item.submittedBy || item.user || 'Field Employee').trim().toLowerCase();
       const rawReason = item.reason || item.incidentType || item.action || 'Report';
       const cleanReason = normalizeReason(String(rawReason || ''));
 
@@ -249,21 +251,22 @@ export default function DelayReportList() {
           allDocIds: [item.id, item.reportId].filter(Boolean),
           _collection: item._collection || defaultCol,
           reportId: item.reportId || item.id || dedupKey,
-          employeeId: item.employeeId || item.employee_id || 'emp-unknown',
+          companyId: item.companyId || DEFAULT_COMPANY_ID,
+          employeeId: item.employeeId || item.employee_id || '',
           employeeName: item.employeeName || item.employee || item.empName || item.submittedBy || item.user || 'Field Employee',
-          employeeEmail: item.employeeEmail || item.email || `${(item.employeeName || 'staff').toLowerCase().replace(/\s+/g, '')}@subai.com`,
+          employeeEmail: item.employeeEmail || item.email || '',
           employeeType: item.employeeType || 'Field Employee',
-          assignmentId: item.assignmentId || 'asgn-001',
+          assignmentId: item.assignmentId || '',
           assignmentName: item.assignmentName || item.siteName || 'Assigned Site',
-          siteId: item.siteId || 'site-alpha',
-          siteName: item.siteName || item.assignmentName || 'Main Worksite',
+          siteId: item.siteId || '',
+          siteName: item.siteName || item.assignmentName || 'Worksite',
           category: isDelay ? 'Delay' : 'Incident',
           reason: displayReason,
           incidentType: item.incidentType || displayReason,
           description: item.description || 'Report filed from mobile application.',
-          latitude: Number(item.latitude || item.lat || 14.5815),
-          longitude: Number(item.longitude || item.lng || 121.0571),
-          locationAccuracy: Number(item.locationAccuracy || item.accuracy || 12),
+          latitude: item.latitude != null ? Number(item.latitude) : (item.lat != null ? Number(item.lat) : null),
+          longitude: item.longitude != null ? Number(item.longitude) : (item.lng != null ? Number(item.lng) : null),
+          locationAccuracy: item.locationAccuracy != null ? Number(item.locationAccuracy) : (item.accuracy != null ? Number(item.accuracy) : null),
           evidenceUrl: item.evidenceUrl || item.photoEvidence || item.photo || item.capturedEvidence || item.evidence || item.image || item.photoUrl || item.selfieUrl || item.evidence_url || null,
           submittedAt: subTimeStr || new Date().toISOString(),
           status,
@@ -304,7 +307,7 @@ export default function DelayReportList() {
 
     const combined = Array.from(map.values());
     return combined.sort((a, b) => new Date(b.submittedAt).getTime() - new Date(a.submittedAt).getTime());
-  }, [delayDocs, incidentDocs, trackingDocs, activityDocs]);
+  }, [delayDocs, incidentDocs, trackingDocs, activityDocs, matchesCompany]);
 
   // Filtering
   const filtered = useMemo(() => {
@@ -461,17 +464,6 @@ export default function DelayReportList() {
 
         const idArray = Array.from(targetIds);
 
-        // 1. Tell backend sync server to purge all target IDs immediately
-        await fetch('/api/sync', {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({
-            action: 'delete',
-            ids: idArray
-          })
-        }).catch(() => {});
-
-        // 2. Delete across all report collections in localStorage & trigger onSnapshot
         for (const id of idArray) {
           await deleteDoc(doc(db, 'delay_reports', id)).catch(() => {});
           await deleteDoc(doc(db, 'incident_reports', id)).catch(() => {});
@@ -499,12 +491,6 @@ export default function DelayReportList() {
       try {
         const targetIds = new Set([item.id, item.reportId, ...(item.allDocIds || [])].filter(Boolean));
         const idArray = Array.from(targetIds);
-
-        await fetch('/api/sync', {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ action: 'delete', ids: idArray })
-        }).catch(() => {});
 
         for (const id of idArray) {
           await deleteDoc(doc(db, 'delay_reports', id)).catch(() => {});
@@ -545,16 +531,20 @@ export default function DelayReportList() {
         await updateDoc(doc(db, col, selectedReport.reportId), updatePayload);
       }
 
-      // Write notification for employee
-      await addDoc(collection(db, 'notifications'), {
-        employeeId: selectedReport.employeeId || 'emp_fallback',
-        title: `Report ${status}`,
-        message: status === 'Approved'
-          ? `Your ${selectedReport.category.toLowerCase()} report (${selectedReport.reason}) has been approved.`
-          : `Your ${selectedReport.category.toLowerCase()} report was rejected. Reason: ${adminNoteInput.trim()}`,
-        timestamp: serverTimestamp(),
-        read: false,
-      }).catch(e => console.warn('Employee notification write fallback:', e));
+      if (selectedReport.employeeId) {
+        await addDoc(collection(db, 'notifications'), {
+          companyId: selectedReport.companyId || DEFAULT_COMPANY_ID,
+          employeeId: selectedReport.employeeId,
+          employeeName: selectedReport.employeeName || '',
+          title: `Report ${status}`,
+          message: status === 'Approved'
+            ? `Your ${selectedReport.category.toLowerCase()} report (${selectedReport.reason}) has been approved.`
+            : `Your ${selectedReport.category.toLowerCase()} report was rejected. Reason: ${adminNoteInput.trim()}`,
+          timestamp: serverTimestamp(),
+          read: false,
+          status: 'Unread',
+        }).catch(e => console.warn('Employee notification write warning:', e));
+      }
 
       showToast('success', `Report ${status}`, `Status updated to ${status} for ${selectedReport.employeeName}.`);
       setSelectedReport(prev => ({ ...prev, ...updatePayload }));
@@ -565,18 +555,17 @@ export default function DelayReportList() {
     }
   };
 
-  // GPS Verification metric calculation for selected item
+  // GPS Verification metric calculation for selected item (pure Firestore logs, no fabricated distance)
   const gpsVerification = useMemo(() => {
     if (!selectedReport) return null;
 
-    // Search for closest location_log entry for employee
     const empLogs = locationLogs.filter(l => (l.employeeId === selectedReport.employeeId || l.employee_id === selectedReport.employeeId));
-    if (empLogs.length === 0) {
+    if (empLogs.length === 0 || selectedReport.latitude == null || selectedReport.longitude == null) {
       return {
         matched: false,
-        distanceMeters: 14,
+        distanceMeters: null,
         logTime: selectedReport.submittedAt,
-        statusText: 'Verified On-Site (Active Geofence)',
+        statusText: 'No matching GPS log available',
       };
     }
 
@@ -586,13 +575,13 @@ export default function DelayReportList() {
       selectedReport.longitude,
       Number(firstLog.latitude || firstLog.lat),
       Number(firstLog.longitude || firstLog.lng)
-    ) || 18;
+    );
 
     return {
-      matched: true,
+      matched: distance != null,
       distanceMeters: distance,
       logTime: firstLog.timestamp || firstLog.date || selectedReport.submittedAt,
-      statusText: distance <= 100 ? 'Verified On-Site (Location Match)' : 'Location Discrepancy Flagged',
+      statusText: distance != null ? (distance <= 100 ? 'Verified On-Site (Location Match)' : 'Location Discrepancy Flagged') : 'No coordinates recorded',
     };
   }, [selectedReport, locationLogs]);
 

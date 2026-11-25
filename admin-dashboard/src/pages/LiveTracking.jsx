@@ -6,6 +6,7 @@ import { Search, Navigation, Wifi, WifiOff, MapPin, Crosshair, ChevronRight, Che
 import 'leaflet/dist/leaflet.css';
 import { db, collection, onSnapshot, query } from '../firebase';
 import { isEmployeeOnSite, resolveEmployeeStatus, isEmployeeOnline, hasEmployeeCheckedOut } from '../utils/statusUtils';
+import { useCompany } from '../utils/companyContext';
 
 // Google Maps Style Status Palette
 const STATUS_COLORS = {
@@ -127,16 +128,22 @@ function MapFitBounds({ boundsLocations }) {
 }
 
 export default function LiveTracking() {
-  const [employees, setEmployees]     = useState([]);
-  const [sites, setSites]             = useState([]);
-  const [attendance, setAttendance]   = useState([]);
-  const [assignments, setAssignments] = useState([]);
+  const { matchesCompany } = useCompany();
+  const [rawEmployees, setRawEmployees]     = useState([]);
+  const [rawSites, setRawSites]             = useState([]);
+  const [rawAttendance, setRawAttendance]   = useState([]);
+  const [rawAssignments, setRawAssignments] = useState([]);
   const [filter, setFilter] = useState('all');
   const [search, setSearch] = useState('');
   const [selected, setSelected] = useState(null);
   const [sidebarOpen, setSidebarOpen] = useState(true);
   const [mapType, setMapType] = useState('googleStandard');
   const [, setTick] = useState(0);
+
+  const employees = React.useMemo(() => rawEmployees.filter(matchesCompany), [rawEmployees, matchesCompany]);
+  const sites = React.useMemo(() => rawSites.filter(matchesCompany), [rawSites, matchesCompany]);
+  const attendance = React.useMemo(() => rawAttendance.filter(matchesCompany), [rawAttendance, matchesCompany]);
+  const assignments = React.useMemo(() => rawAssignments.filter(matchesCompany), [rawAssignments, matchesCompany]);
 
   const location = useLocation();
 
@@ -186,16 +193,16 @@ export default function LiveTracking() {
             });
           }
         });
-        setEmployees(Array.from(empMap.values()));
+        setRawEmployees(Array.from(empMap.values()));
       });
       const unsubSites = onSnapshot(query(collection(db, 'Sites')), (snap) => {
-        setSites(snap.docs.map(d => ({ id: d.id, ...d.data() })));
+        setRawSites(snap.docs.map(d => ({ id: d.id, ...d.data() })));
       });
       const unsubAtt = onSnapshot(query(collection(db, 'attendance')), (snap) => {
-        setAttendance(snap.docs.map(d => ({ id: d.id, ...d.data() })));
+        setRawAttendance(snap.docs.map(d => ({ id: d.id, ...d.data() })));
       });
       const unsubAsg = onSnapshot(query(collection(db, 'Assignments')), (snap) => {
-        setAssignments(snap.docs.map(d => ({ id: d.id, ...d.data() })));
+        setRawAssignments(snap.docs.map(d => ({ id: d.id, ...d.data() })));
       });
       return () => { unsubEmp(); unsubSites(); unsubAtt(); unsubAsg(); };
     } catch (e) {

@@ -1,10 +1,11 @@
 import React, { useState, useEffect, useRef } from 'react';
 import { useLocation } from 'react-router-dom';
 import { Download, FileText, Calendar, Users, MapPin, CheckCircle, Search, Filter, ChevronDown, Clock, XCircle, StopCircle, RefreshCw, Trash2, Activity, ShieldCheck, TrendingUp, UserCheck, Smile, Award, AlertTriangle } from 'lucide-react';
-import { db, collection, onSnapshot, query, orderBy, limit, deleteDoc, doc, setDoc } from '../firebase';
+import { db, collection, onSnapshot, query, limit, deleteDoc, doc } from '../firebase';
 import { isAssignmentEnded } from './Assignments';
 import { showToast, showConfirmDelete } from '../utils/toast';
-import { ResponsiveContainer, PieChart, Pie, Cell, AreaChart, Area, BarChart, Bar, XAxis, YAxis, Tooltip, CartesianGrid } from 'recharts';
+import { useCompany } from '../utils/companyContext';
+import { ResponsiveContainer, PieChart, Pie, Cell, AreaChart, Area, XAxis, YAxis, Tooltip, CartesianGrid } from 'recharts';
 
 const CustomPieTooltip = ({ active, payload }) => {
   if (active && payload && payload.length) {
@@ -56,6 +57,7 @@ const CustomAreaTooltip = ({ active, payload }) => {
 
 const STATUS_STYLES = {
   'Completed':         { bg: '#F3E8FF', color: '#7E22CE', dot: '#A855F7' },
+  'Late Checkout':     { bg: '#F5F3FF', color: '#6D28D9', dot: '#7C3AED' },
   'On Site':           { bg: '#D1FAE5', color: '#065F46', dot: '#10B981' },
   'On Duty':           { bg: '#DBEAFE', color: '#1E40AF', dot: '#3B82F6' },
   'Checked In':        { bg: '#DBEAFE', color: '#1E40AF', dot: '#3B82F6' },
@@ -63,7 +65,7 @@ const STATUS_STYLES = {
   'Late':              { bg: '#FEF3C7', color: '#92400E', dot: '#F59E0B' },
   'Absent':            { bg: '#FEE2E2', color: '#991B1B', dot: '#EF4444' },
   'Missed Shift':      { bg: '#FEE2E2', color: '#B91C1C', dot: '#DC2626' },
-  'Missed Check-Out': { bg: '#FEF3C7', color: '#92400E', dot: '#F59E0B' },
+  'Missed Check-Out':  { bg: '#FEF3C7', color: '#92400E', dot: '#F59E0B' },
   'Flagged':           { bg: '#FEE2E2', color: '#991B1B', dot: '#EF4444' },
   'Offline':           { bg: '#F1F5F9', color: '#475569', dot: '#64748B' },
 };
@@ -82,13 +84,19 @@ function formatMinutesToHoursMins(val) {
 }
 
 export default function Attendance() {
-  const [attendance, setAttendance] = useState([]);
-  const [assignments, setAssignments] = useState([]);
-  const [employees, setEmployees] = useState([]);
-  const [sites, setSites] = useState([]);
+  const { matchesCompany } = useCompany();
+  const [rawAttendance, setRawAttendance] = useState([]);
+  const [rawAssignments, setRawAssignments] = useState([]);
+  const [rawEmployees, setRawEmployees] = useState([]);
+  const [rawSites, setRawSites] = useState([]);
   const [logs, setLogs] = useState([]);
   const [search, setSearch] = useState('');
   const [loading, setLoading] = useState(true);
+
+  const attendance = React.useMemo(() => rawAttendance.filter(a => matchesCompany(a._raw || a)), [rawAttendance, matchesCompany]);
+  const assignments = React.useMemo(() => rawAssignments.filter(matchesCompany), [rawAssignments, matchesCompany]);
+  const employees = React.useMemo(() => rawEmployees.filter(matchesCompany), [rawEmployees, matchesCompany]);
+  const sites = React.useMemo(() => rawSites.filter(matchesCompany), [rawSites, matchesCompany]);
 
   const location = useLocation();
 
@@ -106,22 +114,9 @@ export default function Attendance() {
   const [selectedIds, setSelectedIds] = useState([]);
   const [syncing, setSyncing] = useState(false);
 
-  // Persistent deleted IDs to avoid sync server or Firestore snapshots resurrecting deleted records
-  const deletedIdsRef = useRef(new Set((() => {
-    try {
-      return JSON.parse(localStorage.getItem('subai_deleted_att_ids') || '[]');
-    } catch {
-      return [];
-    }
-  })()));
-
-  // Exposed refresh function (also called by Refresh button)
-  const pullFromSyncServerRef = React.useRef(null);
-
-  const handleRefresh = async () => {
+  const handleRefresh = () => {
     setSyncing(true);
-    if (pullFromSyncServerRef.current) await pullFromSyncServerRef.current();
-    setTimeout(() => setSyncing(false), 800);
+    setTimeout(() => setSyncing(false), 600);
   };
 
   const sitesRef = React.useRef([]);
@@ -369,126 +364,54 @@ export default function Attendance() {
       check_out_time: outInfo.time,
       check_out_date: outInfo.date,
       duration:      raw.duration || (isMissed ? '0m' : getDuration(raw.timeIn || raw.checkIn || raw.check_in, raw.timeOut || raw.checkOut || raw.check_out)) || '—',
-      status:        raw.status || 'On Site',
+      scheduledEnd:  raw.scheduledEnd || null,
+      status:        raw.status || (isLateCheckOut ? 'Late Checkout' : 'On Site'),
       verification:  raw.verification || (isMissed ? 'No Show' : (raw.inFence === false ? 'GPS Geofence' : 'Verified')),
       _raw:          raw,
     };
   }
 
+  // Real-time Cloud Firestore listeners (single source of truth)
   useEffect(() => {
-    // ── Direct sync-server polling (bypasses firebase.js chain for reliability) ──
-    const pullFromSyncServer = async () => {
-      try {
-        const res = await fetch('/api/sync');
-        if (!res.ok) return;
-        const data = await res.json();
-
-        const mergeAttCollections = (key) => {
-          const remoteItems = data[key];
-          if (!Array.isArray(remoteItems)) return;
-          const existing = (() => {
-            try { return JSON.parse(localStorage.getItem('subai_store_' + key) || '[]'); } catch { return []; }
-          })();
-          const map = new Map();
-          existing.forEach(i => { if (i && i.id && !deletedIdsRef.current.has(i.id)) map.set(i.id, i); });
-          remoteItems.forEach(i => { if (i && i.id && !deletedIdsRef.current.has(i.id)) map.set(i.id, { ...map.get(i.id), ...i }); });
-          const merged = Array.from(map.values());
-          if (JSON.stringify(merged) !== JSON.stringify(existing)) {
-            localStorage.setItem('subai_store_' + key, JSON.stringify(merged));
-          }
-          return merged;
-        };
-
-        const attRecords = mergeAttCollections('Attendance') || [];
-        const attRecordsLc = mergeAttCollections('attendance') || [];
-        const asgRecords = mergeAttCollections('Assignments') || [];
-        const asgRecordsLc = mergeAttCollections('assignments') || [];
-
-        // Merge assignments from sync server
-        const combinedAsg = new Map();
-        asgRecordsLc.forEach(r => { if (r && r.id && !deletedIdsRef.current.has(r.id)) combinedAsg.set(r.id, r); });
-        asgRecords.forEach(r => { if (r && r.id && !deletedIdsRef.current.has(r.id)) combinedAsg.set(r.id, r); });
-        if (combinedAsg.size > 0) {
-          setAssignments(Array.from(combinedAsg.values()));
-        }
-
-        // Merge both collections into component state directly
-        const combined = new Map();
-        attRecordsLc.forEach(r => { if (r && r.id && !deletedIdsRef.current.has(r.id)) combined.set(r.id, r); });
-        attRecords.forEach(r => { if (r && r.id && !deletedIdsRef.current.has(r.id)) combined.set(r.id, r); });
-        const allRecs = Array.from(combined.values());
-
-        if (allRecs.length > 0) {
-          setAttendance(prev => {
-            const others = prev.filter(r => r._source !== '__direct__' && !deletedIdsRef.current.has(r.id));
-            const incoming = allRecs.map(r => ({ ...normalizeRecord(r), _source: '__direct__' }));
-            // Deduplicate by id across all sources
-            const idMap = new Map();
-            [...others, ...incoming].forEach(r => { if (r.id && !deletedIdsRef.current.has(r.id)) idMap.set(r.id, r); });
-            return Array.from(idMap.values());
-          });
-          setLoading(false);
-        }
-
-        // Sync employees from server too
-        if (Array.isArray(data.employees) && data.employees.length > 0) {
-          setEmployees(data.employees);
-        }
-      } catch (e) {
-        // silent — fallback to onSnapshot below
-      }
-    };
-
-    // Expose to refresh button
-    pullFromSyncServerRef.current = pullFromSyncServer;
-
-    pullFromSyncServer();
-    const directInterval = setInterval(pullFromSyncServer, 1500);
-
+    setLoading(true);
     try {
       const mergeAndSet = (collKey, newDocs) => {
-        setAttendance(prev => {
-          const others = prev.filter(r => r._source !== collKey && !deletedIdsRef.current.has(r.id));
-          const incoming = newDocs
-            .filter(d => !deletedIdsRef.current.has(d.id))
-            .map(d => ({ ...normalizeRecord({ id: d.id, ...d.data() }), _source: collKey }));
+        setRawAttendance(prev => {
+          const others = prev.filter(r => r._source !== collKey);
+          const incoming = newDocs.map(d => ({ ...normalizeRecord({ id: d.id, ...d.data() }), _source: collKey }));
           const idMap = new Map();
-          [...others, ...incoming].forEach(r => { if (r.id && !deletedIdsRef.current.has(r.id)) idMap.set(r.id, r); });
+          [...others, ...incoming].forEach(r => { if (r.id) idMap.set(r.id, r); });
           return Array.from(idMap.values());
         });
+        setLoading(false);
       };
-      const unsubAtt1 = onSnapshot(query(collection(db, 'attendance')), snap => mergeAndSet('attendance', snap.docs));
-      const unsubAtt2 = onSnapshot(query(collection(db, 'Attendance')), snap => mergeAndSet('Attendance', snap.docs));
-      const unsubAsg1 = onSnapshot(query(collection(db, 'Assignments')), snap => setAssignments(snap.docs.map(d => ({ id: d.id, ...d.data() })).filter(d => !deletedIdsRef.current.has(d.id))));
+      const unsubAtt1 = onSnapshot(query(collection(db, 'attendance')), snap => mergeAndSet('attendance', snap.docs), () => setLoading(false));
+      const unsubAtt2 = onSnapshot(query(collection(db, 'Attendance')), snap => mergeAndSet('Attendance', snap.docs), () => setLoading(false));
+      const unsubAsg1 = onSnapshot(query(collection(db, 'Assignments')), snap => setRawAssignments(snap.docs.map(d => ({ id: d.id, ...d.data() }))));
       const unsubAsg2 = onSnapshot(query(collection(db, 'assignments')), snap => {
-        setAssignments(prev => {
+        setRawAssignments(prev => {
           const map = new Map();
-          prev.forEach(a => { if (!deletedIdsRef.current.has(a.id)) map.set(a.id, a); });
-          snap.docs.forEach(d => { if (!deletedIdsRef.current.has(d.id)) map.set(d.id, { id: d.id, ...d.data() }); });
+          prev.forEach(a => map.set(a.id, a));
+          snap.docs.forEach(d => map.set(d.id, { id: d.id, ...d.data() }));
           return Array.from(map.values());
         });
       });
-      const unsubEmp  = onSnapshot(query(collection(db, 'employees')), snap => setEmployees(snap.docs.map(d => ({ id: d.id, ...d.data() }))));
-      const unsubSites = onSnapshot(query(collection(db, 'Sites')), snap => setSites(snap.docs.map(d => ({ id: d.id, ...d.data() }))));
+      const unsubEmp  = onSnapshot(query(collection(db, 'employees')), snap => setRawEmployees(snap.docs.map(d => ({ id: d.id, ...d.data() }))));
+      const unsubSites = onSnapshot(query(collection(db, 'Sites')), snap => setRawSites(snap.docs.map(d => ({ id: d.id, ...d.data() }))));
       const unsubLogs  = onSnapshot(query(collection(db, 'tracking_logs'), limit(20)), snap => setLogs(snap.docs.map(d => ({ id: d.id, ...d.data() }))));
-      return () => { clearInterval(directInterval); unsubAtt1(); unsubAtt2(); unsubAsg1(); unsubAsg2(); unsubEmp(); unsubSites(); unsubLogs(); };
+      return () => { unsubAtt1(); unsubAtt2(); unsubAsg1(); unsubAsg2(); unsubEmp(); unsubSites(); unsubLogs(); };
     } catch (e) {
       console.warn('Attendance live error:', e);
-      return () => clearInterval(directInterval);
+      setLoading(false);
     }
   }, []);
-
-  // Note: Missed shifts are calculated dynamically in memory below via combinedAttendance
-  // to avoid repeated Firestore write cycles that exceed quota.
-
 
   // Consolidate live Firestore attendance records with Missed Shifts and Active Workforce
   const combinedAttendance = React.useMemo(() => {
     const nowTs = new Date();
     const list = attendance
-      .filter(a => a && a.id && !deletedIdsRef.current.has(a.id))
+      .filter(a => a && a.id)
       .map(a => {
-        // Checked in but never checked out after the shift ended -> "Missed Check-Out" (not "Missed Shift")
         const st = (a.status || '').toLowerCase();
         const hasIn = a.check_in && a.check_in !== '—' && !String(a.check_in).startsWith('Missed');
         const hasOut = a.check_out && a.check_out !== '—';
@@ -516,7 +439,7 @@ export default function Attendance() {
 
     // 1. Process Missed Shifts from Assignments
     assignments.forEach(asg => {
-      if (!asg || !asg.id || deletedIdsRef.current.has(asg.id)) return;
+      if (!asg || !asg.id) return;
       const rawStatus = (asg.status || '').trim().toLowerCase();
       if (rawStatus === 'cancelled') return;
 
@@ -530,7 +453,6 @@ export default function Attendance() {
       if (isMissed) {
         const asgId = asg.id;
         const autoId = `att_missed_${asgId}`;
-        if (deletedIdsRef.current.has(asgId) || deletedIdsRef.current.has(autoId)) return;
 
         const eName = (asg.empName || asg.employeeName || '').trim();
         const eId = asg.empId || asg.employeeId || '';
@@ -548,10 +470,9 @@ export default function Attendance() {
 
         const matchKey1 = `asg_${asgId}`;
 
-        // Check if employee already has an active or completed check-in for this assignment
         const hasExistingCheckIn = list.some(a => {
           const aStatus = (a.status || '').toLowerCase();
-          const isPresent = ['on site', 'checked in', 'on duty', 'completed', 'present', 'missed check-out'].includes(aStatus);
+          const isPresent = ['on site', 'checked in', 'on duty', 'completed', 'late checkout', 'present', 'missed check-out'].includes(aStatus);
           return (a.assignmentId === asgId || a.id === asgId) && isPresent;
         });
 
@@ -592,7 +513,6 @@ export default function Attendance() {
       if (emp.status && emp.status !== 'Offline') {
         const empNameLower = (emp.name || '').toLowerCase();
         const autoEmpId = `emp_auto_att_${emp.id}`;
-        if (deletedIdsRef.current.has(autoEmpId) || deletedIdsRef.current.has(emp.id)) return;
         if (!existingKeys.has(empNameLower)) {
           existingKeys.add(empNameLower);
           list.push(normalizeRecord({
@@ -600,7 +520,7 @@ export default function Attendance() {
             employee_name: emp.name,
             site_name: emp.assignedSiteName || emp.assignedSite || emp.org || 'Assigned Site',
             check_in: emp.lastCheckIn ? emp.lastCheckIn : '—',
-            check_out: emp.status === 'Completed' ? '—' : '—',
+            check_out: '—',
             duration: emp.status === 'Completed' ? '—' : 'On Site',
             status: emp.status === 'On Duty' ? 'Checked In' : emp.status,
             verification: emp.geofenceStatus === 'Outside Assigned Site' ? 'GPS Geofence' : 'Verified'
@@ -653,56 +573,18 @@ export default function Attendance() {
     if (confirmed) {
       try {
         const idsToDelete = [...selectedIds];
-
-        // 1. Immediately register in deletedIdsRef and persist
-        idsToDelete.forEach(id => deletedIdsRef.current.add(id));
-        try {
-          localStorage.setItem('subai_deleted_att_ids', JSON.stringify(Array.from(deletedIdsRef.current)));
-        } catch (_) {}
-
-        // 2. Perform deletions in parallel across collections
         await Promise.all(idsToDelete.map(async id => {
           if (id.startsWith('att_missed_')) {
             const asgId = id.replace('att_missed_', '');
-            deletedIdsRef.current.add(asgId);
-            deleteDoc(doc(db, 'Assignments', asgId)).catch(() => {});
-            deleteDoc(doc(db, 'assignments', asgId)).catch(() => {});
-            ['Assignments', 'assignments'].forEach(k => {
-              try {
-                const store = JSON.parse(localStorage.getItem('subai_store_' + k) || '[]');
-                const filtered = store.filter(x => x && x.id !== asgId);
-                localStorage.setItem('subai_store_' + k, JSON.stringify(filtered));
-              } catch (_) {}
-            });
-            setAssignments(prev => prev.filter(a => a.id !== asgId));
+            await deleteDoc(doc(db, 'Assignments', asgId)).catch(() => {});
+            await deleteDoc(doc(db, 'assignments', asgId)).catch(() => {});
           }
-
-          // Delete from all attendance collections
-          deleteDoc(doc(db, 'Attendance', id)).catch(() => {});
-          deleteDoc(doc(db, 'attendance', id)).catch(() => {});
-          deleteDoc(doc(db, 'attendance_logs', id)).catch(() => {});
-
-          // Clean local store
-          ['Attendance', 'attendance', 'attendance_logs'].forEach(k => {
-            try {
-              const store = JSON.parse(localStorage.getItem('subai_store_' + k) || '[]');
-              const filtered = store.filter(x => x && x.id !== id);
-              localStorage.setItem('subai_store_' + k, JSON.stringify(filtered));
-            } catch (_) {}
-          });
+          await deleteDoc(doc(db, 'Attendance', id)).catch(() => {});
+          await deleteDoc(doc(db, 'attendance', id)).catch(() => {});
+          await deleteDoc(doc(db, 'attendance_logs', id)).catch(() => {});
         }));
-
-        // 3. Notify sync server
-        fetch('/api/sync', {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ action: 'delete', ids: idsToDelete })
-        }).catch(() => {});
-
-        // 4. Optimistically update local attendance state
-        setAttendance(prev => prev.filter(a => !idsToDelete.includes(a.id)));
         setSelectedIds([]);
-        showToast('success', 'Bulk Delete Successful', `${idsToDelete.length} attendance record(s) deleted.`);
+        showToast('success', 'Bulk Delete Successful', `${idsToDelete.length} attendance record(s) deleted from Firestore.`);
       } catch (err) {
         console.error('Bulk delete error:', err);
         showToast('error', 'Bulk Delete Failed', err.message || 'Error deleting selected attendance records.');
@@ -719,47 +601,16 @@ export default function Attendance() {
     if (confirmed) {
       try {
         const id = row.id;
-        deletedIdsRef.current.add(id);
-        try {
-          localStorage.setItem('subai_deleted_att_ids', JSON.stringify(Array.from(deletedIdsRef.current)));
-        } catch (_) {}
-
         if (id.startsWith('att_missed_')) {
           const asgId = id.replace('att_missed_', '');
-          deletedIdsRef.current.add(asgId);
-          deleteDoc(doc(db, 'Assignments', asgId)).catch(() => {});
-          deleteDoc(doc(db, 'assignments', asgId)).catch(() => {});
-          ['Assignments', 'assignments'].forEach(k => {
-            try {
-              const store = JSON.parse(localStorage.getItem('subai_store_' + k) || '[]');
-              const filtered = store.filter(x => x && x.id !== asgId);
-              localStorage.setItem('subai_store_' + k, JSON.stringify(filtered));
-            } catch (_) {}
-          });
-          setAssignments(prev => prev.filter(a => a.id !== asgId));
+          await deleteDoc(doc(db, 'Assignments', asgId)).catch(() => {});
+          await deleteDoc(doc(db, 'assignments', asgId)).catch(() => {});
         }
-
-        deleteDoc(doc(db, 'Attendance', id)).catch(() => {});
-        deleteDoc(doc(db, 'attendance', id)).catch(() => {});
-        deleteDoc(doc(db, 'attendance_logs', id)).catch(() => {});
-
-        ['Attendance', 'attendance', 'attendance_logs'].forEach(k => {
-          try {
-            const store = JSON.parse(localStorage.getItem('subai_store_' + k) || '[]');
-            const filtered = store.filter(x => x && x.id !== id);
-            localStorage.setItem('subai_store_' + k, JSON.stringify(filtered));
-          } catch (_) {}
-        });
-
-        fetch('/api/sync', {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ action: 'delete', ids: [id] })
-        }).catch(() => {});
-
-        setAttendance(prev => prev.filter(a => a.id !== id));
+        await deleteDoc(doc(db, 'Attendance', id)).catch(() => {});
+        await deleteDoc(doc(db, 'attendance', id)).catch(() => {});
+        await deleteDoc(doc(db, 'attendance_logs', id)).catch(() => {});
         setSelectedIds(prev => prev.filter(i => i !== id));
-        showToast('success', 'Record Deleted', 'Attendance record deleted successfully.');
+        showToast('success', 'Record Deleted', 'Attendance record deleted from Firestore.');
       } catch (err) {
         console.error('Delete error:', err);
         showToast('error', 'Delete Failed', err.message || 'Error deleting attendance record.');
@@ -767,11 +618,11 @@ export default function Attendance() {
     }
   };
 
-  const presentCount = combinedAttendance.filter(a => ['on site', 'checked in', 'on duty', 'completed', 'present', 'missed check-out'].includes((a.status || '').toLowerCase())).length;
+  const presentCount = combinedAttendance.filter(a => ['on site', 'checked in', 'on duty', 'completed', 'late checkout', 'present', 'missed check-out'].includes((a.status || '').toLowerCase())).length;
   const lateCount = combinedAttendance.filter(a => (a.status || '').toLowerCase() === 'late' || a.isLateCheckIn).length;
   const absentCount = combinedAttendance.filter(a => ['absent', 'missed shift', 'missed'].includes((a.status || '').toLowerCase())).length + employees.filter(e => (e.status || '').toLowerCase() === 'absent').length;
   const onSiteCount = combinedAttendance.filter(a => ['on site', 'checked in'].includes((a.status || '').toLowerCase())).length;
-  const checkedOutCount = combinedAttendance.filter(a => (a.status || '').toLowerCase() === 'completed').length;
+  const checkedOutCount = combinedAttendance.filter(a => ['completed', 'late checkout'].includes((a.status || '').toLowerCase())).length;
 
   const SUMMARY_METRICS = [
     { title: 'Present', value: presentCount, trend: '+0%', isUp: true, color: '#10B981', bg: '#D1FAE5', icon: <CheckCircle size={20}/> },
@@ -911,6 +762,9 @@ export default function Attendance() {
                           {row.check_out_date ? (
                             <div style={{ fontSize: 11, color: '#64748B', fontWeight: 500, marginTop: 2 }}>{row.check_out_date}</div>
                           ) : null}
+                          {row.scheduledEnd && (
+                            <div style={{ fontSize: 10, color: '#64748B', marginTop: 2 }}>Sched End: {row.scheduledEnd}</div>
+                          )}
                         </td>
                         <td style={{ padding: '14px 18px', color: '#475569', fontWeight: 600, whiteSpace: 'nowrap' }}>{row.duration}</td>
                         <td style={{ padding: '14px 18px', whiteSpace: 'nowrap' }}>
@@ -1203,14 +1057,28 @@ export default function Attendance() {
             <div style={{ width: '100%', height: 85 }}>
               <ResponsiveContainer width="100%" height="100%">
                 <AreaChart
-                  data={[
-                    { time: '06:00', value: 12 },
-                    { time: '08:00', value: 85 },
-                    { time: '10:00', value: 35 },
-                    { time: '12:00', value: 15 },
-                    { time: '14:00', value: 8 },
-                    { time: '16:00', value: 4 }
-                  ]}
+                  data={(() => {
+                    const slots = [
+                      { time: '06:00', minH: 5, maxH: 8 },
+                      { time: '08:00', minH: 8, maxH: 10 },
+                      { time: '10:00', minH: 10, maxH: 12 },
+                      { time: '12:00', minH: 12, maxH: 14 },
+                      { time: '14:00', minH: 14, maxH: 16 },
+                      { time: '16:00', minH: 16, maxH: 24 },
+                    ];
+                    const total = Math.max(1, combinedAttendance.length);
+                    return slots.map(s => {
+                      const count = combinedAttendance.filter(r => {
+                        const rawIn = r._raw?.timeIn || r._raw?.checkIn || r._raw?.check_in;
+                        if (!rawIn) return false;
+                        const dt = rawIn?.toDate ? rawIn.toDate() : new Date(rawIn);
+                        if (isNaN(dt.getTime())) return false;
+                        const h = dt.getHours();
+                        return h >= s.minH && h < s.maxH;
+                      }).length;
+                      return { time: s.time, value: Math.round((count / total) * 100) };
+                    });
+                  })()}
                   margin={{ top: 5, right: 10, left: -25, bottom: 0 }}
                 >
                   <defs>
@@ -1231,23 +1099,29 @@ export default function Attendance() {
 
           <div style={{ height: 1, background: '#F1F5F9', margin: '8px 0' }} />
 
-          {/* CHART 3: Verification Method Density Bars */}
+          {/* CHART 3: Verification Method Density Bars (Computed from real records) */}
           <div>
             <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 4 }}>
               <div style={{ fontSize: 12, fontWeight: 700, color: '#334155', display: 'flex', alignItems: 'center', gap: 6 }}>
                 <ShieldCheck size={14} color="#1E5ADB" /> 3. Verification Telemetry
               </div>
               <span style={{ fontSize: 10, fontWeight: 700, background: '#EFF6FF', color: '#1E5ADB', padding: '2px 7px', borderRadius: 10 }}>
-                AI Verified
+                Live Verified
               </span>
             </div>
 
             <div style={{ display: 'flex', flexDirection: 'column', gap: 5 }}>
-              {[
-                { method: 'Facial AI + GPS', pct: 82, fill: '#1E5ADB' },
-                { method: 'GPS Geofence', pct: 15, fill: '#10B981' },
-                { method: 'Manual Admin', pct: 3, fill: '#F59E0B' }
-              ].map(b => (
+              {(() => {
+                const total = combinedAttendance.length || 1;
+                const verifiedN = combinedAttendance.filter(r => r.verification === 'Verified').length;
+                const gpsN = combinedAttendance.filter(r => r.verification === 'GPS Geofence').length;
+                const missedN = combinedAttendance.filter(r => r.verification === 'No Show').length;
+                return [
+                  { method: 'Verified On-Site', pct: combinedAttendance.length ? Math.round((verifiedN / total) * 100) : 0, fill: '#1E5ADB' },
+                  { method: 'GPS Geofence Flag', pct: combinedAttendance.length ? Math.round((gpsN / total) * 100) : 0, fill: '#10B981' },
+                  { method: 'No Show / Unverified', pct: combinedAttendance.length ? Math.round((missedN / total) * 100) : 0, fill: '#F59E0B' }
+                ];
+              })().map(b => (
                 <div key={b.method} style={{ background: '#F8FAFC', borderRadius: 6, padding: '5px 8px', border: '1px solid #F1F5F9' }}>
                   <div style={{ display: 'flex', justifyContent: 'space-between', fontSize: 10, color: '#475569', fontWeight: 600, marginBottom: 3 }}>
                     <span>{b.method}</span>

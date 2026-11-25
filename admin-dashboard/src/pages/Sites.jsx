@@ -6,6 +6,7 @@ import 'leaflet/dist/leaflet.css';
 import Swal from 'sweetalert2';
 import { db, collection, onSnapshot, addDoc, updateDoc, deleteDoc, doc, query } from '../firebase';
 import { showToast, showConfirmDelete } from '../utils/toast';
+import { useCompany } from '../utils/companyContext';
 import { ResponsiveContainer, PieChart, Pie, Cell, BarChart, Bar, XAxis, YAxis, Tooltip, CartesianGrid, AreaChart, Area } from 'recharts';
 
 const CustomPieTooltip = ({ active, payload }) => {
@@ -97,8 +98,9 @@ const MapClickHandler = ({ onMapClick }) => {
 };
 
 export default function Sites() {
-  const [sites, setSites] = useState([]);
-  const [employees, setEmployees] = useState([]);
+  const { matchesCompany, stampCompany } = useCompany();
+  const [rawSites, setRawSites] = useState([]);
+  const [rawEmployees, setRawEmployees] = useState([]);
   const [loading, setLoading] = useState(true);
   const [search, setSearch] = useState('');
   const [modal, setModal] = useState(false);
@@ -110,6 +112,9 @@ export default function Sites() {
   const [suggestions, setSuggestions] = useState([]);
   const [searching, setSearching] = useState(false);
   const debounceRef = useRef(null);
+
+  const sites = React.useMemo(() => rawSites.filter(matchesCompany), [rawSites, matchesCompany]);
+  const employees = React.useMemo(() => rawEmployees.filter(matchesCompany), [rawEmployees, matchesCompany]);
 
   // Pagination state
   const [page, setPage]         = useState(1);
@@ -125,14 +130,14 @@ export default function Sites() {
       const unsubSites = onSnapshot(qSites, (snapshot) => {
         const liveData = snapshot.docs.map(d => ({ id: d.id, ...d.data() }));
         const uniqueSites = Array.from(new Map(liveData.map(item => [item.id, item])).values());
-        setSites(uniqueSites);
+        setRawSites(uniqueSites);
         setLoading(false);
       }, () => setLoading(false));
 
       const qEmps = query(collection(db, 'employees'));
       const unsubEmps = onSnapshot(qEmps, (snapshot) => {
         const liveEmps = snapshot.docs.map(d => ({ id: d.id, ...d.data() }));
-        setEmployees(liveEmps);
+        setRawEmployees(liveEmps);
       });
 
       return () => {
@@ -328,7 +333,7 @@ export default function Sites() {
     setIsSaving(true);
     
     try {
-      const finalForm = { ...form, radius: (form.radius || 100) + 'm' };
+      const finalForm = stampCompany({ ...form, radius: (form.radius || 100) + 'm' });
       if (editId) {
         await updateDoc(doc(db, 'Sites', editId), finalForm);
         showToast('Site Updated', 'Site details saved successfully.', 'success');
