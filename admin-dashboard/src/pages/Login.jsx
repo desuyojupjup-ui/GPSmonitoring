@@ -14,11 +14,15 @@ import {
   isRealFirebaseConfigured, 
   signInWithEmailAndPassword, 
   sendPasswordResetEmail,
-  resetAdminPassword
+  resetAdminPassword,
+  signOut as fbSignOut
 } from '../firebase';
 
-export default function Login({ onLogin, currentUser, onLogout }) {
+import { isDeveloper } from '../utils/roles';
+
+export default function Login({ onLogin, currentUser, onLogout, portalMode = 'company' }) {
   const navigate = useNavigate();
+  const isDevPortal = portalMode === 'developer';
   
   // Login input state (clean, no dummy values)
   const [email, setEmail] = useState(() => localStorage.getItem('subai_remembered_email') || '');
@@ -58,7 +62,22 @@ export default function Login({ onLogin, currentUser, onLogout }) {
     try {
       const userCredential = await signInWithEmailAndPassword(auth, cleanEmail, password);
       const authenticatedUser = userCredential.user;
-      
+      const loggedInIsDev = isDeveloper({ role: authenticatedUser.role });
+
+      if (isDevPortal && !loggedInIsDev) {
+        await fbSignOut(auth).catch(() => {});
+        setError('Access Denied: This is the Developer / System Provider Portal. Company Owners, Company Admins, and Company Users must sign in through the Company Admin Portal (/login).');
+        setLoading(false);
+        return;
+      }
+
+      if (!isDevPortal && loggedInIsDev) {
+        await fbSignOut(auth).catch(() => {});
+        setError('Developer accounts cannot sign in to the Company Admin Portal. Please use the dedicated Developer Portal (/developer-login).');
+        setLoading(false);
+        return;
+      }
+
       showToast('Authentication Successful', `Welcome back, ${authenticatedUser.displayName || authenticatedUser.email}!`, 'success');
       
       onLogin(authenticatedUser.email || cleanEmail, password, {
@@ -75,12 +94,14 @@ export default function Login({ onLogin, currentUser, onLogout }) {
     } catch (err) {
       console.error('Sign-in error:', err);
       let errorMsg = 'Invalid email or password. Please verify your credentials.';
-      if (err.code === 'auth/user-not-found' || err.message?.includes('No administrator account')) {
-        errorMsg = 'No administrator account found with this email address.';
+      if (err.code === 'auth/user-not-found' || err.message?.includes('No account found') || err.message?.includes('No administrator account')) {
+        errorMsg = 'No account found with this email address.';
       } else if (err.code === 'auth/wrong-password' || err.message?.includes('Incorrect password')) {
         errorMsg = 'Incorrect password. Please verify your credentials or reset your password.';
-      } else if (err.code === 'auth/user-disabled' || err.message?.includes('inactive')) {
-        errorMsg = 'This administrator account has been deactivated. Please contact your Super Administrator.';
+      } else if (err.code === 'auth/company-pending' || err.code === 'auth/company-suspended' || err.code === 'auth/pending-approval') {
+        errorMsg = err.message;
+      } else if (err.code === 'auth/user-disabled' || err.message?.includes('deactivated')) {
+        errorMsg = 'This account has been deactivated. Please contact your Company Admin or SUBAI System Provider.';
       } else if (err.code === 'auth/too-many-requests') {
         errorMsg = 'Too many failed attempts. Please wait a few minutes before trying again.';
       } else if (err.code === 'auth/invalid-credential') {
@@ -309,10 +330,12 @@ export default function Login({ onLogin, currentUser, onLogout }) {
           {/* Card Header */}
           <div style={{ textAlign: 'center', marginBottom: 24 }}>
             <h2 style={{ fontSize: 26, fontWeight: 800, color: '#0F172A', margin: '0 0 6px 0' }}>
-              Admin Portal
+              {isDevPortal ? 'Developer Portal' : 'Company Admin Portal'}
             </h2>
             <p style={{ fontSize: 13, color: '#64748B', margin: 0 }}>
-              Sign in to access SubAi Workforce Command Center
+              {isDevPortal
+                ? 'Manage subscribed companies, plans, activations & Company Admin approvals'
+                : 'Sign in with your Company Owner, Company Admin, or Company User credentials'}
             </p>
           </div>
 
@@ -337,7 +360,7 @@ export default function Login({ onLogin, currentUser, onLogout }) {
               <div style={{ display: 'flex', gap: 8, marginTop: 4 }}>
                 <button
                   type="button"
-                  onClick={() => navigate('/')}
+                  onClick={() => navigate(isDeveloper(currentUser) ? '/developer' : '/')}
                   style={{
                     flex: 1,
                     background: '#16A34A',
@@ -354,7 +377,7 @@ export default function Login({ onLogin, currentUser, onLogout }) {
                     gap: 6
                   }}
                 >
-                  <LayoutDashboard size={14} /> Open Dashboard
+                  <LayoutDashboard size={14} /> {isDeveloper(currentUser) ? 'Open Developer Console' : 'Open Dashboard'}
                 </button>
                 {onLogout && (
                   <button
@@ -520,25 +543,33 @@ export default function Login({ onLogin, currentUser, onLogout }) {
               onMouseOver={(e) => { if (!loading) e.target.style.background = '#1E40AF'; }}
               onMouseOut={(e) => { if (!loading) e.target.style.background = '#1D4ED8'; }}
             >
-              {loading ? 'Authenticating...' : 'Sign In to Command Center'} <ArrowRight size={16} />
+              {loading ? 'Authenticating...' : isDevPortal ? 'Sign In to Developer Portal' : 'Sign In to Company Admin Portal'} <ArrowRight size={16} />
             </button>
           </form>
 
           {/* Security Notice Footer */}
           <div style={{ 
-            marginTop: 26, 
-            paddingTop: 18,
+            marginTop: 14, 
+            paddingTop: 12,
             borderTop: '1px solid #F1F5F9',
             display: 'flex', 
             alignItems: 'flex-start', 
             gap: 10,
             background: '#F8FAFC',
-            padding: '12px 14px',
+            padding: '10px 12px',
             borderRadius: 10
           }}>
             <ShieldAlert size={16} color="#64748B" style={{ flexShrink: 0, marginTop: 2 }} />
-            <div style={{ fontSize: 11, color: '#64748B', lineHeight: 1.5 }}>
-              <strong style={{ color: '#334155' }}>Restricted System:</strong> Account creation is managed strictly by System Administrators. New Managers, Supervisors, and HR staff must be provisioned internally via Users & Roles.
+            <div style={{ fontSize: 11, color: '#64748B', lineHeight: 1.45 }}>
+              {isDevPortal ? (
+                <>
+                  <strong style={{ color: '#0284C7' }}>Separate System Provider Portal:</strong> Developers manage subscribed companies, plans, activations, and Company Admin approvals here — outside client company operations.
+                </>
+              ) : (
+                <>
+                  <strong style={{ color: '#334155' }}>Isolated Company Admin Portal:</strong> Company Owners and Company Admins manage ONLY their own company&apos;s workforce, users, and custom permissions.
+                </>
+              )}
             </div>
           </div>
         </div>

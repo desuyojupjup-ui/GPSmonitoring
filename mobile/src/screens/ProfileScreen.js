@@ -4,7 +4,7 @@ import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { Ionicons } from '@expo/vector-icons';
 import * as ImagePicker from 'expo-image-picker';
 import AsyncStorage from '@react-native-async-storage/async-storage';
-import { auth, db, signOut, signInWithEmailAndPassword, updatePassword, EmailAuthProvider, reauthenticateWithCredential, collection, query, where, onSnapshot, doc, updateDoc, getDocs, getCleanEmployeeEmail, performGlobalLogout } from '../firebase';
+import { auth, db, signOut, signInWithEmailAndPassword, updatePassword, EmailAuthProvider, reauthenticateWithCredential, collection, query, where, onSnapshot, doc, updateDoc, getDocs, getCleanEmployeeEmail, performGlobalLogout, setMobileCompanyScope, subscribeToCompanyBranding } from '../firebase';
 
 import DelayIncidentModal from '../components/DelayIncidentModal';
 import FacialVerificationModal from '../components/FacialVerificationModal';
@@ -96,6 +96,16 @@ export default function ProfileScreen({ navigation, route, user: propUser, onLog
   const [history, setHistory] = useState([]);
   
   const currentEmail = getCleanEmployeeEmail(propUser, route?.params?.user, auth.currentUser);
+  const currentCompanyId = employee?.companyId || propUser?.companyId || route?.params?.user?.companyId || 'company_default';
+  const [companyBranding, setCompanyBranding] = useState(null);
+
+  useEffect(() => {
+    if (currentCompanyId) {
+      setMobileCompanyScope(currentCompanyId);
+    }
+    const unsubBrand = subscribeToCompanyBranding(currentCompanyId, setCompanyBranding);
+    return () => unsubBrand();
+  }, [currentCompanyId]);
   const formattedEmailName = currentEmail ? currentEmail.split('@')[0].split('.').map(p => p.charAt(0).toUpperCase() + p.slice(1)).join(' ') : '';
   const displayName = employee?.name || propUser?.name || route?.params?.user?.name || formattedEmailName || 'Employee';
 
@@ -129,7 +139,8 @@ export default function ProfileScreen({ navigation, route, user: propUser, onLog
       }
     }).catch(() => {});
 
-    const unsub = onSnapshot(collection(db, 'employees'), (snapshot) => {
+    const empQuery = query(collection(db, 'employees'), where('email', '==', currentEmail));
+    const unsub = onSnapshot(empQuery, (snapshot) => {
       const authUid = (auth.currentUser?.uid || '').trim().toLowerCase();
       const emailPrefix = currentEmail.split('@')[0];
 
@@ -143,7 +154,7 @@ export default function ProfileScreen({ navigation, route, user: propUser, onLog
           if (empMail && empMail === currentEmail) return true;
           if (emailPrefix && empMail && empMail.startsWith(emailPrefix + '@')) return true;
           return false;
-        });
+        }) || snapshot.docs[0];
       }
 
       let empData = null;
@@ -191,13 +202,15 @@ export default function ProfileScreen({ navigation, route, user: propUser, onLog
       fetchModalData('attendance');
       fetchModalData('history');
     }
-  }, [employee?.id, currentEmail]);
+  }, [employee?.id, currentEmail, currentCompanyId]);
 
   const fetchModalData = async (type) => {
     if (!employee && !currentEmail) return;
+    const companyFilter = employee?.companyId || propUser?.companyId || route?.params?.user?.companyId || 'company_default';
+    setMobileCompanyScope(companyFilter);
     try {
       if (type === 'attendance') {
-        const snap = await getDocs(collection(db, 'Attendance'));
+        const snap = await getDocs(query(collection(db, 'Attendance'), where('companyId', '==', companyFilter)));
         const empIdSearch = (employee?.id || '').toLowerCase();
         const empName = (employee?.name || currentEmail.split('@')[0]).toLowerCase();
         const emailToUse = currentEmail.toLowerCase();
@@ -220,7 +233,7 @@ export default function ProfileScreen({ navigation, route, user: propUser, onLog
         });
         setAttendance(data);
       } else if (type === 'history') {
-        const snap = await getDocs(collection(db, 'ActivityLogs'));
+        const snap = await getDocs(query(collection(db, 'ActivityLogs'), where('companyId', '==', companyFilter)));
         const empIdSearch = (employee?.id || '').toLowerCase();
         const empName = (employee?.name || currentEmail.split('@')[0]).toLowerCase();
 
@@ -240,7 +253,7 @@ export default function ProfileScreen({ navigation, route, user: propUser, onLog
         setHistory(data);
       }
     } catch (e) {
-      console.error(e);
+      console.warn('[ProfileScreen] fetchModalData notice:', e?.code || e?.message);
     }
   };
 
@@ -812,7 +825,20 @@ export default function ProfileScreen({ navigation, route, user: propUser, onLog
             {/* Visual Badge Card */}
             <View style={styles.idBadgeContainer}>
               <View style={styles.idBadgeHeader}>
-                <Text style={styles.idBadgeBrand}>GEOSTRIDE WORKFORCE</Text>
+                <View style={{ flexDirection: 'row', alignItems: 'center', gap: 8, flex: 1 }}>
+                  {companyBranding?.logoUrl ? (
+                    <View style={{ backgroundColor: '#FFFFFF', borderRadius: 6, paddingHorizontal: 6, paddingVertical: 3 }}>
+                      <Image
+                        source={{ uri: companyBranding.logoUrl }}
+                        style={{ width: 54, height: 20 }}
+                        resizeMode="contain"
+                      />
+                    </View>
+                  ) : null}
+                  <Text style={styles.idBadgeBrand} numberOfLines={1}>
+                    {(companyBranding?.name || employee?.companyName || 'SUBAI WORKFORCE').toUpperCase()}
+                  </Text>
+                </View>
                 <View style={styles.idBadgeTag}>
                   <Text style={styles.idBadgeTagText}>VERIFIED</Text>
                 </View>

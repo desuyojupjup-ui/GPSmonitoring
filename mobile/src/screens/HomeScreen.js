@@ -29,7 +29,8 @@ import {
   serverTimestamp,
   getDocs,
   ensureAuthenticatedSession,
-  getCleanEmployeeEmail
+  getCleanEmployeeEmail,
+  subscribeToCompanyBranding,
 } from '../firebase';
 
 import FacialVerificationModal from '../components/FacialVerificationModal';
@@ -180,6 +181,13 @@ export default function HomeScreen({ navigation, route, user: propUser }) {
   const lastEmpKeyRef = useRef('');
   const lastAttKeyRef = useRef('');
   const currentEmail = getCleanEmployeeEmail(propUser, route?.params?.user, auth.currentUser);
+  const [companyBranding, setCompanyBranding] = useState(null);
+  const activeCompanyId = employee?.companyId || propUser?.companyId || route?.params?.user?.companyId || 'company_default';
+
+  useEffect(() => {
+    const unsubBrand = subscribeToCompanyBranding(activeCompanyId, setCompanyBranding);
+    return () => unsubBrand();
+  }, [activeCompanyId]);
 
   const formattedEmailName = currentEmail ? currentEmail.split('@')[0].split('.').map(p => p.charAt(0).toUpperCase() + p.slice(1)).join(' ') : '';
   const displayName = employee?.name
@@ -1619,13 +1627,23 @@ export default function HomeScreen({ navigation, route, user: propUser }) {
     <View style={styles.container}>
       {/* ── Fixed Header Banner ── */}
       <View style={[styles.header, { paddingTop: insets.top + 12 }]}>
-        {/* Top Row: App Logo on Left, Action Nav Icons on Right */}
+        {/* Top Row: Live Company Logo on Left, Action Nav Icons on Right */}
         <View style={styles.headerTopRow}>
-          <Image
-            source={require('../../assets/logo.png')}
-            style={styles.headerLogo}
-            resizeMode="contain"
-          />
+          {companyBranding?.logoUrl ? (
+            <View style={{ backgroundColor: 'rgba(255,255,255,0.96)', borderRadius: 10, paddingHorizontal: 10, paddingVertical: 5, maxWidth: 165, justifyContent: 'center' }}>
+              <Image
+                source={{ uri: companyBranding.logoUrl }}
+                style={{ width: 112, height: 28 }}
+                resizeMode="contain"
+              />
+            </View>
+          ) : (
+            <Image
+              source={require('../../assets/logo.png')}
+              style={styles.headerLogo}
+              resizeMode="contain"
+            />
+          )}
           <View style={styles.actionNavGroup}>
             <TouchableOpacity
               style={styles.notifBtn}

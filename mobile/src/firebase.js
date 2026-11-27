@@ -4,6 +4,7 @@ import {
   getReactNativePersistence,
   getAuth,
   signInWithEmailAndPassword,
+  createUserWithEmailAndPassword,
   signOut,
   onAuthStateChanged,
   updatePassword,
@@ -111,7 +112,7 @@ export const saveUserSession = async (userObj) => {
       return;
     }
     currentAuthUser = userObj;
-    _activeMobileCompanyId = userObj?.companyId || null;
+    _activeMobileCompanyId = userObj ? (userObj.companyId || 'company_default') : null;
     if (userObj) {
       await AsyncStorage.setItem('@geostride_user_session', JSON.stringify(userObj));
     } else {
@@ -161,6 +162,24 @@ export const loadUserSession = async () => {
       if (parsed?.email && !parsed.email.toLowerCase().includes('admin@')) {
         currentAuthUser = parsed;
         _activeMobileCompanyId = parsed.companyId || 'company_default';
+        // Auto-sync user_profiles/{uid} on session restore so Firestore rules recognize the employee's companyId
+        ensureAuthenticatedSession()
+          .then((authUser) => {
+            const authEmail = (authUser?.email || '').toLowerCase();
+            if (authUser?.uid && authEmail && !authEmail.includes('admin@')) {
+              realSetDoc(realDoc(db, 'user_profiles', authUser.uid), {
+                uid: authUser.uid,
+                role: 'Employee',
+                companyId: _activeMobileCompanyId,
+                employeeId: parsed.id || parsed.uid || authUser.uid,
+                email: parsed.email.toLowerCase(),
+                name: parsed.name || parsed.email.split('@')[0],
+                status: 'Active',
+                updatedAt: Date.now(),
+              }, { merge: true }).catch(() => {});
+            }
+          })
+          .catch(() => {});
         authListeners.forEach((cb) => {
           try { cb(currentAuthUser); } catch (_) {}
         });
@@ -196,6 +215,7 @@ export {
   db,
   signOut,
   signInWithEmailAndPassword,
+  createUserWithEmailAndPassword,
   onAuthStateChanged,
   updatePassword,
   EmailAuthProvider,
@@ -229,19 +249,93 @@ export const setMobileCompanyScope = (companyId) => {
   _activeMobileCompanyId = companyId || null;
 };
 
+const COMPANY_BRANDING_CACHE_KEY = '@subai_company_branding';
+
+export const getCachedCompanyBranding = async () => {
+  try {
+    const raw = await AsyncStorage.getItem(COMPANY_BRANDING_CACHE_KEY);
+    return raw ? JSON.parse(raw) : null;
+  } catch {
+    return null;
+  }
+};
+
+export const cacheCompanyBranding = async (branding) => {
+  try {
+    if (branding && (branding.logoUrl || branding.name)) {
+      await AsyncStorage.setItem(COMPANY_BRANDING_CACHE_KEY, JSON.stringify(branding));
+    }
+  } catch (_) {}
+};
+
+/**
+ * Subscribe in real time to the employee's company branding (name + custom logoUrl)
+ * from Cloud Firestore `companies/{companyId}` and cache locally for instant splash/login display.
+ */
+export const subscribeToCompanyBranding = (companyId, callback) => {
+  const cid = companyId || _activeMobileCompanyId || currentAuthUser?.companyId || 'company_default';
+  if (!cid || typeof callback !== 'function') return () => {};
+
+  // Emit cached branding immediately if it matches this company
+  getCachedCompanyBranding().then((cached) => {
+    if (cached && cached.companyId === cid) {
+      callback(cached);
+    }
+  }).catch(() => {});
+
+  let unsub = () => {};
+  let cancelled = false;
+
+  const attach = () => {
+    if (cancelled) return;
+    try {
+      unsub = realOnSnapshot(
+        realDoc(db, 'companies', cid),
+        (snap) => {
+          if (snap.exists && snap.exists()) {
+            const d = snap.data() || {};
+            const branding = {
+              companyId: cid,
+              name: d.name || '',
+              logoUrl: d.logoUrl || null,
+            };
+            cacheCompanyBranding(branding);
+            callback(branding);
+          }
+        },
+        (err) => {
+          console.warn('[CompanyBranding] listener notice:', err?.code || err?.message);
+        }
+      );
+    } catch (e) {
+      console.warn('[CompanyBranding] init notice:', e?.message);
+    }
+  };
+
+  if (auth?.currentUser) {
+    attach();
+  } else {
+    ensureAuthenticatedSession().then(() => attach()).catch(() => attach());
+  }
+
+  return () => {
+    cancelled = true;
+    try { unsub(); } catch (_) {}
+  };
+};
+
 const scopeQueryForMobileCompany = (_q) => {
-  if (!_q || !_activeMobileCompanyId) return _q;
-  const authEmail = (auth?.currentUser?.email || '').toLowerCase();
-  if (!authEmail || authEmail.includes('admin@')) return _q;
+  if (!_q) return _q;
+  const effectiveCompanyId = _activeMobileCompanyId || currentAuthUser?.companyId || 'company_default';
 
   if (_q.type === 'collection' && MOBILE_COMPANY_COLLECTIONS.has(_q.id)) {
-    return realQuery(_q, realWhere('companyId', '==', _activeMobileCompanyId));
+    return realQuery(_q, realWhere('companyId', '==', effectiveCompanyId));
   }
   if (_q.type === 'query' && _mobileQueryMetaMap.has(_q)) {
     const meta = _mobileQueryMetaMap.get(_q);
     if (meta && MOBILE_COMPANY_COLLECTIONS.has(meta.colId) && !meta.hasCompanyOrEmailFilter) {
       const safeConstraints = (meta.constraints || []).filter((c) => c && c.type !== 'orderBy');
-      return realQuery(meta.colRef, realWhere('companyId', '==', _activeMobileCompanyId), ...safeConstraints);
+      return realQuery(meta.colRef, realWhere('companyId', '==', effectiveCompanyId), ...safeConstraints);
     }
   }
   return _q;

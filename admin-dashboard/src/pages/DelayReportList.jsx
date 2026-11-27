@@ -1243,7 +1243,7 @@ export default function DelayReportList() {
 
       {/* Full Screen Image Modal */}
       {enlargedPhoto && (
-        <div style={{ ...modalOverlay, zIndex: 1100 }} onClick={() => setEnlargedPhoto(null)}>
+        <div style={{ ...modalOverlay, zIndex: 10000 }} onClick={() => setEnlargedPhoto(null)}>
           <div style={{ position: 'relative', maxWidth: '90vw', maxHeight: '90vh' }}>
             <img src={enlargedPhoto} alt="Full Evidence" style={{ width: '100%', height: '100%', objectFit: 'contain', borderRadius: '12px' }} />
             <button onClick={() => setEnlargedPhoto(null)} style={{ position: 'absolute', top: '-15px', right: '-15px', backgroundColor: '#0F172A', color: 'white', border: 'none', borderRadius: '50%', width: 32, height: 32, cursor: 'pointer', fontWeight: 'bold' }}>✕</button>
@@ -1256,7 +1256,7 @@ export default function DelayReportList() {
 }
 
 const cardStyle = { backgroundColor: 'white', padding: '18px', borderRadius: '12px', boxShadow: '0 1px 3px rgba(0,0,0,0.06)', border: '1px solid #E2E8F0' };
-const modalOverlay = { position: 'fixed', inset: 0, backgroundColor: 'rgba(15, 23, 42, 0.65)', display: 'flex', justifyContent: 'center', alignItems: 'center', zIndex: 1000 };
+const modalOverlay = { position: 'fixed', inset: 0, backgroundColor: 'rgba(15, 23, 42, 0.65)', display: 'flex', justifyContent: 'center', alignItems: 'center', zIndex: 9999, padding: '24px 16px' };
 const modalBox = { backgroundColor: 'white', borderRadius: '16px', padding: '24px', width: '90%', maxWidth: '580px', boxShadow: '0 20px 25px -5px rgba(0,0,0,0.1)' };
 const modalSectionStyle = { backgroundColor: '#F8FAFC', borderRadius: '12px', padding: '14px', border: '1px solid #E2E8F0' };
 const sectionHeaderTitle = { fontSize: '13px', fontWeight: '800', color: '#0F172A', margin: '0 0 10px 0', display: 'flex', alignItems: 'center', gap: '6px' };

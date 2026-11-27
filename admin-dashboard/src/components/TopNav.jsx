@@ -4,11 +4,11 @@ import {
   Search, Sun, Moon, Bell, ChevronDown, LogOut, User, Settings, Shield, 
   ScrollText, HelpCircle, Zap, Plus, Users, MapPin, ClipboardList, 
   FileBarChart2, Send, Bot, CheckCircle, AlertTriangle, Clock, Activity, 
-  X, Menu, RefreshCw, Radio, Building2, Check, ArrowRight, Sparkles, ShieldAlert 
+  X, Menu, RefreshCw, Radio, Building2, Check, ArrowRight, Sparkles, ShieldAlert, Terminal 
 } from 'lucide-react';
 import { showToast, showConfirmLogout } from '../utils/toast';
 import { db, collection, onSnapshot, query, doc, updateDoc } from '../firebase';
-import { isPathAllowedForUser } from '../utils/roles';
+import { isPathAllowedForUser, isDeveloper } from '../utils/roles';
 import { useCompany } from '../utils/companyContext';
 import { startAnomalyNotificationSync } from '../services/anomalyNotificationSync';
 
@@ -119,9 +119,16 @@ export default function TopNav({ user, onLogout, onMenuToggle }) {
 
   const location = useLocation();
   const navigate = useNavigate();
+  const userIsDeveloper = isDeveloper(user);
 
-  // Real-time Firestore listeners for universal search
+  // Real-time Firestore listeners for universal search (Company Portal only; Developers stay outside client workforce data)
   useEffect(() => {
+    if (userIsDeveloper) {
+      setRawEmployees([]);
+      setRawSites([]);
+      setRawAssignments([]);
+      return;
+    }
     let unsubEmp = () => {};
     let unsubSites = () => {};
     let unsubAssignments = () => {};
@@ -142,7 +149,7 @@ export default function TopNav({ user, onLogout, onMenuToggle }) {
       unsubSites();
       unsubAssignments();
     };
-  }, []);
+  }, [userIsDeveloper]);
 
   // Synchronize theme on load
   useEffect(() => {
@@ -171,8 +178,13 @@ export default function TopNav({ user, onLogout, onMenuToggle }) {
     return () => clearInterval(timer);
   }, [criticalAlerts.length, hoveredAlertId]);
 
-  // Real-time Firestore notifications subscription & persistent anomaly bridge
+  // Real-time Firestore notifications subscription & persistent anomaly bridge (Company Portal only)
   useEffect(() => {
+    if (userIsDeveloper) {
+      setRawNotifications([]);
+      setCriticalAlerts([]);
+      return;
+    }
     let unsub = () => {};
     try {
       unsub = onSnapshot(query(collection(db, 'notifications')), (snap) => {
@@ -194,7 +206,7 @@ export default function TopNav({ user, onLogout, onMenuToggle }) {
       unsub();
       stopAnomalySync();
     };
-  }, [activeCompanyId]);
+  }, [activeCompanyId, userIsDeveloper]);
 
   const notifCount = notifications.filter(n => n.status === 'Unread' || n.read === false).length;
 
@@ -308,12 +320,17 @@ export default function TopNav({ user, onLogout, onMenuToggle }) {
     setShowUserMenu(false);
     const confirmed = await showConfirmLogout(
       'Sign Out?',
-      'Are you sure you want to sign out of SubAi Admin Portal?'
+      userIsDeveloper
+        ? 'Are you sure you want to sign out of the SubAi Developer Console?'
+        : 'Are you sure you want to sign out of SubAi Company Portal?'
     );
     if (confirmed) {
       showToast('Signed Out', 'You have successfully signed out.', 'info');
-      if (onLogout) onLogout();
-      navigate('/login');
+      if (onLogout) {
+        onLogout();
+      } else {
+        navigate(userIsDeveloper ? '/developer-login' : '/login');
+      }
     }
   };
 
@@ -339,15 +356,19 @@ export default function TopNav({ user, onLogout, onMenuToggle }) {
   }, []);
 
   const displayName = profile.displayName || profile.name || (profile.email ? profile.email.split('@')[0] : 'Admin User');
-  const displayRole = profile.role || 'Super Admin';
+  const displayRole = userIsDeveloper ? 'System Developer' : (profile.jobTitle || profile.role || 'Company Admin');
   const displayEmail = profile.email || 'admin@subai.com';
   const avatarColor = profile.avatarColor || '#1E5ADB';
   const avatarPhoto = profile.avatarPhoto || null;
   const displayInitial = (displayName.charAt(0) || 'A').toUpperCase();
 
-  let title = 'Dashboard';
-  let description = 'Overview of your workforce';
+  let title = userIsDeveloper ? 'Developer Portal' : 'Dashboard';
+  let description = userIsDeveloper ? 'Manage subscribed companies, plans, activations & Company Admin approvals' : 'Overview of your workforce';
   switch (location.pathname) {
+    case '/developer': title = 'Developer Portal'; description = 'Manage client companies, subscriptions, plans, activations & Company Admin approvals'; break;
+    case '/developer/monitoring': title = 'System Monitoring & Support'; description = 'Real-time platform health, tenant seat utilization & customer support notices'; break;
+    case '/developer/logs': title = 'Platform Logs'; description = 'System-wide administrative & platform audit trail'; break;
+    case '/developer/settings': title = 'Developer Settings'; description = 'System provider profile, security & preferences'; break;
     case '/': title = 'Dashboard'; description = 'Overview of your workforce and key metrics'; break;
     case '/tracking': title = 'Live Tracking'; description = 'Monitor real-time employee locations'; break;
     case '/employees': title = 'Employees'; description = 'Manage your workforce directory'; break;
@@ -586,32 +607,36 @@ export default function TopNav({ user, onLogout, onMenuToggle }) {
       </div>
 
       <div className="topnav-right">
-        {/* Multi-Company Context Switcher / Tenant Indicator */}
-        {canSwitchCompanies ? (
-          <div style={{ display: 'flex', alignItems: 'center', gap: 6, background: '#EFF6FF', border: '1px solid #BFDBFE', borderRadius: 10, padding: '4px 10px' }} title="Switch active company view">
-            <Building2 size={14} color="#1E5ADB" />
-            <select
-              value={activeCompanyId}
-              onChange={(e) => setActiveCompanyId(e.target.value)}
-              style={{
-                border: 'none', background: 'transparent', outline: 'none',
-                fontSize: 12, fontWeight: 700, color: '#1E40AF', cursor: 'pointer', maxWidth: 165
-              }}
-            >
-              <option value="ALL">All Companies ({companies.length})</option>
-              {companies.map((c) => (
-                <option key={c.id} value={c.id}>{c.name}</option>
-              ))}
-            </select>
+        {/* Platform Developer Badge vs Locked Company Tenant Indicator */}
+        {userIsDeveloper ? (
+          <div
+            style={{
+              display: 'flex', alignItems: 'center', gap: 6,
+              background: '#0F172A', border: '1px solid #38BDF8', borderRadius: 10,
+              padding: '5px 12px', fontSize: 12, fontWeight: 700, color: '#E0F2FE'
+            }}
+            title="System Provider Developer Portal"
+          >
+            <Terminal size={14} color="#38BDF8" />
+            <span>System Provider &bull; Developer Portal</span>
           </div>
         ) : activeCompany ? (
-          <div style={{ display: 'flex', alignItems: 'center', gap: 6, background: '#F8FAFC', border: '1px solid #E2E8F0', borderRadius: 10, padding: '5px 10px', fontSize: 12, fontWeight: 700, color: '#334155' }}>
-            <Building2 size={14} color="#1E5ADB" />
+          <div style={{ display: 'flex', alignItems: 'center', gap: 7, background: '#F8FAFC', border: '1px solid #E2E8F0', borderRadius: 10, padding: '5px 10px', fontSize: 12, fontWeight: 700, color: '#334155' }}>
+            {activeCompany.logoUrl ? (
+              <img
+                src={activeCompany.logoUrl}
+                alt={activeCompany.name}
+                style={{ width: 18, height: 18, borderRadius: 4, objectFit: 'contain', background: '#FFFFFF' }}
+              />
+            ) : (
+              <Building2 size={14} color="#1E5ADB" />
+            )}
             <span>{activeCompany.name}</span>
           </div>
         ) : null}
 
-        {/* Universal Search Bar */}
+        {/* Universal Search Bar (Company Portal only) */}
+        {!userIsDeveloper && (
         <div className="topnav-search-premium" ref={searchRef}>
           <div className={`search-bar ${showSearch ? 'search-bar-focused' : ''}`} onClick={() => { setShowSearch(true); searchInputRef.current?.focus(); }}>
             <Search size={15} className="search-icon" />
@@ -823,8 +848,10 @@ export default function TopNav({ user, onLogout, onMenuToggle }) {
             </div>
           )}
         </div>
+        )}
 
-        {/* Quick Actions Dropdown Button */}
+        {/* Quick Actions Dropdown Button (Company Portal only) */}
+        {!userIsDeveloper && filteredQuickActions.length > 0 && (
         <div className="topnav-action-wrapper" ref={quickRef}>
           <button 
             className="topnav-quick-btn" 
@@ -865,6 +892,7 @@ export default function TopNav({ user, onLogout, onMenuToggle }) {
             </div>
           )}
         </div>
+        )}
 
         {/* Theme Toggle Button */}
         <div className="topnav-action-wrapper" ref={themeRef}>
@@ -901,7 +929,8 @@ export default function TopNav({ user, onLogout, onMenuToggle }) {
           )}
         </div>
 
-        {/* Notification Center */}
+        {/* Notification Center (Company Portal only) */}
+        {!userIsDeveloper && (
         <div className="topnav-action-wrapper" ref={notifRef}>
           <button 
             className="topnav-notif-btn" 
@@ -983,6 +1012,7 @@ export default function TopNav({ user, onLogout, onMenuToggle }) {
             </div>
           )}
         </div>
+        )}
 
         {/* User Profile */}
         <div className="topnav-action-wrapper" ref={userMenuRef}>
@@ -1051,12 +1081,23 @@ export default function TopNav({ user, onLogout, onMenuToggle }) {
                 </div>
               </div>
               <div className="user-menu-divider" />
-              <div className="user-menu-item" onClick={() => { setShowUserMenu(false); navigate('/settings'); }}><User size={14} /> <span>My Profile</span></div>
-              <div className="user-menu-item" onClick={() => { setShowUserMenu(false); navigate('/settings'); }}><Settings size={14} /> <span>Account Settings</span></div>
-              <div className="user-menu-item" onClick={() => { setShowUserMenu(false); navigate('/settings'); }}><Shield size={14} /> <span>Security & Access</span></div>
-              <div className="user-menu-item" onClick={() => { setShowUserMenu(false); navigate('/logs'); }}><ScrollText size={14} /> <span>Activity Logs</span></div>
-              <div className="user-menu-divider" />
-              <div className="user-menu-item" onClick={() => { setShowUserMenu(false); navigate('/notifications'); }}><HelpCircle size={14} /> <span>Alerts & Notifications</span></div>
+              {userIsDeveloper ? (
+                <>
+                  <div className="user-menu-item" onClick={() => { setShowUserMenu(false); navigate('/developer'); }}><Building2 size={14} /> <span>Companies &amp; Plans</span></div>
+                  <div className="user-menu-item" onClick={() => { setShowUserMenu(false); navigate('/developer/monitoring'); }}><Activity size={14} /> <span>System Monitoring</span></div>
+                  <div className="user-menu-item" onClick={() => { setShowUserMenu(false); navigate('/developer/logs'); }}><ScrollText size={14} /> <span>Platform Logs</span></div>
+                  <div className="user-menu-item" onClick={() => { setShowUserMenu(false); navigate('/developer/settings'); }}><Settings size={14} /> <span>Developer Settings</span></div>
+                </>
+              ) : (
+                <>
+                  <div className="user-menu-item" onClick={() => { setShowUserMenu(false); navigate('/settings'); }}><User size={14} /> <span>My Profile</span></div>
+                  <div className="user-menu-item" onClick={() => { setShowUserMenu(false); navigate('/settings'); }}><Settings size={14} /> <span>Account Settings</span></div>
+                  <div className="user-menu-item" onClick={() => { setShowUserMenu(false); navigate('/settings'); }}><Shield size={14} /> <span>Security & Access</span></div>
+                  <div className="user-menu-item" onClick={() => { setShowUserMenu(false); navigate('/logs'); }}><ScrollText size={14} /> <span>Activity Logs</span></div>
+                  <div className="user-menu-divider" />
+                  <div className="user-menu-item" onClick={() => { setShowUserMenu(false); navigate('/notifications'); }}><HelpCircle size={14} /> <span>Alerts & Notifications</span></div>
+                </>
+              )}
               <div className="user-menu-divider" />
               <div className="user-menu-item user-menu-logout" onClick={handleLogout}>
                 <LogOut size={14} /> <span>Logout</span>
@@ -1066,8 +1107,8 @@ export default function TopNav({ user, onLogout, onMenuToggle }) {
         </div>
       </div>
 
-      {/* Persistent Readable Critical Anomaly Popup Panel (Top-Right, pauses on hover) */}
-      {criticalAlerts.length > 0 && (
+      {/* Persistent Readable Critical Anomaly Popup Panel (Company Portal only; pauses on hover) */}
+      {!userIsDeveloper && criticalAlerts.length > 0 && (
         <div
           style={{
             position: 'fixed',

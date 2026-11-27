@@ -9,7 +9,7 @@ import * as SplashScreen from 'expo-splash-screen';
 
 SplashScreen.preventAutoHideAsync().catch(() => {});
 
-import { auth, onAuthStateChanged, signOut, loadUserSession, saveUserSession, subscribeToLogout, performGlobalLogout } from './src/firebase';
+import { auth, onAuthStateChanged, signOut, loadUserSession, saveUserSession, subscribeToLogout, performGlobalLogout, getCachedCompanyBranding } from './src/firebase';
 import LoginScreen from './src/screens/LoginScreen';
 import HomeScreen from './src/screens/HomeScreen';
 import MapScreen from './src/screens/MapScreen';
@@ -77,6 +77,13 @@ import presenceService from './src/services/presenceService';
 export default function App() {
   const [user, setUser] = useState(null);
   const [loading, setLoading] = useState(true);
+  const [splashBrand, setSplashBrand] = useState(null);
+
+  useEffect(() => {
+    getCachedCompanyBranding().then((b) => {
+      if (b) setSplashBrand(b);
+    }).catch(() => {});
+  }, []);
   // Track whether Firebase has fired its first auth event.
   // During cold start Firebase takes a moment to restore the persisted token;
   // we must NOT treat that transient null as "logged out".
@@ -146,8 +153,14 @@ export default function App() {
     return () => unsubLogout();
   }, []);
 
-  const handleLogin = (email, name) => {
-    const userData = { email, name: name || email.split('@')[0] || 'User' };
+  const handleLogin = (email, name, extra = {}) => {
+    const userData = {
+      ...extra,
+      email,
+      name: name || email.split('@')[0] || 'User',
+      companyId: extra?.companyId || 'company_default',
+      companyName: extra?.companyName || '',
+    };
     saveUserSession(userData); // ← persist so session survives app close/reopen
     setUser(userData);
     presenceService.startPresence(userData);
@@ -166,16 +179,18 @@ export default function App() {
   if (loading) {
     return (
       <View style={{ flex: 1, justifyContent: 'center', alignItems: 'center', backgroundColor: '#4F46E5', padding: 20 }}>
-        <Image
-          source={require('./assets/logo.png')}
-          style={{ width: 100, height: 100, marginBottom: 18 }}
-          resizeMode="contain"
-        />
-        <Text style={{ fontSize: 28, fontWeight: '800', color: '#FFFFFF', letterSpacing: 0.5, marginBottom: 6 }}>
-          SubAi
+        <View style={splashBrand?.logoUrl ? { backgroundColor: '#FFFFFF', borderRadius: 20, paddingHorizontal: 18, paddingVertical: 12, marginBottom: 18 } : { marginBottom: 18 }}>
+          <Image
+            source={splashBrand?.logoUrl ? { uri: splashBrand.logoUrl } : require('./assets/logo.png')}
+            style={{ width: splashBrand?.logoUrl ? 150 : 100, height: splashBrand?.logoUrl ? 64 : 100 }}
+            resizeMode="contain"
+          />
+        </View>
+        <Text style={{ fontSize: 26, fontWeight: '800', color: '#FFFFFF', letterSpacing: 0.5, marginBottom: 6, textAlign: 'center' }}>
+          {splashBrand?.name || 'SubAi'}
         </Text>
         <Text style={{ fontSize: 13, color: '#E0E7FF', marginBottom: 28, fontWeight: '500' }}>
-          Workforce Intelligence & Field Operations
+          Workforce Intelligence &amp; Field Operations
         </Text>
         <ActivityIndicator size="small" color="#ffffff" />
       </View>

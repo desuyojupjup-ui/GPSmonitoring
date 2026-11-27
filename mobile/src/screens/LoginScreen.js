@@ -22,12 +22,17 @@ import {
   query,
   where,
   getDocs, 
+  getDoc,
   doc,
   updateDoc,
   setDoc,
   signInWithEmailAndPassword, 
+  createUserWithEmailAndPassword,
   saveUserSession,
-  ensureAuthenticatedSession 
+  setMobileCompanyScope,
+  ensureAuthenticatedSession,
+  getCachedCompanyBranding,
+  cacheCompanyBranding,
 } from '../firebase';
 import AsyncStorage from '@react-native-async-storage/async-storage';
 
@@ -56,15 +61,22 @@ export default function LoginScreen({ navigation, route, onLogin: propOnLogin })
   const [loading, setLoading] = useState(false);
   const [showPassword, setShowPassword] = useState(false);
   const [rememberMe, setRememberMe] = useState(true);
+  const [brandInfo, setBrandInfo] = useState(null);
 
-  // Load remembered email if previously stored
+  // Load remembered email & cached company branding if previously stored
   useEffect(() => {
     const loadRememberedEmail = async () => {
       try {
-        const savedEmail = await AsyncStorage.getItem('@subai_remembered_email');
+        const [savedEmail, cachedBrand] = await Promise.all([
+          AsyncStorage.getItem('@subai_remembered_email'),
+          getCachedCompanyBranding(),
+        ]);
         if (savedEmail) {
           setEmail(savedEmail);
           setRememberMe(true);
+        }
+        if (cachedBrand) {
+          setBrandInfo(cachedBrand);
         }
       } catch (err) {
         console.warn('Load remembered email error:', err);
@@ -93,8 +105,16 @@ export default function LoginScreen({ navigation, route, onLogin: propOnLogin })
 
     setLoading(true);
     try {
-      // 1. Ensure Firebase Auth session is active so Firestore Security Rules permit reading employees
-      await ensureAuthenticatedSession();
+      // 1. Try signing directly into the employee's own Firebase Auth account first
+      //    so Firestore rules allow reading their own employee document across ANY company;
+      //    fall back to gateway session if their Auth record hasn't been created yet.
+      let signedInOwnAuth = false;
+      try {
+        const directCred = await signInWithEmailAndPassword(auth, cleanEmail, cleanPassword);
+        if (directCred?.user) signedInOwnAuth = true;
+      } catch (_) {
+        await ensureAuthenticatedSession();
+      }
 
       // 2. Fetch employee record from Firestore (email query first so Firestore query-planner rules pass cleanly)
       let empData = null;
@@ -196,29 +216,39 @@ export default function LoginScreen({ navigation, route, onLogin: propOnLogin })
 
       // 4. Authenticated successfully
       await clearStaleCache();
-      const targetEmail = empData.email || cleanEmail;
+      const targetEmail = (empData.email || cleanEmail).trim().toLowerCase();
       const targetName = empData.name || cleanEmail.split('@')[0];
       const companyId = empData.companyId || 'company_default';
+      setMobileCompanyScope(companyId);
 
-      // Attempt signing into the employee's own Firebase Auth account if provisioned
-      // so Firestore Security Rules bind directly to the employee's UID and companyId
+      // Ensure the employee is signed into their own Firebase Auth UID & user_profiles/{uid}
+      // so Firestore Security Rules bind directly to the employee's exact companyId
       if (targetEmail && !targetEmail.includes('admin@')) {
-        try {
-          const ownCred = await signInWithEmailAndPassword(auth, targetEmail, cleanPassword);
-          if (ownCred?.user?.uid) {
-            await setDoc(doc(db, 'user_profiles', ownCred.user.uid), {
-              uid: ownCred.user.uid,
-              role: 'Employee',
-              companyId,
-              employeeId: empData.id,
-              email: targetEmail.toLowerCase(),
-              name: targetName,
-              status: 'Active',
-              updatedAt: Date.now(),
-            }, { merge: true }).catch(() => {});
+        let ownUid = signedInOwnAuth ? auth?.currentUser?.uid : null;
+        if (!ownUid) {
+          try {
+            const ownCred = await signInWithEmailAndPassword(auth, targetEmail, cleanPassword);
+            ownUid = ownCred?.user?.uid || null;
+          } catch (_) {
+            try {
+              const createdCred = await createUserWithEmailAndPassword(auth, targetEmail, cleanPassword);
+              ownUid = createdCred?.user?.uid || null;
+            } catch (__) {
+              // Existing Auth password differs or creation unavailable; keep active session
+            }
           }
-        } catch (_) {
-          // Employee Auth record not provisioned individually — gateway session remains active
+        }
+        if (ownUid) {
+          await setDoc(doc(db, 'user_profiles', ownUid), {
+            uid: ownUid,
+            role: 'Employee',
+            companyId,
+            employeeId: empData.id,
+            email: targetEmail,
+            name: targetName,
+            status: 'Active',
+            updatedAt: Date.now(),
+          }, { merge: true }).catch(() => {});
         }
       }
 
@@ -257,9 +287,27 @@ export default function LoginScreen({ navigation, route, onLogin: propOnLogin })
         console.warn('Remember me storage warning:', err);
       }
 
-      await saveUserSession(sessionPayload);
+      // Pre-fetch & cache the employee's company logo and name from Firestore
+      let resolvedCompanyName = empData.companyName || '';
+      try {
+        const compSnap = await getDoc(doc(db, 'companies', companyId));
+        if (compSnap.exists && compSnap.exists()) {
+          const compData = compSnap.data() || {};
+          resolvedCompanyName = compData.name || resolvedCompanyName;
+          await cacheCompanyBranding({
+            companyId,
+            name: resolvedCompanyName,
+            logoUrl: compData.logoUrl || null,
+          });
+        }
+      } catch (_) {}
+
+      await saveUserSession({ ...sessionPayload, companyName: resolvedCompanyName });
       if (onLogin) {
-        onLogin(sessionPayload.email, sessionPayload.name);
+        onLogin(sessionPayload.email, sessionPayload.name, {
+          ...sessionPayload,
+          companyName: resolvedCompanyName,
+        });
       }
     } catch (error) {
       console.warn('Authentication check warning:', error);
@@ -289,10 +337,15 @@ export default function LoginScreen({ navigation, route, onLogin: propOnLogin })
             {/* Brand Logo Header */}
             <View style={styles.brandRow}>
               <Image
-                source={require('../../assets/logo.png')}
+                source={brandInfo?.logoUrl ? { uri: brandInfo.logoUrl } : require('../../assets/logo.png')}
                 style={styles.logo}
                 resizeMode="contain"
               />
+              {brandInfo?.name ? (
+                <Text style={{ fontSize: 12, fontWeight: '700', color: '#1E5ADB', marginTop: 4 }}>
+                  {brandInfo.name}
+                </Text>
+              ) : null}
             </View>
 
             {/* Title & Subtitle */}

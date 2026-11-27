@@ -3,11 +3,19 @@ import { NavLink } from 'react-router-dom';
 import {
   LayoutDashboard, Map, Users, MapPin, ClipboardList,
   CalendarCheck, FileBarChart2, Bell, Settings, ShieldCheck, ScrollText,
-  ScanLine, ShieldAlert, ShieldX, Clock, ChevronsLeft, ChevronsRight
+  ScanLine, ShieldAlert, ShieldX, Clock, ChevronsLeft, ChevronsRight, Building2, Activity
 } from 'lucide-react';
-import { isPathAllowedForUser, getRoleConfig } from '../utils/roles';
+import { isPathAllowedForUser, getRoleConfig, isDeveloper } from '../utils/roles';
+import { useCompany } from '../utils/companyContext';
 
 import logoImage from '../assets/logo.png';
+
+const developerNavItems = [
+  { to: '/developer',            icon: Building2,  label: 'Companies & Plans' },
+  { to: '/developer/monitoring', icon: Activity,   label: 'System Monitoring' },
+  { to: '/developer/logs',       icon: ScrollText, label: 'Platform Logs' },
+  { to: '/developer/settings',   icon: Settings,   label: 'Developer Settings' },
+];
 
 const navItems = [
   { to: '/',             icon: LayoutDashboard, label: 'Dashboard' },
@@ -28,9 +36,15 @@ const navItems = [
 ];
 
 export default function Sidebar({ collapsed, setCollapsed, mobileOpen, setMobileOpen, user }) {
+  const { activeCompany, activeCompanyName, companyLogoUrl } = useCompany();
   const currentRole = user?.role || 'Company User';
   const roleConfig = getRoleConfig(currentRole);
-  const visibleNavItems = navItems.filter(item => isPathAllowedForUser(user, item.to));
+  const devUser = isDeveloper(user);
+  const visibleNavItems = devUser
+    ? developerNavItems
+    : navItems.filter(item => isPathAllowedForUser(user, item.to));
+  const brandLogoSrc = (!devUser && (companyLogoUrl || activeCompany?.logoUrl)) ? (companyLogoUrl || activeCompany?.logoUrl) : logoImage;
+  const brandLogoAlt = (!devUser && activeCompanyName) ? `${activeCompanyName} Logo` : 'SubAi Logo';
 
   return (
     <aside className={`sidebar ${collapsed ? 'collapsed' : ''} ${mobileOpen ? 'mobile-open' : ''}`}>
@@ -44,7 +58,12 @@ export default function Sidebar({ collapsed, setCollapsed, mobileOpen, setMobile
         position: 'relative'
       }}>
         {!collapsed && (
-          <img src={logoImage} alt="SubAi Logo" style={{ height: 36, width: 'auto', objectFit: 'contain' }} />
+          <img
+            src={brandLogoSrc}
+            alt={brandLogoAlt}
+            onError={(e) => { e.currentTarget.src = logoImage; }}
+            style={{ height: 36, maxWidth: 162, width: 'auto', objectFit: 'contain' }}
+          />
         )}
         <button
           onClick={() => setCollapsed(!collapsed)}
@@ -91,11 +110,11 @@ export default function Sidebar({ collapsed, setCollapsed, mobileOpen, setMobile
             letterSpacing: '0.2px'
           }}>
             <span style={{ width: 6, height: 6, borderRadius: '50%', background: roleConfig.color }} />
-            {roleConfig.role} Portal
+            {devUser ? 'Developer Portal' : (roleConfig.role === 'Company Admin' ? 'Company Admin Portal' : `${user?.jobTitle || 'Company User'} Portal`)}
           </div>
         </div>
       ) : (
-        <div style={{ display: 'flex', justifyContent: 'center', padding: '4px 0 8px' }} title={`${roleConfig.role} Portal`}>
+        <div style={{ display: 'flex', justifyContent: 'center', padding: '4px 0 8px' }} title={devUser ? 'Developer Portal' : 'Company Admin Portal'}>
           <span style={{ width: 7, height: 7, borderRadius: '50%', background: roleConfig.color }} />
         </div>
       )}
@@ -106,7 +125,7 @@ export default function Sidebar({ collapsed, setCollapsed, mobileOpen, setMobile
           <NavLink
             key={to}
             to={to}
-            end={to === '/'}
+            end={to === '/' || to === '/developer'}
             title={collapsed ? label : undefined}
             className={({ isActive }) => isActive ? 'nav-item active' : 'nav-item'}
           >

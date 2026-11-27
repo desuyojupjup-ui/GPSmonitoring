@@ -57,7 +57,7 @@ const CustomBarTooltip = ({ active, payload }) => {
 
 function Toast({ toasts }) {
   return (
-    <div style={{ position: 'fixed', top: 24, right: 24, zIndex: 9999, display: 'flex', flexDirection: 'column', gap: 10, pointerEvents: 'none' }}>
+    <div style={{ position: 'fixed', top: 76, right: 24, zIndex: 20000, display: 'flex', flexDirection: 'column', gap: 10, pointerEvents: 'none' }}>
       {toasts.map(t => (
         <div key={t.id} style={{
           display: 'flex', alignItems: 'center', gap: 14,

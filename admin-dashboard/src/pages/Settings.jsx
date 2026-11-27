@@ -3,10 +3,13 @@ import {
   User, Shield, Bell, Key, Globe, Database, Save, CheckCircle2, 
   Lock, Smartphone, Sliders, Cpu, Activity, RefreshCw, Radio, 
   MapPin, ShieldAlert, Check, Eye, EyeOff, Moon, Sun, AlertTriangle,
-  Camera, Upload, Trash2, ShieldCheck, Mail, Phone, Building, Briefcase, UserCheck
+  Camera, Upload, Trash2, ShieldCheck, Mail, Phone, Building, Briefcase, UserCheck, Download, Copy, QrCode
 } from 'lucide-react';
 import { showToast } from '../utils/toast';
-import { updateCurrentAdminProfile, verifyAndUpdateAdminPassword, safeLocalStorageSet } from '../firebase';
+import { db, doc, onSnapshot, updateCurrentAdminProfile, verifyAndUpdateAdminPassword, safeLocalStorageSet, recordSystemActivityLog } from '../firebase';
+import { useCompany } from '../utils/companyContext';
+import { isCompanyAdmin, isDeveloper } from '../utils/roles';
+import defaultSubaiLogo from '../assets/logo.png';
 
 const DEFAULT_SETTINGS = {
   profile: {
@@ -45,34 +48,92 @@ const DEFAULT_SETTINGS = {
 };
 
 export default function Settings() {
+  const { activeCompany, activeCompanyName, activeCompanyId, companyLogoUrl, updateCompanyLogo, user: ctxUser } = useCompany();
   const [activeTab, setActiveTab] = useState('General Profile');
   const fileInputRef = useRef(null);
-  
-  // Load settings from localStorage or fallback to defaults, intelligently merging logged-in user
+  const companyLogoInputRef = useRef(null);
+
+  const currentUser = ctxUser || (() => {
+    try { return JSON.parse(localStorage.getItem('subai_admin_user') || '{}'); } catch { return {}; }
+  })();
+  const canEditCompanyBranding = isCompanyAdmin(currentUser) && !isDeveloper(currentUser);
+
+  const [pendingCompanyLogo, setPendingCompanyLogo] = useState(undefined);
+  const [savingLogo, setSavingLogo] = useState(false);
+  const [mobileAppRelease, setMobileAppRelease] = useState(null);
+  const [showApkQr, setShowApkQr] = useState(false);
+
+  const displayedCompanyLogo = pendingCompanyLogo !== undefined ? pendingCompanyLogo : (companyLogoUrl || activeCompany?.logoUrl || null);
+
+  // Live subscription to official Employee Mobile App (Android APK) release published by System Provider
+  useEffect(() => {
+    if (isDeveloper(currentUser)) return;
+    let unsub = () => {};
+    try {
+      unsub = onSnapshot(
+        doc(db, 'platform_config', 'mobile_app'),
+        (snap) => {
+          if (snap.exists && snap.exists()) {
+            setMobileAppRelease(snap.data());
+          } else {
+            setMobileAppRelease(null);
+          }
+        },
+        () => {}
+      );
+    } catch (_) {}
+    return () => unsub();
+  }, [currentUser?.role]);
+
+  const resolvedApkUrl = (() => {
+    const raw = (mobileAppRelease?.apkUrl || '').trim();
+    if (!raw) return '';
+    if (/^https?:\/\//i.test(raw)) return raw;
+    if (typeof window !== 'undefined' && raw.startsWith('/')) {
+      return `${window.location.origin}${raw}`;
+    }
+    return raw;
+  })();
+
+  const handleCopyApkLink = async () => {
+    if (!resolvedApkUrl) return;
+    try {
+      await navigator.clipboard.writeText(resolvedApkUrl);
+      showToast('Install Link Copied', 'Share this Android APK download link with your employees.', 'success');
+    } catch {
+      showToast('APK Link', resolvedApkUrl, 'info');
+    }
+  };
+
+  // Load settings prioritizing the currently signed-in user (never showing stale cached user data)
   const [settings, setSettings] = useState(() => {
     try {
       const savedSettings = localStorage.getItem('subai_system_settings');
       const parsedSettings = savedSettings ? JSON.parse(savedSettings) : {};
       const savedUser = JSON.parse(localStorage.getItem('subai_admin_user') || '{}');
-      
+      const sameCachedUser =
+        savedUser.email &&
+        parsedSettings?.profile?.email &&
+        savedUser.email.toLowerCase() === parsedSettings.profile.email.toLowerCase();
+
       const userFullName = (savedUser.name || savedUser.displayName || '').trim();
-      const nameParts = userFullName.split(' ');
-      const userFirstName = nameParts[0] || 'System';
-      const userLastName = nameParts.slice(1).join(' ') || (nameParts[0] ? 'Admin' : '');
+      const nameParts = userFullName.split(/\s+/).filter(Boolean);
+      const userFirstName = nameParts[0] || 'Company';
+      const userLastName = nameParts.slice(1).join(' ') || 'Admin';
 
       return {
         ...DEFAULT_SETTINGS,
         ...parsedSettings,
         profile: {
           ...DEFAULT_SETTINGS.profile,
-          firstName: parsedSettings?.profile?.firstName || userFirstName || 'System',
-          lastName: parsedSettings?.profile?.lastName || userLastName || 'Admin',
-          email: parsedSettings?.profile?.email || savedUser.email || 'admin@subai.com',
-          phone: parsedSettings?.profile?.phone || savedUser.phone || '+63 917 123 4567',
-          role: parsedSettings?.profile?.role || savedUser.role || 'Super Administrator',
-          department: parsedSettings?.profile?.department || savedUser.department || 'Command Center Ops',
-          avatarColor: parsedSettings?.profile?.avatarColor || savedUser.avatarColor || '#1E5ADB',
-          avatarPhoto: parsedSettings?.profile?.avatarPhoto || savedUser.avatarPhoto || null
+          firstName: (sameCachedUser ? parsedSettings.profile.firstName : '') || userFirstName,
+          lastName: (sameCachedUser ? parsedSettings.profile.lastName : '') || userLastName,
+          email: savedUser.email || parsedSettings?.profile?.email || 'admin@subai.com',
+          phone: savedUser.phone || (sameCachedUser ? parsedSettings.profile.phone : '') || '',
+          role: savedUser.jobTitle || savedUser.role || 'Company Admin',
+          department: savedUser.department || (sameCachedUser ? parsedSettings.profile.department : '') || 'Command Center Ops',
+          avatarColor: savedUser.avatarColor || (sameCachedUser ? parsedSettings.profile.avatarColor : '') || '#1E5ADB',
+          avatarPhoto: savedUser.avatarPhoto !== undefined ? savedUser.avatarPhoto : (sameCachedUser ? parsedSettings.profile.avatarPhoto : null)
         }
       };
     } catch {
@@ -80,34 +141,45 @@ export default function Settings() {
     }
   });
 
+  // Keep profile card synchronized whenever the signed-in user changes
+  useEffect(() => {
+    if (!ctxUser?.email) return;
+    const fullName = (ctxUser.name || ctxUser.displayName || '').trim();
+    const parts = fullName.split(/\s+/).filter(Boolean);
+    setSettings((prev) => ({
+      ...prev,
+      profile: {
+        ...prev.profile,
+        firstName: parts[0] || prev.profile.firstName || 'Company',
+        lastName: parts.slice(1).join(' ') || (parts.length <= 1 ? '' : prev.profile.lastName),
+        email: ctxUser.email,
+        role: ctxUser.jobTitle || ctxUser.role || prev.profile.role,
+        avatarColor: ctxUser.avatarColor || prev.profile.avatarColor,
+        avatarPhoto: ctxUser.avatarPhoto !== undefined ? ctxUser.avatarPhoto : prev.profile.avatarPhoto,
+      },
+    }));
+  }, [ctxUser?.email, ctxUser?.name, ctxUser?.role, ctxUser?.jobTitle]);
+
   const [passwords, setPasswords] = useState({ current: '', newPass: '', confirm: '' });
   const [showCurrentPass, setShowCurrentPass] = useState(false);
   const [showNewPass, setShowNewPass] = useState(false);
   const [isSaving, setIsSaving] = useState(false);
 
-  // Client-side image compressor: shrinks image to 160x160 JPEG (~8KB)
-  const compressImage = (fileOrDataUrl, maxWidth = 160, maxHeight = 160, quality = 0.72) => {
+  // Client-side image compressor: shrinks avatar to JPEG or preserves PNG transparency for company logos
+  const compressImage = (fileOrDataUrl, maxWidth = 160, maxHeight = 160, quality = 0.72, mimeType = 'image/jpeg') => {
     return new Promise((resolve) => {
       const img = new Image();
       img.onload = () => {
         let { width, height } = img;
-        if (width > height) {
-          if (width > maxWidth) {
-            height = Math.round((height * maxWidth) / width);
-            width = maxWidth;
-          }
-        } else {
-          if (height > maxHeight) {
-            width = Math.round((width * maxHeight) / height);
-            height = maxHeight;
-          }
-        }
+        const scale = Math.min(1, maxWidth / width, maxHeight / height);
+        width = Math.max(1, Math.round(width * scale));
+        height = Math.max(1, Math.round(height * scale));
         const canvas = document.createElement('canvas');
         canvas.width = width;
         canvas.height = height;
         const ctx = canvas.getContext('2d');
         ctx.drawImage(img, 0, 0, width, height);
-        resolve(canvas.toDataURL('image/jpeg', quality));
+        resolve(mimeType === 'image/png' ? canvas.toDataURL('image/png') : canvas.toDataURL(mimeType, quality));
       };
       img.onerror = () => resolve(typeof fileOrDataUrl === 'string' ? fileOrDataUrl : null);
 
@@ -120,6 +192,77 @@ export default function Settings() {
         reader.readAsDataURL(fileOrDataUrl);
       }
     });
+  };
+
+  // Company Logo Upload & Firestore Persistence (Company Admin only)
+  const handleCompanyLogoFileSelect = async (e) => {
+    const file = e.target.files?.[0];
+    if (!file) return;
+    if (file.size > 8 * 1024 * 1024) {
+      return showToast('File Too Large', 'Please choose a company logo smaller than 8MB.', 'warning');
+    }
+    try {
+      // Preserve transparency with PNG for crisp sidebar/header branding
+      let optimized = await compressImage(file, 360, 110, 0.85, 'image/png');
+      if (optimized && optimized.length > 180000) {
+        optimized = await compressImage(file, 300, 90, 0.82, 'image/webp');
+      }
+      if (optimized) {
+        setPendingCompanyLogo(optimized);
+        showToast('Logo Ready', 'Preview updated. Click "Save Company Logo" to apply across your company portal.', 'info');
+      }
+    } catch (err) {
+      console.error('Company logo process error:', err);
+      showToast('Upload Error', 'Could not process the selected logo image.', 'error');
+    }
+  };
+
+  const handleSaveCompanyLogo = async () => {
+    if (!canEditCompanyBranding) return;
+    setSavingLogo(true);
+    try {
+      const nextLogo = displayedCompanyLogo || null;
+      await updateCompanyLogo(nextLogo, activeCompanyId);
+      await recordSystemActivityLog({
+        action: nextLogo
+          ? `Updated company logo for ${activeCompanyName}`
+          : `Reset company logo to default for ${activeCompanyName}`,
+        module: 'Settings',
+        status: 'Success',
+        user: currentUser?.email || currentUser?.name || 'Company Admin',
+        companyId: activeCompanyId,
+      }).catch(() => {});
+      setPendingCompanyLogo(undefined);
+      if (companyLogoInputRef.current) companyLogoInputRef.current.value = '';
+      showToast(
+        nextLogo ? 'Company Logo Saved' : 'Default Logo Restored',
+        nextLogo
+          ? `Custom logo for ${activeCompanyName} is now live across all sessions of your company.`
+          : `${activeCompanyName} reverted to the default SUBAI logo.`,
+        'success'
+      );
+    } catch (err) {
+      console.error('Save company logo error:', err);
+      showToast('Save Failed', err.message || 'Could not update company logo in Firestore.', 'error');
+    } finally {
+      setSavingLogo(false);
+    }
+  };
+
+  const handleResetCompanyLogo = async () => {
+    if (!canEditCompanyBranding) return;
+    setPendingCompanyLogo(null);
+    if (companyLogoInputRef.current) companyLogoInputRef.current.value = '';
+    setSavingLogo(true);
+    try {
+      await updateCompanyLogo(null, activeCompanyId);
+      setPendingCompanyLogo(undefined);
+      showToast('Default Logo Restored', `${activeCompanyName} now uses the default SUBAI logo.`, 'info');
+    } catch (err) {
+      showToast('Reset Failed', err.message || 'Could not reset company logo.', 'error');
+    } finally {
+      setSavingLogo(false);
+    }
   };
 
   // Photo upload handler with automatic canvas compression
@@ -183,12 +326,12 @@ export default function Settings() {
         finalPhoto = await compressImage(finalPhoto, 160, 160, 0.7);
       }
 
-      const updatedUser = updateCurrentAdminProfile({
+      await updateCurrentAdminProfile({
         firstName: firstName.trim(),
         lastName: lastName.trim(),
         email: email.trim().toLowerCase(),
         phone: phone?.trim() || '',
-        role: role || 'Super Administrator',
+        role: role || 'Company Admin',
         department: department?.trim() || 'Command Center Ops',
         avatarColor: avatarColor || '#1E5ADB',
         avatarPhoto: finalPhoto || null
@@ -379,8 +522,228 @@ export default function Settings() {
             })}
           </div>
 
-          {/* TAB 1: General Profile */}
+          {/* TAB 1: General Profile & Company Branding */}
           {activeTab === 'General Profile' && (
+            <div style={{ display: 'flex', flexDirection: 'column', gap: '20px' }}>
+
+              {/* Company Logo & Branding Card (Company Owner / Company Admin only) */}
+              {canEditCompanyBranding && (
+                <div style={cardContainerStyle}>
+                  <div style={sectionHeaderStyle}>
+                    <div style={{ ...iconBadgeStyle, background: '#EFF6FF', color: '#1E5ADB' }}>
+                      <Building size={20} />
+                    </div>
+                    <div style={{ flex: 1 }}>
+                      <div style={{ display: 'flex', alignItems: 'center', gap: 8, flexWrap: 'wrap' }}>
+                        <h2 style={{ fontSize: '17px', fontWeight: '800', color: '#0F172A', margin: 0 }}>Company Logo &amp; Branding</h2>
+                        <span style={{ fontSize: 11, fontWeight: 700, padding: '2px 9px', borderRadius: 20, background: '#EFF6FF', color: '#1E40AF', border: '1px solid #BFDBFE' }}>
+                          {activeCompanyName}
+                        </span>
+                      </div>
+                      <p style={{ fontSize: '12px', color: '#64748B', margin: '3px 0 0 0' }}>
+                        Upload your organization&apos;s custom logo. It appears in the sidebar and top bar exclusively for users in <strong>{activeCompanyName}</strong>.
+                      </p>
+                    </div>
+                  </div>
+
+                  <input
+                    type="file"
+                    ref={companyLogoInputRef}
+                    accept="image/png,image/jpeg,image/webp,image/svg+xml"
+                    style={{ display: 'none' }}
+                    onChange={handleCompanyLogoFileSelect}
+                  />
+
+                  <div style={{ display: 'flex', alignItems: 'center', gap: '20px', padding: '16px', background: '#F8FAFC', borderRadius: '12px', border: '1px solid #E2E8F0', flexWrap: 'wrap' }}>
+                    <div style={{
+                      width: 176,
+                      height: 64,
+                      borderRadius: '12px',
+                      background: '#FFFFFF',
+                      border: '1px dashed #CBD5E1',
+                      display: 'flex',
+                      alignItems: 'center',
+                      justifyContent: 'center',
+                      padding: '8px 12px',
+                      boxSizing: 'border-box',
+                      flexShrink: 0,
+                      overflow: 'hidden',
+                    }}>
+                      <img
+                        src={displayedCompanyLogo || defaultSubaiLogo}
+                        alt={`${activeCompanyName} Logo`}
+                        style={{ maxWidth: '100%', maxHeight: '100%', objectFit: 'contain' }}
+                      />
+                    </div>
+
+                    <div style={{ flex: 1, minWidth: 220 }}>
+                      <div style={{ fontSize: 13, fontWeight: 800, color: '#0F172A' }}>
+                        {displayedCompanyLogo ? 'Custom Company Logo Preview' : 'Using Default SUBAI Logo'}
+                      </div>
+                      <div style={{ fontSize: 12, color: '#64748B', marginTop: 3 }}>
+                        Recommended: transparent PNG or horizontal logo (e.g. 320&times;96px). Synced live via Cloud Firestore across your company.
+                      </div>
+                      <div style={{ display: 'flex', gap: 8, marginTop: 12, flexWrap: 'wrap' }}>
+                        <button
+                          type="button"
+                          onClick={() => companyLogoInputRef.current?.click()}
+                          style={{
+                            display: 'inline-flex', alignItems: 'center', gap: 6,
+                            padding: '7px 13px', borderRadius: 8, border: '1px solid #CBD5E1',
+                            background: '#FFFFFF', color: '#334155', fontSize: 12, fontWeight: 700, cursor: 'pointer'
+                          }}
+                        >
+                          <Upload size={14} /> Upload Company Logo
+                        </button>
+
+                        {pendingCompanyLogo !== undefined && (
+                          <button
+                            type="button"
+                            disabled={savingLogo}
+                            onClick={handleSaveCompanyLogo}
+                            style={{
+                              display: 'inline-flex', alignItems: 'center', gap: 6,
+                              padding: '7px 14px', borderRadius: 8, border: 'none',
+                              background: '#1E5ADB', color: '#FFFFFF', fontSize: 12, fontWeight: 700,
+                              cursor: savingLogo ? 'not-allowed' : 'pointer', opacity: savingLogo ? 0.7 : 1
+                            }}
+                          >
+                            <Save size={14} /> {savingLogo ? 'Saving...' : 'Save Company Logo'}
+                          </button>
+                        )}
+
+                        {(displayedCompanyLogo || companyLogoUrl) && (
+                          <button
+                            type="button"
+                            disabled={savingLogo}
+                            onClick={handleResetCompanyLogo}
+                            style={{
+                              display: 'inline-flex', alignItems: 'center', gap: 5,
+                              padding: '7px 12px', borderRadius: 8, border: '1px solid #FCA5A5',
+                              background: '#FEF2F2', color: '#DC2626', fontSize: 12, fontWeight: 700, cursor: 'pointer'
+                            }}
+                          >
+                            <Trash2 size={14} /> Reset Default
+                          </button>
+                        )}
+                      </div>
+                    </div>
+                  </div>
+                </div>
+              )}
+
+              {/* Employee Mobile App (Android APK) Download & Distribution Card (Company Portal) */}
+              {!isDeveloper(currentUser) && (
+                <div style={cardContainerStyle} id="mobile-app">
+                  <div style={sectionHeaderStyle}>
+                    <div style={{ ...iconBadgeStyle, background: '#ECFDF5', color: '#059669' }}>
+                      <Smartphone size={20} />
+                    </div>
+                    <div style={{ flex: 1 }}>
+                      <div style={{ display: 'flex', alignItems: 'center', gap: 8, flexWrap: 'wrap' }}>
+                        <h2 style={{ fontSize: '17px', fontWeight: '800', color: '#0F172A', margin: 0 }}>
+                          Employee Mobile App (Android APK)
+                        </h2>
+                        <span style={{
+                          fontSize: 11, fontWeight: 700, padding: '2px 9px', borderRadius: 20,
+                          background: resolvedApkUrl ? '#ECFDF5' : '#FEF3C7',
+                          color: resolvedApkUrl ? '#065F46' : '#92400E',
+                          border: `1px solid ${resolvedApkUrl ? '#A7F3D0' : '#FDE68A'}`
+                        }}>
+                          {resolvedApkUrl ? `${mobileAppRelease?.version || 'v2.1.0'} Ready` : 'Awaiting APK Release'}
+                        </span>
+                      </div>
+                      <p style={{ fontSize: '12px', color: '#64748B', margin: '3px 0 0 0' }}>
+                        Download the Android APK here to distribute to your field employees. Once they sign in, the mobile app automatically displays <strong>{activeCompanyName}</strong>&apos;s logo, worksites, and assignments.
+                      </p>
+                    </div>
+                  </div>
+
+                  <div style={{ padding: '16px', background: '#F8FAFC', borderRadius: '12px', border: '1px solid #E2E8F0', display: 'flex', flexDirection: 'column', gap: 14 }}>
+                    <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', flexWrap: 'wrap', gap: 14 }}>
+                      <div style={{ display: 'flex', alignItems: 'center', gap: 12 }}>
+                        <div style={{ width: 52, height: 52, borderRadius: 12, background: '#FFFFFF', border: '1px solid #E2E8F0', display: 'flex', alignItems: 'center', justifyContent: 'center', padding: 6, overflow: 'hidden', flexShrink: 0 }}>
+                          <img
+                            src={displayedCompanyLogo || defaultSubaiLogo}
+                            alt={activeCompanyName}
+                            style={{ maxWidth: '100%', maxHeight: '100%', objectFit: 'contain' }}
+                          />
+                        </div>
+                        <div>
+                          <div style={{ fontSize: 14, fontWeight: 800, color: '#0F172A' }}>{activeCompanyName} Workforce App</div>
+                          <div style={{ fontSize: 12, color: '#64748B', marginTop: 2 }}>
+                            {mobileAppRelease?.releaseNotes || 'Android APK • Real-time GPS tracking, facial verification, geofenced attendance & live company branding'}
+                          </div>
+                        </div>
+                      </div>
+
+                      {resolvedApkUrl ? (
+                        <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap' }}>
+                          <a
+                            href={resolvedApkUrl}
+                            target="_blank"
+                            rel="noopener noreferrer"
+                            download
+                            style={{
+                              display: 'inline-flex', alignItems: 'center', gap: 6,
+                              padding: '9px 16px', borderRadius: 9, border: 'none',
+                              background: '#059669', color: '#FFFFFF', fontSize: 12, fontWeight: 700,
+                              textDecoration: 'none', boxShadow: '0 4px 12px rgba(5, 150, 105, 0.25)'
+                            }}
+                          >
+                            <Download size={15} /> Download Android APK
+                          </a>
+                          <button
+                            type="button"
+                            onClick={handleCopyApkLink}
+                            style={{
+                              display: 'inline-flex', alignItems: 'center', gap: 6,
+                              padding: '9px 13px', borderRadius: 9, border: '1px solid #CBD5E1',
+                              background: '#FFFFFF', color: '#334155', fontSize: 12, fontWeight: 700, cursor: 'pointer'
+                            }}
+                          >
+                            <Copy size={14} /> Copy Link
+                          </button>
+                          <button
+                            type="button"
+                            onClick={() => setShowApkQr((prev) => !prev)}
+                            style={{
+                              display: 'inline-flex', alignItems: 'center', gap: 6,
+                              padding: '9px 13px', borderRadius: 9, border: '1px solid #BFDBFE',
+                              background: showApkQr ? '#EFF6FF' : '#FFFFFF', color: '#1E40AF', fontSize: 12, fontWeight: 700, cursor: 'pointer'
+                            }}
+                          >
+                            <QrCode size={14} /> {showApkQr ? 'Hide QR' : 'QR Code'}
+                          </button>
+                        </div>
+                      ) : (
+                        <div style={{ fontSize: 12, color: '#92400E', background: '#FFFBEB', border: '1px solid #FDE68A', borderRadius: 8, padding: '8px 12px', fontWeight: 600 }}>
+                          APK download link has not been published yet in the Developer Portal.
+                        </div>
+                      )}
+                    </div>
+
+                    {showApkQr && resolvedApkUrl && (
+                      <div style={{ display: 'flex', alignItems: 'center', gap: 16, padding: 14, background: '#FFFFFF', borderRadius: 10, border: '1px solid #E2E8F0', flexWrap: 'wrap' }}>
+                        <img
+                          src={`https://api.qrserver.com/v1/create-qr-code/?size=140x140&data=${encodeURIComponent(resolvedApkUrl)}`}
+                          alt="Employee APK QR Code"
+                          style={{ width: 128, height: 128, borderRadius: 8, border: '1px solid #E2E8F0' }}
+                        />
+                        <div style={{ flex: 1, minWidth: 200 }}>
+                          <div style={{ fontSize: 13, fontWeight: 800, color: '#0F172A' }}>Scan with Android Phone to Install</div>
+                          <div style={{ fontSize: 12, color: '#64748B', marginTop: 4, lineHeight: 1.5 }}>
+                            1. Employee scans this QR code (or receives the downloaded `.apk` file).<br />
+                            2. Install the app on Android and sign in with their email &amp; password from your <strong>Employees</strong> directory.<br />
+                            3. The app automatically loads <strong>{activeCompanyName}</strong>&apos;s logo and isolated company data.
+                          </div>
+                        </div>
+                      </div>
+                    )}
+                  </div>
+                </div>
+              )}
+
             <div style={cardContainerStyle}>
               <div style={sectionHeaderStyle}>
                 <div style={{ ...iconBadgeStyle, background: '#EEF2FF', color: '#1E5ADB' }}>
@@ -606,6 +969,7 @@ export default function Settings() {
                   <Save size={15} /> {isSaving ? 'Saving...' : 'Save Profile Changes'}
                 </button>
               </div>
+            </div>
             </div>
           )}
 

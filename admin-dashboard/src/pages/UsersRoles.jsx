@@ -1,8 +1,8 @@
 import React, { useState, useEffect, useMemo } from 'react';
 import { useLocation } from 'react-router-dom';
 import {
-  Search, Plus, Edit2, Trash2, X, ShieldCheck, UserCog, Users,
-  Lock, KeyRound, Eye, EyeOff, Check, UserCheck, Briefcase, Building2, Sliders
+  Search, Plus, Edit2, Trash2, X, ShieldCheck, Users,
+  Lock, KeyRound, Eye, EyeOff, UserCheck, Building2, Sliders, Briefcase, CheckCircle2
 } from 'lucide-react';
 import {
   db, collection, onSnapshot, updateDoc, deleteDoc, doc, query,
@@ -10,14 +10,13 @@ import {
 } from '../firebase';
 import { showToast, showConfirmDelete } from '../utils/toast';
 import {
-  ROLE_OPTIONS,
-  COMPANY_ASSIGNABLE_ROLES,
   MODULE_PERMISSIONS,
-  getRoleConfig,
-  buildDefaultPermissionsForRole,
+  SUGGESTED_POSITIONS,
+  buildEmptyCustomPermissions,
+  buildAllPermissions,
   getEffectivePermissions,
-  isPlatformAdmin,
-  normalizeRoleName,
+  isDeveloper,
+  isCompanyAdmin,
 } from '../utils/roles';
 import { useCompany, DEFAULT_COMPANY_ID } from '../utils/companyContext';
 import { ResponsiveContainer, PieChart, Pie, Cell, BarChart, Bar, XAxis, YAxis, Tooltip, CartesianGrid } from 'recharts';
@@ -58,7 +57,7 @@ const CustomAccessTooltip = ({ active, payload }) => {
         padding: '8px 12px', boxShadow: '0 10px 25px -5px rgba(0, 0, 0, 0.1)',
         fontSize: '12px', fontWeight: '600', zIndex: 99
       }}>
-        <div style={{ color: data.payload.color || '#8B5CF6', display: 'flex', alignItems: 'center', gap: '6px' }}>
+        <div style={{ color: data.payload.color || '#1E5ADB', display: 'flex', alignItems: 'center', gap: '6px' }}>
           <span style={{ width: 8, height: 8, borderRadius: '50%', background: data.payload.color }}></span>
           {data.payload.access}: <strong style={{ color: '#0F172A' }}>{data.value} users</strong>
         </div>
@@ -68,17 +67,22 @@ const CustomAccessTooltip = ({ active, payload }) => {
   return null;
 };
 
+/**
+ * Company Admin Portal — Company Users & Custom Permissions (/users)
+ *
+ * Strictly isolated to the signed-in Company Owner / Company Admin's own company.
+ * Follows the exact configurable access model:
+ *   User → Position (custom label, e.g. HR, Manager, Supervisor) → Custom Permissions (checkboxes)
+ *
+ * Position NEVER forces fixed permissions — two companies can assign completely different
+ * module permissions to users with the same Position label.
+ */
 export default function UsersRoles() {
   const {
     companies,
     activeCompanyId,
-    setActiveCompanyId,
     activeCompany,
-    canSwitchCompanies,
     matchesCompany,
-    createCompany,
-    updateCompany,
-    deleteCompany,
   } = useCompany();
 
   const currentUser = useMemo(() => {
@@ -89,40 +93,32 @@ export default function UsersRoles() {
     }
   }, []);
 
-  const userIsPlatform = isPlatformAdmin(currentUser);
-  const assignableRoles = userIsPlatform ? ROLE_OPTIONS : COMPANY_ASSIGNABLE_ROLES;
+  const userIsCompanyAdmin = isCompanyAdmin(currentUser);
+  const currentCompanyId = currentUser?.companyId || (activeCompanyId && activeCompanyId !== 'ALL' ? activeCompanyId : DEFAULT_COMPANY_ID);
+  const getCompanyNameById = (cid) => {
+    if (!cid) return 'Default Organization';
+    const match = companies.find((c) => c.id === cid);
+    return match?.name || cid;
+  };
+  const currentCompanyName = activeCompany?.name || currentUser?.companyName || getCompanyNameById(currentCompanyId);
 
   const [rawUsers, setRawUsers] = useState([]);
   const [loading, setLoading] = useState(true);
   const [search, setSearch] = useState('');
   const [modal, setModal] = useState(false);
   const [editId, setEditId] = useState(null);
+  const [editingCompanyAdminRow, setEditingCompanyAdminRow] = useState(false);
   const [isSaving, setIsSaving] = useState(false);
   const [showPassword, setShowPassword] = useState(false);
 
-  // Company Management modal (Platform Admins only)
-  const [companyModal, setCompanyModal] = useState(false);
-  const [editingCompanyId, setEditingCompanyId] = useState(null);
-  const [companyForm, setCompanyForm] = useState({ name: '', industry: '', address: '', status: 'Active' });
-  const [savingCompany, setSavingCompany] = useState(false);
-
-  const buildEmptyUserForm = () => {
-    const defaultRole = userIsPlatform ? 'Company Admin' : 'Manager';
-    const defaultCompanyId = userIsPlatform
-      ? (activeCompanyId !== 'ALL' ? activeCompanyId : DEFAULT_COMPANY_ID)
-      : (currentUser?.companyId || DEFAULT_COMPANY_ID);
-    return {
-      name: '',
-      email: '',
-      password: '',
-      role: defaultRole,
-      jobTitle: defaultRole,
-      companyId: defaultCompanyId,
-      access: getRoleConfig(defaultRole).access,
-      permissions: buildDefaultPermissionsForRole(defaultRole),
-      status: 'Active',
-    };
-  };
+  const buildEmptyUserForm = () => ({
+    name: '',
+    email: '',
+    password: '',
+    position: '',
+    permissions: buildEmptyCustomPermissions(),
+    status: 'Active',
+  });
 
   const [form, setForm] = useState(buildEmptyUserForm);
 
@@ -138,7 +134,7 @@ export default function UsersRoles() {
     if (q !== null) setSearch(q);
   }, [location.search]);
 
-  // Real-time Cloud Firestore listener (single source of truth)
+  // Real-time Cloud Firestore listener (auto-scoped to this company only)
   useEffect(() => {
     setLoading(true);
     let unsub = () => {};
@@ -158,20 +154,33 @@ export default function UsersRoles() {
     return () => unsub();
   }, []);
 
-  // Multi-company isolation: non-platform admins see ONLY their own company's users (never platform admins or other companies)
+  // Strictly show ONLY accounts belonging to this company (never Developers or other companies)
   const data = useMemo(() => {
     return rawUsers.filter((u) => {
       if (!u) return false;
-      const targetIsPlatform = isPlatformAdmin(u);
-      if (!userIsPlatform) {
-        if (targetIsPlatform) return false;
-        return matchesCompany(u);
-      }
-      if (activeCompanyId === 'ALL') return true;
-      if (targetIsPlatform) return true;
+      if (isDeveloper(u)) return false;
       return matchesCompany(u);
     });
-  }, [rawUsers, userIsPlatform, activeCompanyId, matchesCompany]);
+  }, [rawUsers, matchesCompany]);
+
+  // Company Admin rows are provisioned/approved by the System Provider in the Developer Portal;
+  // inside the Company Admin Portal, Company Admins can edit their own name/password, and manage all Company Users.
+  const canEditRow = (row) => {
+    if (!row || isDeveloper(row)) return false;
+    if (isCompanyAdmin(row)) {
+      return (row.email || '').toLowerCase() === (currentUser.email || '').toLowerCase();
+    }
+    return true;
+  };
+
+  const canDeleteRow = (row) => {
+    if (!row || isDeveloper(row)) return false;
+    const cleanEmail = (row.email || '').toLowerCase();
+    if (PROTECTED_EMAILS.has(cleanEmail)) return false;
+    if (cleanEmail === (currentUser.email || '').toLowerCase()) return false;
+    if (isCompanyAdmin(row)) return false;
+    return true;
+  };
 
   const filtered = useMemo(() => {
     const q = search.trim().toLowerCase();
@@ -179,9 +188,8 @@ export default function UsersRoles() {
     return data.filter((d) =>
       (d.name || '').toLowerCase().includes(q) ||
       (d.email || '').toLowerCase().includes(q) ||
-      (d.role || '').toLowerCase().includes(q) ||
       (d.jobTitle || '').toLowerCase().includes(q) ||
-      (d.companyName || '').toLowerCase().includes(q)
+      (d.role || '').toLowerCase().includes(q)
     );
   }, [data, search]);
 
@@ -191,14 +199,15 @@ export default function UsersRoles() {
   const startIndex = (safePage - 1) * pageSize;
   const currentPageItems = filtered.slice(startIndex, startIndex + pageSize);
 
-  const isAllSelected = currentPageItems.length > 0 && currentPageItems.every((d) => selectedIds.includes(d.id));
+  const selectableItems = currentPageItems.filter(canDeleteRow);
+  const isAllSelected = selectableItems.length > 0 && selectableItems.every((d) => selectedIds.includes(d.id));
 
   const toggleSelectAll = () => {
     if (isAllSelected) {
-      const ids = new Set(currentPageItems.map((i) => i.id));
+      const ids = new Set(selectableItems.map((i) => i.id));
       setSelectedIds((prev) => prev.filter((id) => !ids.has(id)));
     } else {
-      setSelectedIds((prev) => Array.from(new Set([...prev, ...currentPageItems.map((i) => i.id)])));
+      setSelectedIds((prev) => Array.from(new Set([...prev, ...selectableItems.map((i) => i.id)])));
     }
   };
 
@@ -206,30 +215,21 @@ export default function UsersRoles() {
     setSelectedIds((prev) => prev.includes(id) ? prev.filter((i) => i !== id) : [...prev, id]);
   };
 
-  const getCompanyNameById = (cid) => {
-    if (!cid) return 'Platform (All Companies)';
-    const match = companies.find((c) => c.id === cid);
-    return match?.name || cid;
-  };
-
   const handleBulkDelete = async () => {
     if (selectedIds.length === 0) return;
-    const deletableIds = selectedIds.filter((id) => {
-      const u = data.find((d) => d.id === id);
-      return !u || !PROTECTED_EMAILS.has((u.email || '').toLowerCase());
-    });
+    const deletableIds = selectedIds.filter((id) => canDeleteRow(data.find((d) => d.id === id)));
     if (deletableIds.length === 0) {
-      return showToast('Notice', 'Primary Developer / Super Admin accounts are protected from deletion.', 'warning');
+      return showToast('Notice', 'Company Owner / Admin accounts are managed in the Developer Portal.', 'warning');
     }
     const confirmed = await showConfirmDelete(
-      `Delete ${deletableIds.length} Selected Users?`,
-      `Are you sure you want to remove ${deletableIds.length} user account(s)? This will revoke their portal access.`
+      `Remove ${deletableIds.length} Company User(s)?`,
+      `Are you sure you want to remove ${deletableIds.length} user account(s) from ${currentCompanyName}? This revokes their access immediately.`
     );
     if (confirmed) {
       try {
         await Promise.all(deletableIds.map((id) => deleteDoc(doc(db, 'users', id))));
         setSelectedIds([]);
-        showToast('Users Deleted', `${deletableIds.length} user account(s) removed from Firestore.`, 'success');
+        showToast('Users Removed', `${deletableIds.length} company user(s) removed from Firestore.`, 'success');
       } catch (err) {
         showToast('Bulk Delete Failed', err.message || 'Error deleting selected users.', 'error');
       }
@@ -239,25 +239,27 @@ export default function UsersRoles() {
   const openAdd = () => {
     setForm(buildEmptyUserForm());
     setEditId(null);
+    setEditingCompanyAdminRow(false);
     setShowPassword(false);
     setModal(true);
   };
 
   const openEdit = (row) => {
-    const normalizedRole = normalizeRoleName(row.role);
+    if (!canEditRow(row)) {
+      return showToast('Protected Account', 'Company Owner / Admin accounts are managed by the SUBAI System Provider.', 'warning');
+    }
+    const rowIsCompAdmin = isCompanyAdmin(row);
     const effectivePerms = getEffectivePermissions(row);
     setForm({
       name: row.name || '',
       email: row.email || '',
       password: '',
-      role: normalizedRole,
-      jobTitle: row.jobTitle || normalizedRole,
-      companyId: isPlatformAdmin(row) ? '' : (row.companyId || DEFAULT_COMPANY_ID),
-      access: row.access || getRoleConfig(normalizedRole).access,
+      position: row.jobTitle || (rowIsCompAdmin ? 'Company Owner / Admin' : row.role || ''),
       permissions: { ...effectivePerms },
       status: row.status || 'Active',
     });
     setEditId(row.id);
+    setEditingCompanyAdminRow(rowIsCompAdmin);
     setShowPassword(false);
     setModal(true);
   };
@@ -275,6 +277,9 @@ export default function UsersRoles() {
   const handleSave = async () => {
     if (!form.name?.trim() || !form.email?.trim()) {
       return showToast('Validation Error', 'Full Name and Email Address are required.', 'error');
+    }
+    if (!editingCompanyAdminRow && !form.position?.trim()) {
+      return showToast('Validation Error', 'Position / Title is required (e.g., HR, Manager, Supervisor).', 'error');
     }
     const cleanEmail = form.email.trim().toLowerCase();
     if (!/\S+@\S+\.\S+/.test(cleanEmail)) {
@@ -295,34 +300,30 @@ export default function UsersRoles() {
       return showToast('Duplicate Email', `Email "${cleanEmail}" is already registered to ${duplicateUser.name || 'another user'}.`, 'error');
     }
 
-    const roleCfg = getRoleConfig(form.role);
-    const targetIsPlatform = isPlatformAdmin({ role: roleCfg.role });
-    const assignedCompanyId = targetIsPlatform
-      ? null
-      : (userIsPlatform ? (form.companyId || DEFAULT_COMPANY_ID) : (currentUser?.companyId || DEFAULT_COMPANY_ID));
-    const assignedCompanyName = targetIsPlatform
-      ? 'Platform (All Companies)'
-      : getCompanyNameById(assignedCompanyId);
+    const existingRow = editId ? rawUsers.find((u) => u.id === editId) : null;
+    const isAdminRow = Boolean(editingCompanyAdminRow && existingRow && isCompanyAdmin(existingRow));
+    const finalRole = isAdminRow ? 'Company Admin' : 'Company User';
+    const finalPosition = (form.position || (isAdminRow ? 'Company Owner / Admin' : 'Company Staff')).trim();
+    const finalPerms = isAdminRow ? buildAllPermissions() : { ...buildEmptyCustomPermissions(), ...(form.permissions || {}) };
+    const enabledPermCount = Object.values(finalPerms).filter(Boolean).length;
 
-    const enabledPermCount = Object.values(form.permissions || {}).filter(Boolean).length;
-    const accessSummary = targetIsPlatform
-      ? roleCfg.access
-      : `${enabledPermCount}/${MODULE_PERMISSIONS.length} Modules`;
+    if (!isAdminRow && enabledPermCount === 0) {
+      return showToast('Permissions Required', 'Select at least one module permission for this user.', 'error');
+    }
 
     setIsSaving(true);
     try {
-      const existingRow = editId ? rawUsers.find((u) => u.id === editId) : null;
       const payload = {
         id: editId || undefined,
         name: form.name.trim(),
         email: cleanEmail,
-        role: roleCfg.role,
-        jobTitle: (form.jobTitle || roleCfg.role).trim(),
-        companyId: assignedCompanyId,
-        companyName: assignedCompanyName,
-        access: accessSummary,
-        permissions: targetIsPlatform ? buildDefaultPermissionsForRole(roleCfg.role) : (form.permissions || buildDefaultPermissionsForRole(roleCfg.role)),
-        status: form.status || 'Active',
+        role: finalRole,
+        jobTitle: finalPosition,
+        companyId: currentCompanyId,
+        companyName: currentCompanyName,
+        access: isAdminRow ? `Full Company Admin Portal (${currentCompanyName})` : `${enabledPermCount}/${MODULE_PERMISSIONS.length} Custom Modules`,
+        permissions: finalPerms,
+        status: isAdminRow ? (existingRow?.status || 'Active') : (form.status || 'Active'),
         lastLogin: existingRow?.lastLogin || 'Never',
       };
 
@@ -338,15 +339,16 @@ export default function UsersRoles() {
           updatedAt: new Date().toISOString(),
         });
         await registerAdminUser({ ...payload, id: editId }).catch(() => {});
-        showToast('User Updated', `Updated role, company, and module permissions for ${payload.name}.`, 'success');
+        showToast('User Updated', `Updated ${payload.name} (${finalPosition}) — ${enabledPermCount} module permissions active.`, 'success');
       } else {
         await registerAdminUser(payload);
-        showToast('Account Created', `Created ${payload.jobTitle} (${payload.role}) account for ${payload.name}.`, 'success');
+        showToast('Company User Created', `${payload.name} (${finalPosition}) added to ${currentCompanyName} with ${enabledPermCount} custom permissions.`, 'success');
       }
 
       setModal(false);
       setForm(buildEmptyUserForm());
       setEditId(null);
+      setEditingCompanyAdminRow(false);
     } catch (e) {
       console.error('Save user error:', e);
       showToast('Save Failed', e.message || 'Failed to save user to Firestore', 'error');
@@ -355,216 +357,109 @@ export default function UsersRoles() {
     }
   };
 
-  const handleApproveUser = async (row) => {
-    if (!userIsPlatform) {
-      return showToast('Permission Required', 'Only System Super Admin or Developer can approve pending accounts.', 'warning');
-    }
-    try {
-      await updateDoc(doc(db, 'users', row.id), {
-        status: 'Active',
-        approvedBy: currentUser?.email || currentUser?.name || 'System Super Admin',
-        approvedAt: new Date().toISOString(),
-        updatedAt: new Date().toISOString(),
-      });
-      showToast('Account Approved', `${row.name} (${row.role}) has been approved and activated.`, 'success');
-    } catch (e) {
-      showToast('Approval Failed', e.message || 'Could not approve user.', 'error');
-    }
-  };
-
   const handleDelete = async (id) => {
     const row = data.find((d) => d.id === id);
     if (!row) return;
-    if (PROTECTED_EMAILS.has((row.email || '').toLowerCase())) {
-      return showToast('Action Prohibited', 'Primary Developer / Super Administrator accounts cannot be removed.', 'warning');
+    if (!canDeleteRow(row)) {
+      return showToast('Action Prohibited', 'Company Owner / Admin accounts cannot be deleted from here.', 'warning');
     }
     const confirmed = await showConfirmDelete(
-      'Remove Portal User?',
-      `Are you sure you want to remove ${row.name || row.email}? This will revoke their portal access immediately.`
+      'Remove Company User?',
+      `Are you sure you want to remove ${row.name || row.email} (${row.jobTitle || 'Company User'}) from ${currentCompanyName}?`
     );
     if (confirmed) {
       try {
         await deleteDoc(doc(db, 'users', id));
-        showToast('User Removed', `Removed portal account for ${row.name}.`, 'success');
+        showToast('User Removed', `Removed ${row.name} from ${currentCompanyName}.`, 'success');
       } catch (e) {
         showToast('Delete Failed', e.message || 'Could not remove user', 'error');
       }
     }
   };
 
-  // Company Management CRUD (Platform Admins only)
-  const openAddCompany = () => {
-    setEditingCompanyId(null);
-    setCompanyForm({ name: '', industry: '', address: '', status: 'Active' });
-    setCompanyModal(true);
-  };
-
-  const openEditCompany = (comp) => {
-    setEditingCompanyId(comp.id);
-    setCompanyForm({
-      name: comp.name || '',
-      industry: comp.industry || '',
-      address: comp.address || '',
-      status: comp.status || 'Active',
-    });
-    setCompanyModal(true);
-  };
-
-  const handleSaveCompany = async () => {
-    if (!companyForm.name.trim()) {
-      return showToast('Validation Error', 'Company Name is required.', 'error');
-    }
-    const cleanName = companyForm.name.trim().toLowerCase();
-    const dupComp = companies.find(
-      (c) => c.id !== editingCompanyId && (c.name || '').trim().toLowerCase() === cleanName
-    );
-    if (dupComp) {
-      return showToast('Duplicate Company', `A company named "${companyForm.name.trim()}" already exists.`, 'error');
-    }
-
-    setSavingCompany(true);
-    try {
-      if (editingCompanyId) {
-        await updateCompany(editingCompanyId, companyForm);
-        showToast('Company Updated', `${companyForm.name.trim()} updated in Firestore.`, 'success');
-      } else {
-        const created = await createCompany(companyForm);
-        showToast('Company Created', `${created.name} created and ready for isolated operations.`, 'success');
-      }
-      setCompanyModal(false);
-    } catch (e) {
-      showToast('Company Save Failed', e.message || 'Could not save company', 'error');
-    } finally {
-      setSavingCompany(false);
-    }
-  };
-
-  const handleDeleteCompany = async (comp) => {
-    if (comp.id === DEFAULT_COMPANY_ID) {
-      return showToast('Protected', 'Default Organization cannot be deleted.', 'warning');
-    }
-    const confirmed = await showConfirmDelete(
-      `Delete Company "${comp.name}"?`,
-      'Deleting this company removes it from the organization directory. Existing records keep their companyId.'
-    );
-    if (confirmed) {
-      try {
-        await deleteCompany(comp.id);
-        showToast('Company Removed', `${comp.name} deleted.`, 'success');
-      } catch (e) {
-        showToast('Delete Failed', e.message || 'Could not delete company', 'error');
-      }
-    }
-  };
-
-  // KPI metrics from live Firestore users
+  // KPI metrics from live Firestore company accounts
   const totalUsers = data.length;
-  const platformCount = data.filter((d) => isPlatformAdmin(d)).length;
-  const companyAdminCount = data.filter((d) => normalizeRoleName(d.role) === 'Company Admin').length;
-  const managerCount = data.filter((d) => normalizeRoleName(d.role) === 'Manager').length;
-  const staffCount = data.filter((d) => !isPlatformAdmin(d) && normalizeRoleName(d.role) !== 'Company Admin' && normalizeRoleName(d.role) !== 'Manager').length;
+  const companyAdminCount = data.filter((d) => isCompanyAdmin(d)).length;
+  const customUserCount = data.filter((d) => !isCompanyAdmin(d)).length;
+  const activeCount = data.filter((d) => (d.status || 'Active') === 'Active').length;
 
-  const rolePieData = useMemo(() => {
+  // Position breakdown for analytics sidebar
+  const positionDistribution = useMemo(() => {
     if (totalUsers === 0) return [];
-    return [
-      { name: 'Platform Admin', value: platformCount, color: '#8B5CF6', pct: Math.round((platformCount / totalUsers) * 100) },
-      { name: 'Company Admin', value: companyAdminCount, color: '#2563EB', pct: Math.round((companyAdminCount / totalUsers) * 100) },
-      { name: 'Manager', value: managerCount, color: '#1E5ADB', pct: Math.round((managerCount / totalUsers) * 100) },
-      { name: 'Staff / Sup / HR', value: staffCount, color: '#10B981', pct: Math.round((staffCount / totalUsers) * 100) },
-    ].filter((item) => item.value > 0);
-  }, [totalUsers, platformCount, companyAdminCount, managerCount, staffCount]);
+    const counts = new Map();
+    data.forEach((d) => {
+      const label = isCompanyAdmin(d) ? 'Company Admin' : (d.jobTitle || 'Company User');
+      counts.set(label, (counts.get(label) || 0) + 1);
+    });
+    const palette = ['#1E5ADB', '#0D9488', '#7C3AED', '#F59E0B', '#EC4899', '#10B981'];
+    return Array.from(counts.entries()).map(([name, value], idx) => ({
+      name,
+      value,
+      color: palette[idx % palette.length],
+      pct: Math.round((value / totalUsers) * 100),
+    }));
+  }, [data, totalUsers]);
 
   const accessBarData = useMemo(() => {
     if (totalUsers === 0) return [];
     return [
-      { access: 'Platform', value: platformCount, color: '#8B5CF6' },
-      { access: 'Company Admin', value: companyAdminCount, color: '#2563EB' },
-      { access: 'Manager', value: managerCount, color: '#1E5ADB' },
-      { access: 'Company Users', value: staffCount, color: '#10B981' },
+      { access: 'Company Admin', value: companyAdminCount, color: '#1E5ADB' },
+      { access: 'Custom Users', value: customUserCount, color: '#0D9488' },
+      { access: 'Active', value: activeCount, color: '#10B981' },
     ];
-  }, [totalUsers, platformCount, companyAdminCount, managerCount, staffCount]);
+  }, [totalUsers, companyAdminCount, customUserCount, activeCount]);
+
+  const enabledFormPermCount = Object.values(form.permissions || {}).filter(Boolean).length;
 
   return (
     <div style={{ padding: '24px', minHeight: '100vh', display: 'flex', flexDirection: 'column', gap: '24px' }}>
 
-      {/* Multi-Company Directory Bar (Visible to Developer / System Super Admin) */}
-      {canSwitchCompanies && (
-        <div style={{ ...cardStyle, display: 'flex', flexDirection: 'column', gap: 14 }}>
-          <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', flexWrap: 'wrap', gap: 12 }}>
-            <div style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
-              <div style={{ width: 38, height: 38, borderRadius: 10, background: '#EFF6FF', display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
-                <Building2 size={18} color="#1E5ADB" />
-              </div>
-              <div>
-                <div style={{ fontSize: 15, fontWeight: 800, color: '#0F172A' }}>Registered Companies ({companies.length})</div>
-                <div style={{ fontSize: 12, color: '#64748B' }}>Each company has isolated employees, worksites, assignments, attendance, anomalies, and reports.</div>
-              </div>
-            </div>
-            <button
-              onClick={openAddCompany}
-              style={{ display: 'flex', alignItems: 'center', gap: 6, background: '#0F172A', color: 'white', border: 'none', borderRadius: 8, padding: '8px 14px', fontWeight: 700, fontSize: 12, cursor: 'pointer' }}
-            >
-              <Plus size={14} /> Add Company
-            </button>
+      {/* Company Portal Context & Custom Permissions Banner */}
+      <div style={{ ...cardStyle, display: 'flex', justifyContent: 'space-between', alignItems: 'center', flexWrap: 'wrap', gap: 14 }}>
+        <div style={{ display: 'flex', alignItems: 'center', gap: 12 }}>
+          <div style={{
+            width: 42, height: 42, borderRadius: 12,
+            background: '#EFF6FF', display: 'flex', alignItems: 'center', justifyContent: 'center', flexShrink: 0
+          }}>
+            <Building2 size={20} color="#1E5ADB" />
           </div>
-
-          <div style={{ display: 'flex', gap: 10, flexWrap: 'wrap' }}>
-            <button
-              onClick={() => setActiveCompanyId('ALL')}
-              style={{
-                padding: '8px 14px', borderRadius: 10, fontSize: 12, fontWeight: 700, cursor: 'pointer',
-                border: activeCompanyId === 'ALL' ? '1.5px solid #1E5ADB' : '1px solid #E2E8F0',
-                background: activeCompanyId === 'ALL' ? '#EFF6FF' : '#F8FAFC',
-                color: activeCompanyId === 'ALL' ? '#1E5ADB' : '#334155',
-              }}
-            >
-              All Companies
-            </button>
-            {companies.map((comp) => {
-              const isSelected = activeCompanyId === comp.id;
-              return (
-                <div
-                  key={comp.id}
-                  style={{
-                    display: 'inline-flex', alignItems: 'center', gap: 8, padding: '6px 12px', borderRadius: 10,
-                    border: isSelected ? '1.5px solid #1E5ADB' : '1px solid #E2E8F0',
-                    background: isSelected ? '#EFF6FF' : '#FFFFFF',
-                  }}
-                >
-                  <button
-                    onClick={() => setActiveCompanyId(comp.id)}
-                    style={{ border: 'none', background: 'none', cursor: 'pointer', fontWeight: 700, fontSize: 12, color: isSelected ? '#1E5ADB' : '#0F172A', padding: 0 }}
-                  >
-                    {comp.name}
-                  </button>
-                  <button
-                    onClick={() => openEditCompany(comp)}
-                    title="Edit company"
-                    style={{ border: 'none', background: 'none', cursor: 'pointer', color: '#64748B', padding: 2, display: 'flex' }}
-                  >
-                    <Edit2 size={12} />
-                  </button>
-                  {comp.id !== DEFAULT_COMPANY_ID && (
-                    <button
-                      onClick={() => handleDeleteCompany(comp)}
-                      title="Delete company"
-                      style={{ border: 'none', background: 'none', cursor: 'pointer', color: '#DC2626', padding: 2, display: 'flex' }}
-                    >
-                      <Trash2 size={12} />
-                    </button>
-                  )}
-                </div>
-              );
-            })}
+          <div>
+            <div style={{ display: 'flex', alignItems: 'center', gap: 8, flexWrap: 'wrap' }}>
+              <span style={{ fontSize: 15, fontWeight: 800, color: '#0F172A' }}>{currentCompanyName}</span>
+              <span style={{
+                padding: '2px 9px', borderRadius: 20, fontSize: 11, fontWeight: 700,
+                background: '#DBEAFE', color: '#1E40AF', border: '1px solid #93C5FD'
+              }}>
+                {userIsCompanyAdmin ? 'Company Owner / Admin' : (currentUser?.jobTitle || 'Company User')}
+              </span>
+              {activeCompany?.plan && (
+                <span style={{
+                  padding: '2px 9px', borderRadius: 20, fontSize: 11, fontWeight: 700,
+                  background: '#F3E8FF', color: '#6D28D9', border: '1px solid #DDD6FE'
+                }}>
+                  {activeCompany.plan} Plan
+                </span>
+              )}
+            </div>
+            <div style={{ fontSize: 12, color: '#64748B', marginTop: 3 }}>
+              <strong>User &rarr; Position &rarr; Custom Permissions:</strong> Position (e.g., HR, Manager, Supervisor) is a label only. Select exact module permissions for each user based on your company&apos;s workflow.
+            </div>
           </div>
         </div>
-      )}
+        <div style={{
+          display: 'inline-flex', alignItems: 'center', gap: 6, padding: '6px 12px', borderRadius: 10,
+          background: '#ECFDF5', border: '1px solid #A7F3D0', fontSize: 11, fontWeight: 700, color: '#065F46'
+        }}>
+          <Lock size={13} color="#059669" />
+          Isolated to {currentCompanyName}
+        </div>
+      </div>
 
       {/* Top KPI Cards */}
       <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(190px, 1fr))', gap: '16px' }}>
         <div style={cardStyle}>
           <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
-            <span style={{ fontSize: '12px', color: '#64748B', fontWeight: '700', letterSpacing: '0.5px' }}>TOTAL USERS</span>
+            <span style={{ fontSize: '12px', color: '#64748B', fontWeight: '700', letterSpacing: '0.5px' }}>COMPANY ACCOUNTS</span>
             <div style={{ width: 34, height: 34, borderRadius: 8, background: '#EEF2FF', display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
               <Users size={18} color="#1E5ADB" />
             </div>
@@ -584,35 +479,23 @@ export default function UsersRoles() {
 
         <div style={cardStyle}>
           <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
-            <span style={{ fontSize: '12px', color: '#64748B', fontWeight: '700', letterSpacing: '0.5px' }}>MANAGERS</span>
-            <div style={{ width: 34, height: 34, borderRadius: 8, background: '#EEF2FF', display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
-              <UserCog size={18} color="#1E5ADB" />
+            <span style={{ fontSize: '12px', color: '#64748B', fontWeight: '700', letterSpacing: '0.5px' }}>COMPANY USERS</span>
+            <div style={{ width: 34, height: 34, borderRadius: 8, background: '#CCFBF1', display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
+              <UserCheck size={18} color="#0D9488" />
             </div>
           </div>
-          <div style={{ fontSize: '28px', fontWeight: '800', color: '#1E5ADB', marginTop: '8px' }}>{managerCount}</div>
+          <div style={{ fontSize: '28px', fontWeight: '800', color: '#0D9488', marginTop: '8px' }}>{customUserCount}</div>
         </div>
 
         <div style={cardStyle}>
           <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
-            <span style={{ fontSize: '12px', color: '#64748B', fontWeight: '700', letterSpacing: '0.5px' }}>COMPANY STAFF</span>
+            <span style={{ fontSize: '12px', color: '#64748B', fontWeight: '700', letterSpacing: '0.5px' }}>ACTIVE ACCESS</span>
             <div style={{ width: 34, height: 34, borderRadius: 8, background: '#ECFDF5', display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
-              <UserCheck size={18} color="#10B981" />
+              <CheckCircle2 size={18} color="#10B981" />
             </div>
           </div>
-          <div style={{ fontSize: '28px', fontWeight: '800', color: '#10B981', marginTop: '8px' }}>{staffCount}</div>
+          <div style={{ fontSize: '28px', fontWeight: '800', color: '#10B981', marginTop: '8px' }}>{activeCount}</div>
         </div>
-
-        {userIsPlatform && (
-          <div style={cardStyle}>
-            <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
-              <span style={{ fontSize: '12px', color: '#64748B', fontWeight: '700', letterSpacing: '0.5px' }}>PLATFORM ADMINS</span>
-              <div style={{ width: 34, height: 34, borderRadius: 8, background: '#F3E8FF', display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
-                <Briefcase size={18} color="#8B5CF6" />
-              </div>
-            </div>
-            <div style={{ fontSize: '28px', fontWeight: '800', color: '#8B5CF6', marginTop: '8px' }}>{platformCount}</div>
-          </div>
-        )}
       </div>
 
       {/* Main Content Layout: Datatable Left + Telemetry Sidebar Right */}
@@ -624,7 +507,7 @@ export default function UsersRoles() {
             <div style={{ flex: 1, minWidth: 240, position: 'relative' }}>
               <Search size={18} style={{ position: 'absolute', left: 12, top: '50%', transform: 'translateY(-50%)', color: '#94A3B8' }} />
               <input
-                placeholder="Search users by name, email, role, job title, or company..."
+                placeholder="Search company users by name, email, or position (e.g. HR, Manager)..."
                 value={search}
                 onChange={(e) => { setSearch(e.target.value); setPage(1); }}
                 style={{ width: '100%', paddingLeft: 38, paddingRight: 12, height: 42, borderRadius: 8, border: '1px solid #E2E8F0', background: 'white', fontSize: 13, outline: 'none' }}
@@ -661,7 +544,7 @@ export default function UsersRoles() {
                 fontSize: 13, cursor: 'pointer', boxShadow: '0 2px 6px rgba(30, 90, 219, 0.25)'
               }}
             >
-              <Plus size={16} /> Add User
+              <Plus size={16} /> Add Company User
             </button>
           </div>
 
@@ -679,7 +562,7 @@ export default function UsersRoles() {
                         style={{ cursor: 'pointer', accentColor: '#1E5ADB', width: 15, height: 15 }}
                       />
                     </th>
-                    {['USER', 'COMPANY', 'ROLE & TITLE', 'PERMISSIONS', 'STATUS', 'ACTIONS'].map((h) => (
+                    {['USER', 'POSITION', 'CUSTOM PERMISSIONS', 'STATUS', 'ACTIONS'].map((h) => (
                       <th key={h} style={{ padding: '12px 16px', whiteSpace: 'nowrap' }}>{h}</th>
                     ))}
                   </tr>
@@ -687,25 +570,25 @@ export default function UsersRoles() {
                 <tbody>
                   {loading ? (
                     <tr>
-                      <td colSpan={7} style={{ padding: '44px 16px', textAlign: 'center', color: '#64748B' }}>
-                        Syncing user accounts from Cloud Firestore...
+                      <td colSpan={6} style={{ padding: '44px 16px', textAlign: 'center', color: '#64748B' }}>
+                        Syncing company accounts from Cloud Firestore...
                       </td>
                     </tr>
                   ) : currentPageItems.length === 0 ? (
                     <tr>
-                      <td colSpan={7} style={{ padding: '56px 16px', textAlign: 'center' }}>
+                      <td colSpan={6} style={{ padding: '56px 16px', textAlign: 'center' }}>
                         <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'center', gap: 10 }}>
                           <div style={{ width: 46, height: 46, borderRadius: '50%', background: '#F1F5F9', display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
                             <Users size={22} color="#94A3B8" />
                           </div>
                           <div style={{ fontWeight: 700, fontSize: 15, color: '#1E293B' }}>
-                            {search ? `No user found matching "${search}"` : 'No portal users in this scope'}
+                            {search ? `No user found matching "${search}"` : `No users added yet for ${currentCompanyName}`}
                           </div>
                           <button
                             onClick={openAdd}
                             style={{ marginTop: 6, padding: '8px 16px', background: '#1E5ADB', color: 'white', border: 'none', borderRadius: 6, fontSize: 12, fontWeight: 600, cursor: 'pointer' }}
                           >
-                            Add User
+                            Add Company User
                           </button>
                         </div>
                       </td>
@@ -713,9 +596,10 @@ export default function UsersRoles() {
                   ) : (
                     currentPageItems.map((row) => {
                       const isSelected = selectedIds.includes(row.id);
-                      const isProtected = PROTECTED_EMAILS.has((row.email || '').toLowerCase());
+                      const rowIsAdmin = isCompanyAdmin(row);
+                      const allowEdit = canEditRow(row);
+                      const allowDelete = canDeleteRow(row);
                       const initial = (row.name || row.email || 'U').charAt(0).toUpperCase();
-                      const roleCfg = getRoleConfig(row.role);
                       const effPerms = getEffectivePermissions(row);
                       const enabledKeys = MODULE_PERMISSIONS.filter((m) => effPerms[m.key]).map((m) => m.label);
 
@@ -724,14 +608,15 @@ export default function UsersRoles() {
                           <td style={{ padding: '12px 16px', textAlign: 'center' }}>
                             <input
                               type="checkbox"
+                              disabled={!allowDelete}
                               checked={isSelected}
                               onChange={() => toggleSelectOne(row.id)}
-                              style={{ cursor: 'pointer', accentColor: '#1E5ADB', width: 15, height: 15 }}
+                              style={{ cursor: allowDelete ? 'pointer' : 'not-allowed', accentColor: '#1E5ADB', width: 15, height: 15, opacity: allowDelete ? 1 : 0.35 }}
                             />
                           </td>
                           <td style={{ padding: '12px 16px', whiteSpace: 'nowrap' }}>
                             <div style={{ display: 'flex', alignItems: 'center', gap: 12 }}>
-                              <div style={{ width: 36, height: 36, borderRadius: '50%', background: '#EFF6FF', display: 'flex', alignItems: 'center', justifyContent: 'center', color: '#1E5ADB', fontWeight: 700, fontSize: 14, flexShrink: 0 }}>
+                              <div style={{ width: 36, height: 36, borderRadius: '50%', background: rowIsAdmin ? '#EFF6FF' : '#CCFBF1', display: 'flex', alignItems: 'center', justifyContent: 'center', color: rowIsAdmin ? '#1E5ADB' : '#0D9488', fontWeight: 700, fontSize: 14, flexShrink: 0 }}>
                                 {initial}
                               </div>
                               <div>
@@ -740,34 +625,36 @@ export default function UsersRoles() {
                               </div>
                             </div>
                           </td>
-                          <td style={{ padding: '12px 16px', whiteSpace: 'nowrap', fontSize: 12, fontWeight: 600, color: '#334155' }}>
-                            {isPlatformAdmin(row) ? (
-                              <span style={{ background: '#F3E8FF', color: '#6D28D9', padding: '2px 8px', borderRadius: 6, fontSize: 11, fontWeight: 700 }}>
-                                All Companies
+                          <td style={{ padding: '12px 16px', whiteSpace: 'nowrap' }}>
+                            {rowIsAdmin ? (
+                              <span style={{
+                                display: 'inline-flex', alignItems: 'center', gap: 6, padding: '3px 10px',
+                                borderRadius: 20, background: '#EFF6FF', color: '#1E5ADB',
+                                border: '1px solid #BFDBFE', fontWeight: 700, fontSize: 11
+                              }}>
+                                <ShieldCheck size={12} /> Company Admin (Owner)
                               </span>
                             ) : (
-                              row.companyName || getCompanyNameById(row.companyId || DEFAULT_COMPANY_ID)
+                              <div>
+                                <span style={{
+                                  display: 'inline-flex', alignItems: 'center', gap: 5, padding: '3px 10px',
+                                  borderRadius: 20, background: '#F0FDFA', color: '#0F766E',
+                                  border: '1px solid #99F6E4', fontWeight: 700, fontSize: 11
+                                }}>
+                                  <Briefcase size={11} /> {row.jobTitle || row.role || 'Company User'}
+                                </span>
+                                <div style={{ fontSize: 10, color: '#94A3B8', marginTop: 2 }}>Custom Permissions User</div>
+                              </div>
                             )}
                           </td>
-                          <td style={{ padding: '12px 16px', whiteSpace: 'nowrap' }}>
-                            <span style={{
-                              display: 'inline-flex', alignItems: 'center', gap: 6, padding: '3px 10px',
-                              borderRadius: 20, background: roleCfg.bg, color: roleCfg.color,
-                              border: `1px solid ${roleCfg.border}`, fontWeight: 700, fontSize: 11
-                            }}>
-                              <span style={{ width: 6, height: 6, borderRadius: '50%', background: roleCfg.color }} />
-                              {roleCfg.role}
-                            </span>
-                            {row.jobTitle && row.jobTitle !== roleCfg.role && (
-                              <div style={{ fontSize: 11, color: '#64748B', marginTop: 3 }}>{row.jobTitle}</div>
-                            )}
-                          </td>
-                          <td style={{ padding: '12px 16px', maxWidth: 220 }}>
-                            <div style={{ fontSize: 11, fontWeight: 700, color: '#1E5ADB' }}>
-                              {enabledKeys.length}/{MODULE_PERMISSIONS.length} Modules
+                          <td style={{ padding: '12px 16px', maxWidth: 240 }}>
+                            <div style={{ fontSize: 11, fontWeight: 700, color: rowIsAdmin ? '#1E5ADB' : '#0F766E' }}>
+                              {rowIsAdmin ? 'Full Company Access (All Modules)' : `${enabledKeys.length}/${MODULE_PERMISSIONS.length} Modules Enabled`}
                             </div>
-                            <div style={{ fontSize: 11, color: '#64748B', whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis', maxWidth: 200 }} title={enabledKeys.join(', ')}>
-                              {enabledKeys.slice(0, 3).join(', ')}{enabledKeys.length > 3 ? ` +${enabledKeys.length - 3} more` : ''}
+                            <div style={{ fontSize: 11, color: '#64748B', whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis', maxWidth: 220 }} title={enabledKeys.join(', ')}>
+                              {rowIsAdmin
+                                ? 'All operational & administration modules'
+                                : `${enabledKeys.slice(0, 3).join(', ')}${enabledKeys.length > 3 ? ` +${enabledKeys.length - 3} more` : ''}`}
                             </div>
                           </td>
                           <td style={{ padding: '12px 16px', whiteSpace: 'nowrap' }}>
@@ -778,35 +665,25 @@ export default function UsersRoles() {
                           </td>
                           <td style={{ padding: '10px 16px', whiteSpace: 'nowrap' }}>
                             <div style={{ display: 'flex', gap: '6px', alignItems: 'center' }}>
-                              {userIsPlatform && row.status === 'Pending Approval' && (
+                              {allowEdit ? (
                                 <button
-                                  onClick={() => handleApproveUser(row)}
-                                  title="Approve Company Admin / User"
+                                  onClick={() => openEdit(row)}
                                   style={{
                                     display: 'inline-flex', alignItems: 'center', gap: '4px', padding: '5px 10px',
-                                    height: '28px', borderRadius: '6px', border: '1px solid #6EE7B7',
-                                    backgroundColor: '#ECFDF5', color: '#065F46', fontWeight: '700',
+                                    height: '28px', borderRadius: '6px', border: '1px solid #DBEAFE',
+                                    backgroundColor: '#FFFFFF', color: '#1E5ADB', fontWeight: '700',
                                     fontSize: '11px', cursor: 'pointer'
                                   }}
                                 >
-                                  <Check size={13} color="#059669" /> Approve
+                                  <Edit2 size={13} color="#1E5ADB" /> {rowIsAdmin ? 'Edit Profile' : 'Edit Access'}
                                 </button>
+                              ) : (
+                                <span style={{ fontSize: 11, color: '#94A3B8', fontWeight: 600 }}>Provider Managed</span>
                               )}
-                              <button
-                                onClick={() => openEdit(row)}
-                                style={{
-                                  display: 'inline-flex', alignItems: 'center', gap: '4px', padding: '5px 10px',
-                                  height: '28px', borderRadius: '6px', border: '1px solid #DBEAFE',
-                                  backgroundColor: '#FFFFFF', color: '#1E5ADB', fontWeight: '700',
-                                  fontSize: '11px', cursor: 'pointer'
-                                }}
-                              >
-                                <Edit2 size={13} color="#1E5ADB" /> Edit
-                              </button>
-                              {!isProtected && (
+                              {allowDelete && (
                                 <button
                                   onClick={() => handleDelete(row.id)}
-                                  title="Remove user"
+                                  title="Remove company user"
                                   style={{
                                     display: 'inline-flex', alignItems: 'center', justifyContent: 'center',
                                     width: '28px', height: '28px', borderRadius: '6px',
@@ -882,7 +759,7 @@ export default function UsersRoles() {
           </div>
         </div>
 
-        {/* RIGHT COLUMN: REAL USER TELEMETRY SIDEBAR */}
+        {/* RIGHT COLUMN: COMPANY ACCESS TELEMETRY SIDEBAR */}
         <div style={{ background: '#FFFFFF', borderRadius: '16px', border: '1px solid #E2E8F0', boxShadow: '0 4px 20px -2px rgba(0, 0, 0, 0.05)', padding: '20px', display: 'flex', flexDirection: 'column', gap: '24px' }}>
           <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', borderBottom: '1px solid #F1F5F9', paddingBottom: '14px' }}>
             <div style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
@@ -890,8 +767,8 @@ export default function UsersRoles() {
                 <KeyRound size={18} color="#1E5ADB" />
               </div>
               <div>
-                <h3 style={{ fontSize: '15px', fontWeight: '800', color: '#0F172A', margin: 0 }}>Role Distribution</h3>
-                <span style={{ fontSize: '11px', color: '#64748B', fontWeight: '500' }}>{activeCompany ? activeCompany.name : 'All Companies'}</span>
+                <h3 style={{ fontSize: '15px', fontWeight: '800', color: '#0F172A', margin: 0 }}>Position Breakdown</h3>
+                <span style={{ fontSize: '11px', color: '#64748B', fontWeight: '500' }}>{currentCompanyName}</span>
               </div>
             </div>
             <div style={{ display: 'flex', alignItems: 'center', gap: 6, background: '#ECFDF5', border: '1px solid #6EE7B7', padding: '3px 8px', borderRadius: 12 }}>
@@ -903,7 +780,7 @@ export default function UsersRoles() {
           <div style={{ display: 'flex', flexDirection: 'column', gap: 10 }}>
             <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
               <span style={{ fontSize: '13px', fontWeight: '700', color: '#1E293B', display: 'flex', alignItems: 'center', gap: 6 }}>
-                <Users size={15} color="#1E5ADB" /> Role Composition
+                <Users size={15} color="#1E5ADB" /> Active Positions
               </span>
               <span style={{ fontSize: '12px', fontWeight: '700', color: '#1E5ADB' }}>{totalUsers} {totalUsers === 1 ? 'Account' : 'Accounts'}</span>
             </div>
@@ -917,8 +794,8 @@ export default function UsersRoles() {
                 <ResponsiveContainer width="100%" height="100%">
                   <PieChart>
                     <Tooltip content={<CustomRoleTooltip />} />
-                    <Pie data={rolePieData} cx="50%" cy="50%" innerRadius={46} outerRadius={66} paddingAngle={rolePieData.length > 1 ? 4 : 0} dataKey="value">
-                      {rolePieData.map((entry, index) => (
+                    <Pie data={positionDistribution} cx="50%" cy="50%" innerRadius={46} outerRadius={66} paddingAngle={positionDistribution.length > 1 ? 4 : 0} dataKey="value">
+                      {positionDistribution.map((entry, index) => (
                         <Cell key={`role-cell-${index}`} fill={entry.color} stroke="none" />
                       ))}
                     </Pie>
@@ -931,9 +808,9 @@ export default function UsersRoles() {
               </div>
             )}
 
-            {rolePieData.length > 0 && (
-              <div style={{ display: 'grid', gridTemplateColumns: `repeat(${Math.min(rolePieData.length, 2)}, 1fr)`, gap: 8, background: '#F8FAFC', padding: '10px', borderRadius: '10px' }}>
-                {rolePieData.map((item, idx) => (
+            {positionDistribution.length > 0 && (
+              <div style={{ display: 'grid', gridTemplateColumns: `repeat(${Math.min(positionDistribution.length, 2)}, 1fr)`, gap: 8, background: '#F8FAFC', padding: '10px', borderRadius: '10px' }}>
+                {positionDistribution.map((item, idx) => (
                   <div key={idx} style={{ display: 'flex', flexDirection: 'column', alignItems: 'center', textAlign: 'center' }}>
                     <div style={{ display: 'flex', alignItems: 'center', gap: 4, fontSize: '10px', color: '#64748B', fontWeight: '600' }}>
                       <span style={{ width: 6, height: 6, borderRadius: '50%', background: item.color }} />
@@ -951,16 +828,16 @@ export default function UsersRoles() {
           <div style={{ display: 'flex', flexDirection: 'column', gap: 10 }}>
             <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
               <span style={{ fontSize: '13px', fontWeight: '700', color: '#1E293B', display: 'flex', alignItems: 'center', gap: 6 }}>
-                <Lock size={15} color="#8B5CF6" /> Access Hierarchy
+                <Lock size={15} color="#0D9488" /> Access Model
               </span>
-              <span style={{ fontSize: '11px', fontWeight: '600', color: '#8B5CF6' }}>Configurable RBAC</span>
+              <span style={{ fontSize: '11px', fontWeight: '600', color: '#0D9488' }}>Custom Per User</span>
             </div>
-            <div style={{ width: '100%', height: 120 }}>
+            <div style={{ width: '100%', height: 110 }}>
               <ResponsiveContainer width="100%" height="100%">
-                <BarChart layout="vertical" data={accessBarData} margin={{ top: 5, right: 15, left: 35, bottom: 5 }}>
+                <BarChart layout="vertical" data={accessBarData} margin={{ top: 5, right: 15, left: 30, bottom: 5 }}>
                   <CartesianGrid strokeDasharray="3 3" horizontal={false} stroke="#F1F5F9" />
                   <XAxis type="number" hide />
-                  <YAxis type="category" dataKey="access" tick={{ fontSize: 10, fill: '#475569', fontWeight: 600 }} axisLine={false} tickLine={false} width={95} />
+                  <YAxis type="category" dataKey="access" tick={{ fontSize: 10, fill: '#475569', fontWeight: 600 }} axisLine={false} tickLine={false} width={92} />
                   <Tooltip content={<CustomAccessTooltip />} />
                   <Bar dataKey="value" radius={[0, 6, 6, 0]} barSize={14}>
                     {accessBarData.map((entry, index) => (
@@ -974,17 +851,17 @@ export default function UsersRoles() {
         </div>
       </div>
 
-      {/* Add / Edit User & Configurable Module Permissions Modal */}
+      {/* Add / Edit Company User: User -> Position -> Custom Permissions Modal */}
       {modal && (
-        <div style={{ position: 'fixed', inset: 0, background: 'rgba(15, 23, 42, 0.65)', display: 'flex', alignItems: 'center', justifyContent: 'center', zIndex: 999, padding: 16 }}>
-          <div style={{ background: 'white', borderRadius: 16, padding: 24, width: 640, maxWidth: '95vw', maxHeight: '90vh', overflowY: 'auto', boxShadow: '0 20px 60px rgba(0,0,0,0.18)', border: '1px solid #E2E8F0' }}>
+        <div style={{ position: 'fixed', inset: 0, background: 'rgba(15, 23, 42, 0.65)', backdropFilter: 'blur(2px)', display: 'flex', alignItems: 'center', justifyContent: 'center', zIndex: 9999, padding: '24px 16px' }}>
+          <div style={{ background: 'white', borderRadius: 16, padding: 24, width: 640, maxWidth: '95vw', maxHeight: '88vh', overflowY: 'auto', boxShadow: '0 20px 60px rgba(0,0,0,0.22)', border: '1px solid #E2E8F0' }}>
             <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 18 }}>
               <div>
                 <h3 style={{ fontSize: 17, fontWeight: 800, margin: 0, color: '#0F172A' }}>
-                  {editId ? 'Edit User Account & Permissions' : 'Add Portal User'}
+                  {editId ? (editingCompanyAdminRow ? 'Edit Company Admin Profile' : 'Edit User & Custom Permissions') : 'Create Company User'}
                 </h3>
                 <p style={{ margin: '4px 0 0', fontSize: 12, color: '#64748B' }}>
-                  Assign company scope, role, custom job title, and module-level access permissions.
+                  Company: <strong>{currentCompanyName}</strong> &mdash; set user details, Position label, and exact module permissions.
                 </p>
               </div>
               <button onClick={() => setModal(false)} style={{ border: 'none', background: 'none', cursor: 'pointer', color: '#6B7280', padding: 4 }}>
@@ -998,7 +875,7 @@ export default function UsersRoles() {
                 <input
                   value={form.name}
                   onChange={(e) => setForm({ ...form, name: e.target.value })}
-                  placeholder="e.g. John Doe"
+                  placeholder="e.g. Maria Santos"
                   style={{ width: '100%', padding: '9px 12px', borderRadius: 8, border: '1px solid #E5E7EB', fontSize: 13, outline: 'none', boxSizing: 'border-box' }}
                 />
               </div>
@@ -1009,76 +886,64 @@ export default function UsersRoles() {
                   type="email"
                   value={form.email}
                   onChange={(e) => setForm({ ...form, email: e.target.value })}
-                  placeholder="e.g. john@company.com"
+                  placeholder="e.g. maria@abclogistics.com"
                   style={{ width: '100%', padding: '9px 12px', borderRadius: 8, border: '1px solid #E5E7EB', fontSize: 13, outline: 'none', boxSizing: 'border-box' }}
                 />
               </div>
 
-              <div>
-                <label style={{ fontSize: 12, fontWeight: 700, color: '#374151', display: 'block', marginBottom: 5 }}>Access Tier *</label>
-                <select
-                  value={form.role}
-                  onChange={(e) => {
-                    const r = e.target.value;
-                    const cfg = getRoleConfig(r);
-                    setForm((prev) => ({
-                      ...prev,
-                      role: r,
-                      jobTitle: prev.jobTitle && prev.jobTitle !== prev.role ? prev.jobTitle : r,
-                      access: cfg.access,
-                      permissions: buildDefaultPermissionsForRole(r),
-                    }));
-                  }}
-                  style={{ width: '100%', padding: '9px 12px', borderRadius: 8, border: '1px solid #E5E7EB', fontSize: 13, outline: 'none', background: 'white', fontWeight: 600, color: '#0F172A', boxSizing: 'border-box' }}
-                >
-                  {assignableRoles.map((r) => (
-                    <option key={r} value={r}>{r}</option>
-                  ))}
-                </select>
-              </div>
-
-              <div>
-                <label style={{ fontSize: 12, fontWeight: 700, color: '#374151', display: 'block', marginBottom: 5 }}>Position / Title (Label)</label>
+              <div style={{ gridColumn: '1 / -1' }}>
+                <label style={{ fontSize: 12, fontWeight: 700, color: '#374151', display: 'block', marginBottom: 5 }}>
+                  Position / Title * <span style={{ fontWeight: 500, color: '#64748B' }}>(Label only — does not force fixed permissions)</span>
+                </label>
                 <input
-                  value={form.jobTitle || ''}
-                  onChange={(e) => setForm({ ...form, jobTitle: e.target.value })}
-                  placeholder="e.g. HR, Operations Lead, Field Supervisor"
-                  style={{ width: '100%', padding: '9px 12px', borderRadius: 8, border: '1px solid #E5E7EB', fontSize: 13, outline: 'none', boxSizing: 'border-box' }}
+                  value={form.position}
+                  disabled={editingCompanyAdminRow}
+                  onChange={(e) => setForm({ ...form, position: e.target.value })}
+                  placeholder="e.g. HR, Manager, Supervisor, Operations Lead, Dispatcher"
+                  style={{ width: '100%', padding: '9px 12px', borderRadius: 8, border: '1px solid #E5E7EB', fontSize: 13, outline: 'none', background: editingCompanyAdminRow ? '#F8FAFC' : '#FFFFFF', boxSizing: 'border-box' }}
                 />
+                {!editingCompanyAdminRow && (
+                  <div style={{ display: 'flex', flexWrap: 'wrap', gap: 6, marginTop: 8 }}>
+                    {SUGGESTED_POSITIONS.map((pos) => {
+                      const active = (form.position || '').trim().toLowerCase() === pos.toLowerCase();
+                      return (
+                        <button
+                          key={pos}
+                          type="button"
+                          onClick={() => setForm((prev) => ({ ...prev, position: pos }))}
+                          style={{
+                            padding: '3px 9px', borderRadius: 16, fontSize: 11, fontWeight: 600, cursor: 'pointer',
+                            border: active ? '1.5px solid #1E5ADB' : '1px solid #E2E8F0',
+                            background: active ? '#EFF6FF' : '#F8FAFC',
+                            color: active ? '#1E40AF' : '#475569',
+                          }}
+                        >
+                          {pos}
+                        </button>
+                      );
+                    })}
+                  </div>
+                )}
               </div>
 
-              {!isPlatformAdmin({ role: form.role }) && (
-                <div>
-                  <label style={{ fontSize: 12, fontWeight: 700, color: '#374151', display: 'block', marginBottom: 5 }}>Assigned Company *</label>
-                  {userIsPlatform ? (
-                    <select
-                      value={form.companyId || DEFAULT_COMPANY_ID}
-                      onChange={(e) => setForm({ ...form, companyId: e.target.value })}
-                      style={{ width: '100%', padding: '9px 12px', borderRadius: 8, border: '1px solid #E5E7EB', fontSize: 13, outline: 'none', background: 'white', fontWeight: 600, color: '#0F172A', boxSizing: 'border-box' }}
-                    >
-                      {companies.map((c) => (
-                        <option key={c.id} value={c.id}>{c.name}</option>
-                      ))}
-                    </select>
-                  ) : (
-                    <input
-                      readOnly
-                      value={getCompanyNameById(currentUser?.companyId || DEFAULT_COMPANY_ID)}
-                      style={{ width: '100%', padding: '9px 12px', borderRadius: 8, border: '1px solid #E2E8F0', fontSize: 13, background: '#F8FAFC', color: '#475569', fontWeight: 600, boxSizing: 'border-box' }}
-                    />
-                  )}
-                </div>
-              )}
+              <div>
+                <label style={{ fontSize: 12, fontWeight: 700, color: '#374151', display: 'block', marginBottom: 5 }}>Company (Locked)</label>
+                <input
+                  readOnly
+                  value={currentCompanyName}
+                  style={{ width: '100%', padding: '9px 12px', borderRadius: 8, border: '1px solid #E2E8F0', fontSize: 13, background: '#F8FAFC', color: '#475569', fontWeight: 600, boxSizing: 'border-box' }}
+                />
+              </div>
 
               <div>
                 <label style={{ fontSize: 12, fontWeight: 700, color: '#374151', display: 'block', marginBottom: 5 }}>Account Status</label>
                 <select
                   value={form.status}
+                  disabled={editingCompanyAdminRow}
                   onChange={(e) => setForm({ ...form, status: e.target.value })}
-                  style={{ width: '100%', padding: '9px 12px', borderRadius: 8, border: '1px solid #E5E7EB', fontSize: 13, outline: 'none', background: 'white', boxSizing: 'border-box' }}
+                  style={{ width: '100%', padding: '9px 12px', borderRadius: 8, border: '1px solid #E5E7EB', fontSize: 13, outline: 'none', background: editingCompanyAdminRow ? '#F8FAFC' : 'white', boxSizing: 'border-box' }}
                 >
-                  <option value="Active">Active (Approved)</option>
-                  <option value="Pending Approval">Pending Approval</option>
+                  <option value="Active">Active</option>
                   <option value="Inactive">Inactive</option>
                 </select>
               </div>
@@ -1106,59 +971,45 @@ export default function UsersRoles() {
               </div>
             </div>
 
-            {/* Configurable Per-Module Permissions Matrix */}
+            {/* Custom Module Permissions Matrix */}
             <div style={{ marginTop: 18, background: '#F8FAFC', borderRadius: 12, padding: 14, border: '1px solid #E2E8F0' }}>
               <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 10, flexWrap: 'wrap', gap: 8 }}>
                 <div style={{ display: 'flex', alignItems: 'center', gap: 6, fontSize: 12, fontWeight: 800, color: '#0F172A' }}>
-                  <Sliders size={14} color="#1E5ADB" /> Configurable Module Permissions
+                  <Sliders size={14} color="#1E5ADB" /> Custom Permissions
+                  {!editingCompanyAdminRow && (
+                    <span style={{ fontSize: 11, fontWeight: 700, color: '#1E5ADB', background: '#EFF6FF', padding: '2px 8px', borderRadius: 12 }}>
+                      {enabledFormPermCount} / {MODULE_PERMISSIONS.length} Selected
+                    </span>
+                  )}
                 </div>
-                {!isPlatformAdmin({ role: form.role }) && (
-                  <div style={{ display: 'flex', gap: 8 }}>
+                {!editingCompanyAdminRow && (
+                  <div style={{ display: 'flex', gap: 10 }}>
                     <button
                       type="button"
-                      onClick={() => {
-                        const all = {};
-                        MODULE_PERMISSIONS.forEach((m) => { all[m.key] = true; });
-                        setForm((p) => ({ ...p, permissions: all }));
-                      }}
+                      onClick={() => setForm((p) => ({ ...p, permissions: buildAllPermissions() }))}
                       style={{ fontSize: 11, fontWeight: 700, color: '#1E5ADB', background: 'none', border: 'none', cursor: 'pointer' }}
                     >
                       Select All
                     </button>
                     <button
                       type="button"
-                      onClick={() => setForm((p) => ({ ...p, permissions: buildDefaultPermissionsForRole(p.role) }))}
-                      style={{ fontSize: 11, fontWeight: 700, color: '#64748B', background: 'none', border: 'none', cursor: 'pointer' }}
-                    >
-                      Role Defaults
-                    </button>
-                    <button
-                      type="button"
-                      onClick={() => {
-                        const none = { dashboard: true };
-                        MODULE_PERMISSIONS.forEach((m) => { if (m.key !== 'dashboard') none[m.key] = false; });
-                        setForm((p) => ({ ...p, permissions: none }));
-                      }}
+                      onClick={() => setForm((p) => ({ ...p, permissions: buildEmptyCustomPermissions() }))}
                       style={{ fontSize: 11, fontWeight: 700, color: '#DC2626', background: 'none', border: 'none', cursor: 'pointer' }}
                     >
-                      Clear
+                      Dashboard Only
                     </button>
                   </div>
                 )}
               </div>
 
-              {isPlatformAdmin({ role: form.role }) ? (
-                <div style={{ fontSize: 12, color: '#6D28D9', fontWeight: 600 }}>
-                  {form.role} sits outside individual companies and manages company registration &amp; Company Admin approvals across the platform.
-                </div>
-              ) : normalizeRoleName(form.role) === 'Company Admin' ? (
+              {editingCompanyAdminRow ? (
                 <div style={{ fontSize: 12, color: '#1E40AF', fontWeight: 600 }}>
-                  Company Admin holds full management access strictly inside their assigned company (creating users, configuring permissions, worksites, employees, and reports).
+                  Company Owner / Company Admin holds full access to all modules strictly inside <strong>{currentCompanyName}</strong>.
                 </div>
               ) : (
                 <>
                   <div style={{ fontSize: 11, color: '#475569', marginBottom: 10 }}>
-                    <strong>Position/Title is a label only.</strong> Actual module access is strictly controlled by the checked permissions below — two companies can assign completely different permissions to the same position (e.g., HR, Manager, or Supervisor).
+                    Check the exact modules this user can access. Typing <strong>HR</strong>, <strong>Manager</strong>, or <strong>Supervisor</strong> will never overwrite your custom checkboxes.
                   </div>
                   <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fill, minmax(175px, 1fr))', gap: 8 }}>
                     {MODULE_PERMISSIONS.map((mod) => {
@@ -1202,79 +1053,7 @@ export default function UsersRoles() {
                 disabled={isSaving}
                 style={{ flex: 1, padding: '10px 16px', borderRadius: 8, border: 'none', background: '#1E5ADB', color: 'white', cursor: isSaving ? 'not-allowed' : 'pointer', fontWeight: 700, fontSize: 13, opacity: isSaving ? 0.7 : 1 }}
               >
-                {isSaving ? 'Saving...' : editId ? 'Save User Changes' : 'Create User'}
-              </button>
-            </div>
-          </div>
-        </div>
-      )}
-
-      {/* Add / Edit Company Modal (Platform Admins only) */}
-      {companyModal && (
-        <div style={{ position: 'fixed', inset: 0, background: 'rgba(15, 23, 42, 0.65)', display: 'flex', alignItems: 'center', justifyContent: 'center', zIndex: 1000, padding: 16 }}>
-          <div style={{ background: 'white', borderRadius: 16, padding: 24, width: 440, maxWidth: '95vw', boxShadow: '0 20px 60px rgba(0,0,0,0.18)', border: '1px solid #E2E8F0' }}>
-            <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 16 }}>
-              <h3 style={{ fontSize: 17, fontWeight: 800, margin: 0, color: '#0F172A' }}>
-                {editingCompanyId ? 'Edit Company' : 'Create New Company'}
-              </h3>
-              <button onClick={() => setCompanyModal(false)} style={{ border: 'none', background: 'none', cursor: 'pointer', color: '#6B7280' }}>
-                <X size={18} />
-              </button>
-            </div>
-            <div style={{ display: 'flex', flexDirection: 'column', gap: 12 }}>
-              <div>
-                <label style={{ fontSize: 12, fontWeight: 700, color: '#374151', display: 'block', marginBottom: 5 }}>Company Name *</label>
-                <input
-                  value={companyForm.name}
-                  onChange={(e) => setCompanyForm({ ...companyForm, name: e.target.value })}
-                  placeholder="e.g. Company B Security Services"
-                  style={{ width: '100%', padding: '9px 12px', borderRadius: 8, border: '1px solid #E5E7EB', fontSize: 13, outline: 'none', boxSizing: 'border-box' }}
-                />
-              </div>
-              <div>
-                <label style={{ fontSize: 12, fontWeight: 700, color: '#374151', display: 'block', marginBottom: 5 }}>Industry</label>
-                <input
-                  value={companyForm.industry}
-                  onChange={(e) => setCompanyForm({ ...companyForm, industry: e.target.value })}
-                  placeholder="e.g. Logistics, Security, Field Maintenance"
-                  style={{ width: '100%', padding: '9px 12px', borderRadius: 8, border: '1px solid #E5E7EB', fontSize: 13, outline: 'none', boxSizing: 'border-box' }}
-                />
-              </div>
-              <div>
-                <label style={{ fontSize: 12, fontWeight: 700, color: '#374151', display: 'block', marginBottom: 5 }}>Address</label>
-                <input
-                  value={companyForm.address}
-                  onChange={(e) => setCompanyForm({ ...companyForm, address: e.target.value })}
-                  placeholder="Company headquarters address"
-                  style={{ width: '100%', padding: '9px 12px', borderRadius: 8, border: '1px solid #E5E7EB', fontSize: 13, outline: 'none', boxSizing: 'border-box' }}
-                />
-              </div>
-              <div>
-                <label style={{ fontSize: 12, fontWeight: 700, color: '#374151', display: 'block', marginBottom: 5 }}>Status</label>
-                <select
-                  value={companyForm.status}
-                  onChange={(e) => setCompanyForm({ ...companyForm, status: e.target.value })}
-                  style={{ width: '100%', padding: '9px 12px', borderRadius: 8, border: '1px solid #E5E7EB', fontSize: 13, background: 'white', boxSizing: 'border-box' }}
-                >
-                  <option value="Active">Active</option>
-                  <option value="Inactive">Inactive</option>
-                </select>
-              </div>
-            </div>
-            <div style={{ display: 'flex', gap: 10, marginTop: 20 }}>
-              <button
-                onClick={() => setCompanyModal(false)}
-                disabled={savingCompany}
-                style={{ flex: 1, padding: '10px 14px', borderRadius: 8, border: '1px solid #E5E7EB', background: 'white', cursor: 'pointer', fontWeight: 600, fontSize: 13 }}
-              >
-                Cancel
-              </button>
-              <button
-                onClick={handleSaveCompany}
-                disabled={savingCompany}
-                style={{ flex: 1, padding: '10px 14px', borderRadius: 8, border: 'none', background: '#1E5ADB', color: 'white', cursor: 'pointer', fontWeight: 700, fontSize: 13 }}
-              >
-                {savingCompany ? 'Saving...' : editingCompanyId ? 'Update Company' : 'Create Company'}
+                {isSaving ? 'Saving...' : editId ? 'Save Changes' : 'Create Company User'}
               </button>
             </div>
           </div>

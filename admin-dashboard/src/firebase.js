@@ -110,31 +110,31 @@ export const isMockAttendance = () => false;
 export const isMockItem = () => false;
 export const purgeAllLegacyMockData = () => cleanupLocalStorageQuota();
 
-// ── Platform Bootstrap Accounts (Developer & System Super Admin — no company credentials needed) ──
+// ── Bootstrap Accounts: System Provider Developer (Developer Portal) + Default Organization Company Admin ──
 const PLATFORM_BOOTSTRAP_ACCOUNTS = [
   {
     id: 'platform_developer',
-    name: 'Platform Developer',
+    name: 'SUBAI Developer',
     email: 'developer@subai.com',
     password: 'password123',
     role: 'Developer',
-    jobTitle: 'System Developer',
+    jobTitle: 'System Provider / Developer',
     companyId: null,
-    companyName: 'All Companies',
-    access: 'Platform Developer Access',
+    companyName: 'SUBAI System Provider',
+    access: 'Developer Portal — Companies, Subscriptions & System Monitoring',
     status: 'Active',
     createdAt: '2026-01-01T00:00:00.000Z',
   },
   {
     id: 'admin_primary',
-    name: 'Super Administrator',
+    name: 'Company Admin',
     email: 'admin@subai.com',
     password: 'password123',
-    role: 'System Super Admin',
-    jobTitle: 'System Super Admin',
-    companyId: null,
-    companyName: 'All Companies',
-    access: 'Full System Access',
+    role: 'Company Admin',
+    jobTitle: 'Company Owner / Admin',
+    companyId: 'company_default',
+    companyName: 'Default Organization',
+    access: 'Full Company Admin Portal (Own Company Only)',
     status: 'Active',
     createdAt: '2026-01-01T00:00:00.000Z',
   },
@@ -308,38 +308,85 @@ export const authenticateAdminUser = async (email, password) => {
     }
   }
 
-  // Also support admin@geostride.com as System Super Admin
+  // Also support legacy admin@geostride.com as Default Organization Company Admin
   if (!account && cleanEmail === 'admin@geostride.com') {
     account = {
       id: 'admin_geostride',
-      name: 'System Super Admin',
+      name: 'Company Admin',
       email: 'admin@geostride.com',
       password: 'password123',
-      role: 'System Super Admin',
-      jobTitle: 'System Super Admin',
-      companyId: null,
-      companyName: 'All Companies',
-      access: 'Full System Access',
+      role: 'Company Admin',
+      jobTitle: 'Company Owner / Admin',
+      companyId: 'company_default',
+      companyName: 'Default Organization',
+      access: 'Full Company Admin Portal (Own Company Only)',
       status: 'Active',
     };
   }
 
+  // Normalize non-Developer accounts so they always belong strictly to a specific company
+  let isDevAccount = false;
+  if (account) {
+    const roleLower = String(account.role || '').trim().toLowerCase();
+    isDevAccount = roleLower.includes('developer') || roleLower === 'dev' || roleLower.includes('provider');
+    if (!isDevAccount) {
+      const normalizedRole = (roleLower.includes('super') || roleLower.includes('company admin') || roleLower === 'admin' || roleLower.includes('owner'))
+        ? 'Company Admin'
+        : 'Company User';
+      account = {
+        ...account,
+        role: normalizedRole,
+        companyId: account.companyId || 'company_default',
+        companyName: account.companyName && account.companyName !== 'All Companies' ? account.companyName : 'Default Organization',
+      };
+    }
+  }
+
   if (!account) {
-    const err = new Error(`No administrator account found for "${email}".`);
+    const err = new Error(`No account found for "${email}".`);
     err.code = 'auth/user-not-found';
     throw err;
   }
 
   if (account.status && account.status.toLowerCase() === 'inactive') {
-    const err = new Error('This account has been deactivated. Contact your administrator.');
+    const err = new Error('This account has been deactivated. Contact your Company Admin or System Provider.');
     err.code = 'auth/user-disabled';
     throw err;
   }
 
   if (account.status && account.status.toLowerCase().includes('pending')) {
-    const err = new Error('This account is pending Super Admin approval. Please wait for approval before signing in.');
+    const err = new Error('This Company Admin account is pending approval by the SUBAI System Provider.');
     err.code = 'auth/pending-approval';
     throw err;
+  }
+
+  // Enforce Company Activation / Subscription Status for Company Portal logins
+  if (!isDevAccount && isRealFirebaseConfigured && db && account.companyId) {
+    try {
+      const compSnap = await realGetDoc(realDoc(db, 'companies', account.companyId));
+      if (compSnap.exists()) {
+        const compData = compSnap.data() || {};
+        const compStatus = String(compData.status || 'Active').trim().toLowerCase();
+        const subStatus = String(compData.subscriptionStatus || 'Active').trim().toLowerCase();
+        if (compData.name) {
+          account = { ...account, companyName: compData.name };
+        }
+        if (compStatus === 'pending') {
+          const err = new Error(`Your company "${account.companyName}" is pending activation. Please wait for the SUBAI System Provider to activate your account.`);
+          err.code = 'auth/company-pending';
+          throw err;
+        }
+        if (compStatus === 'suspended' || compStatus === 'inactive' || subStatus === 'suspended' || subStatus === 'expired') {
+          const err = new Error(`Your company "${account.companyName}" is currently suspended or inactive. Please contact SUBAI System Support.`);
+          err.code = 'auth/company-suspended';
+          throw err;
+        }
+      }
+    } catch (compErr) {
+      if (compErr?.code === 'auth/company-pending' || compErr?.code === 'auth/company-suspended') {
+        throw compErr;
+      }
+    }
   }
 
   // Strict password validation against Firestore password OR native Firebase Auth sign-in
@@ -689,8 +736,9 @@ let _tenantScope = (() => {
     if (raw) {
       const u = JSON.parse(raw);
       const r = String(u?.role || '').trim().toLowerCase();
-      const isPlat = r.includes('developer') || r.includes('super');
-      return { isPlatform: isPlat, companyId: isPlat ? null : (u?.companyId || 'company_default') };
+      // Strictly Developer sits outside companies; per-company Super Admin is scoped to their companyId
+      const isDev = r.includes('developer') || r === 'dev';
+      return { isPlatform: isDev, companyId: isDev ? null : (u?.companyId || 'company_default') };
     }
   } catch (_) {}
   return { isPlatform: true, companyId: null };
@@ -745,14 +793,22 @@ export const backfillLegacyCompanyIds = async () => {
         const data = d.data() || {};
         if (colName === 'users') {
           const r = String(data.role || '').toLowerCase();
-          if (r.includes('developer') || r.includes('super')) return false;
+          // Only Developer has no companyId; legacy Super Admins without companyId get assigned to company_default
+          if (r.includes('developer') || r === 'dev') return false;
         }
         return !data.companyId;
       });
       await Promise.all(
-        missing.map((d) =>
-          realUpdateDoc(realDoc(db, colName, d.id), { companyId: 'company_default' }).catch(() => {})
-        )
+        missing.map((d) => {
+          const data = d.data() || {};
+          const patch = { companyId: 'company_default' };
+          if (colName === 'users' && String(data.role || '').toLowerCase().includes('super')) {
+            patch.role = 'Company Admin';
+            patch.jobTitle = data.jobTitle || 'Company Owner / Admin';
+            patch.companyName = 'Default Organization';
+          }
+          return realUpdateDoc(realDoc(db, colName, d.id), patch).catch(() => {});
+        })
       );
     }
   } catch (err) {

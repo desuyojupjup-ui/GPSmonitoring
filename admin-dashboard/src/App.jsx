@@ -20,17 +20,19 @@ import UsersRoles from './pages/UsersRoles';
 import ActivityLogs from './pages/ActivityLogs';
 import AIAssistant from './pages/AIAssistant';
 import Login from './pages/Login';
+import DeveloperPortal from './pages/DeveloperPortal';
+import DeveloperMonitoring from './pages/DeveloperMonitoring';
 
 import TopNav from './components/TopNav';
 import FloatingChatButton from './components/FloatingChatButton';
 
-import { isPathAllowedForUser } from './utils/roles';
+import { isPathAllowedForUser, isDeveloper } from './utils/roles';
 import { CompanyProvider } from './utils/companyContext';
 import { db, auth, collection, onSnapshot, query, where, signOut as fbSignOut, ensureAdminAuthSession } from './firebase';
 
 const RoleRoute = ({ path, element, user }) => {
   if (!isPathAllowedForUser(user, path)) {
-    return <Navigate to="/" replace />;
+    return <Navigate to={isDeveloper(user) ? '/developer' : '/'} replace />;
   }
   return element;
 };
@@ -132,26 +134,34 @@ function AppContent() {
     };
     setUser(userData);
 
+    if (isDeveloper(userData)) {
+      navigate('/developer', { replace: true });
+      return;
+    }
+
     const from = location.state?.from?.pathname || '/';
-    navigate(from === '/login' ? '/' : from, { replace: true });
+    const safeTarget = (from === '/login' || from === '/developer-login' || from.startsWith('/developer')) ? '/' : from;
+    navigate(safeTarget, { replace: true });
   };
 
   const handleLogout = async () => {
+    const wasDev = isDeveloper(user);
     try {
       await fbSignOut(auth);
     } catch (_) {}
     setUser(null);
-    navigate('/login', { replace: true });
+    navigate(wasDev ? '/developer-login' : '/login', { replace: true });
   };
 
   return (
     <CompanyProvider user={user}>
       <Routes>
-        {/* Explicit Admin Login Page */}
+        {/* Company Portal Login Page */}
         <Route
           path="/login"
           element={
             <Login
+              portalMode="company"
               onLogin={handleLogin}
               currentUser={user}
               onLogout={handleLogout}
@@ -159,12 +169,29 @@ function AppContent() {
           }
         />
 
-        {/* Protected Admin Routes */}
+        {/* Dedicated Platform Developer Console Login Page */}
+        <Route
+          path="/developer-login"
+          element={
+            <Login
+              portalMode="developer"
+              onLogin={handleLogin}
+              currentUser={user}
+              onLogout={handleLogout}
+            />
+          }
+        />
+
+        {/* Protected Portal Routes */}
         <Route
           path="/*"
           element={
             !user ? (
-              <Navigate to="/login" replace state={{ from: location }} />
+              <Navigate
+                to={location.pathname.startsWith('/developer') ? '/developer-login' : '/login'}
+                replace
+                state={{ from: location }}
+              />
             ) : (
               <div className={`app-container ${collapsed ? 'sidebar-collapsed' : ''}`}>
                 {mobileOpen && (
@@ -183,6 +210,13 @@ function AppContent() {
                 <main className="main-content">
                   <TopNav user={user} onLogout={handleLogout} onMenuToggle={() => setMobileOpen((prev) => !prev)} />
                   <Routes>
+                    {/* Dedicated Developer / System Provider Portal Routes (Strictly Developer Only) */}
+                    <Route path="/developer" element={<RoleRoute path="/developer" element={<DeveloperPortal />} user={user} />} />
+                    <Route path="/developer/monitoring" element={<RoleRoute path="/developer/monitoring" element={<DeveloperMonitoring />} user={user} />} />
+                    <Route path="/developer/logs" element={<RoleRoute path="/developer/logs" element={<ActivityLogs />} user={user} />} />
+                    <Route path="/developer/settings" element={<RoleRoute path="/developer/settings" element={<Settings />} user={user} />} />
+
+                    {/* Company Portal Routes (Super Admin, Company Admin, Company Users — Strictly Isolated Per Company) */}
                     <Route path="/" element={<RoleRoute path="/" element={<Dashboard />} user={user} />} />
                     <Route path="/tracking" element={<RoleRoute path="/tracking" element={<LiveTracking />} user={user} />} />
                     <Route path="/employees" element={<RoleRoute path="/employees" element={<Employees />} user={user} />} />
@@ -199,10 +233,10 @@ function AppContent() {
                     <Route path="/users" element={<RoleRoute path="/users" element={<UsersRoles />} user={user} />} />
                     <Route path="/logs" element={<RoleRoute path="/logs" element={<ActivityLogs />} user={user} />} />
                     <Route path="/ai-assistant" element={<RoleRoute path="/ai-assistant" element={<AIAssistant />} user={user} />} />
-                    <Route path="*" element={<Navigate to="/" replace />} />
+                    <Route path="*" element={<Navigate to={isDeveloper(user) ? '/developer' : '/'} replace />} />
                   </Routes>
                 </main>
-                <FloatingChatButton />
+                {!isDeveloper(user) && <FloatingChatButton />}
               </div>
             )
           }
